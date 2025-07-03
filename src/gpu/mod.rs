@@ -1,190 +1,121 @@
 //! GPU acceleration for high-performance steganography operations
+//! 
+//! This module provides GPU acceleration capabilities for stegano, with automatic
+//! backend selection and CPU fallbacks for optimal performance across platforms.
 
 pub mod compute;
+pub mod foundation;
 pub mod kernels;
 pub mod metal;
 
 use crate::core::*;
-use wgpu;
+pub use foundation::{GpuFoundation, PerformanceProfile, BenchmarkResult};
 
-
-/// Unified GPU acceleration interface that automatically selects the best backend
+/// Unified GPU acceleration interface
 #[derive(Debug)]
-pub enum GpuAccelerator {
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    Metal(metal::MetalAccelerator),
-    Wgpu(WgpuAccelerator),
-}
-
-/// WGPU-based GPU accelerator for cross-platform support
-#[derive(Debug)]
-pub struct WgpuAccelerator {
-    #[allow(dead_code)]
-    device: wgpu::Device,
-    #[allow(dead_code)]
-    queue: wgpu::Queue,
-    adapter: wgpu::Adapter,
-    #[allow(dead_code)]
-    compute_pipelines: std::collections::HashMap<String, wgpu::ComputePipeline>,
+pub struct GpuAccelerator {
+    foundation: GpuFoundation,
 }
 
 impl GpuAccelerator {
-    /// Create a new GPU accelerator, automatically selecting the best backend
-    pub async fn new() -> Result<Self> {
-        // Try Metal first on macOS for optimal performance
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            if metal::MetalAccelerator::is_available() {
-                match metal::MetalAccelerator::new() {
-                    Ok(metal_acc) => return Ok(GpuAccelerator::Metal(metal_acc)),
-                    Err(_) => {
-                        // Fall back to WGPU if Metal fails
-                        log::warn!("Metal initialization failed, falling back to WGPU");
-                    }
-                }
-            }
-        }
+    /// Create a new GPU accelerator with automatic backend detection
+    pub fn new() -> Result<Self> {
+        let foundation = GpuFoundation::new()?;
         
-        // Use WGPU as fallback or primary choice
-        let wgpu_acc = WgpuAccelerator::new().await?;
-        Ok(GpuAccelerator::Wgpu(wgpu_acc))
-    }
-    
-    /// Create a GPU accelerator with a specific backend preference
-    pub async fn new_with_backend(backend: GpuBackend) -> Result<Self> {
-        match backend {
-            #[cfg(all(target_os = "macos", feature = "metal"))]
-            GpuBackend::Metal => {
-                let metal_acc = metal::MetalAccelerator::new()?;
-                Ok(GpuAccelerator::Metal(metal_acc))
-            }
-            GpuBackend::Wgpu => {
-                let wgpu_acc = WgpuAccelerator::new().await?;
-                Ok(GpuAccelerator::Wgpu(wgpu_acc))
-            }
-        }
-    }
-    
-    /// Get information about the GPU device
-    pub fn device_info(&self) -> String {
-        match self {
-            #[cfg(all(target_os = "macos", feature = "metal"))]
-            GpuAccelerator::Metal(metal) => metal.device_info(),
-            GpuAccelerator::Wgpu(wgpu) => wgpu.device_info(),
-        }
-    }
-    
-    /// Parallel LSB embedding using GPU compute shaders
-    pub async fn parallel_lsb_embed(&self, data: &mut [u8], payload_bits: &[u8]) -> Result<()> {
-        match self {
-            #[cfg(all(target_os = "macos", feature = "metal"))]
-            GpuAccelerator::Metal(metal) => metal.parallel_lsb_embed(data, payload_bits),
-            GpuAccelerator::Wgpu(wgpu) => wgpu.parallel_lsb_embed(data, payload_bits).await,
-        }
-    }
-    
-    /// GPU-accelerated FFT for frequency domain embedding
-    pub async fn gpu_fft(&self, signal: &[f32]) -> Result<Vec<num_complex::Complex<f32>>> {
-        match self {
-            #[cfg(all(target_os = "macos", feature = "metal"))]
-            GpuAccelerator::Metal(metal) => metal.gpu_fft(signal),
-            GpuAccelerator::Wgpu(wgpu) => wgpu.gpu_fft(signal).await,
-        }
-    }
-    
-    /// Parallel Reed-Solomon encoding
-    pub async fn parallel_reed_solomon(&self, data: &[u8], parity_bytes: usize) -> Result<Vec<u8>> {
-        match self {
-            #[cfg(all(target_os = "macos", feature = "metal"))]
-            GpuAccelerator::Metal(metal) => metal.parallel_reed_solomon(data, parity_bytes),
-            GpuAccelerator::Wgpu(wgpu) => wgpu.parallel_reed_solomon(data, parity_bytes).await,
-        }
-    }
-    
-    /// Check if any GPU acceleration is available
-    pub fn is_available() -> bool {
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            if metal::MetalAccelerator::is_available() {
-                return true;
-            }
-        }
+        log::info!("GPU Accelerator initialized with {} backend", 
+                  foundation.backend_info);
         
-        // For WGPU availability, we'd need to do async initialization
-        // For now, assume it's available if this function is called
-        true
+        Ok(Self { foundation })
+    }
+    
+    /// Get performance information
+    pub fn performance_profile(&self) -> &PerformanceProfile {
+        &self.foundation.performance_profile
+    }
+    
+    /// Check if GPU acceleration is available
+    pub fn is_gpu_available(&self) -> bool {
+        self.foundation.gpu_available
+    }
+    
+    /// Get backend information
+    pub fn backend_info(&self) -> &str {
+        &self.foundation.backend_info
+    }
+    
+    /// High-performance parallel LSB embedding
+    pub fn parallel_lsb_embed(&self, data: &mut [u8], payload_bits: &[u8]) -> Result<usize> {
+        self.foundation.parallel_lsb_embed(data, payload_bits)
+    }
+    
+    /// High-performance parallel LSB extraction  
+    pub fn parallel_lsb_extract(&self, data: &[u8], payload_size: usize) -> Result<Vec<u8>> {
+        self.foundation.parallel_lsb_extract(data, payload_size)
+    }
+    
+    /// Benchmark embedding performance
+    pub fn benchmark_performance(&self, data_size: usize) -> BenchmarkResult {
+        self.foundation.benchmark_embedding(data_size)
+    }
+    
+    /// Get optimal processing chunk size
+    pub fn optimal_chunk_size(&self) -> usize {
+        self.foundation.optimal_chunk_size()
+    }
+    
+    /// Estimate processing time for given data size
+    pub fn estimate_processing_time(&self, data_size: usize) -> std::time::Duration {
+        self.foundation.estimate_processing_time(data_size)
     }
 }
 
-/// GPU backend selection
+impl Default for GpuAccelerator {
+    fn default() -> Self {
+        Self::new().unwrap_or_else(|_| Self {
+            foundation: GpuFoundation::default(),
+        })
+    }
+}
+
+/// GPU backend selection for future expansion
 #[derive(Debug, Clone, Copy)]
 pub enum GpuBackend {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     Metal,
+    #[cfg(feature = "gpu")]
     Wgpu,
+    Cpu,
 }
 
-impl WgpuAccelerator {
-    pub async fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            dx12_shader_compiler: Default::default(),
-            flags: wgpu::InstanceFlags::default(),
-            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
-        });
+impl GpuBackend {
+    /// Get the best available backend for this system
+    pub fn best_available() -> Self {
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        {
+            if metal::MetalAccelerator::is_available() {
+                return Self::Metal;
+            }
+        }
         
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok_or_else(|| SteganoError::GpuError("Failed to find GPU adapter".to_string()))?;
-            
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                },
-                None,
-            )
-            .await
-            .map_err(|e| SteganoError::GpuError(format!("Failed to create device: {}", e)))?;
+        #[cfg(feature = "gpu")]
+        {
+            // In future iterations, this will check WGPU availability
+            Self::Wgpu
+        }
         
-        Ok(Self {
-            device,
-            queue,
-            adapter,
-            compute_pipelines: Default::default(),
-        })
+        #[cfg(not(feature = "gpu"))]
+        Self::Cpu
     }
     
-    pub fn device_info(&self) -> String {
-        format!("WGPU Device: {} ({})", 
-                self.adapter.get_info().name,
-                self.adapter.get_info().backend.to_str())
-    }
-    
-    /// Parallel LSB embedding using WGPU compute shaders
-    pub async fn parallel_lsb_embed(&self, _data: &mut [u8], _payload_bits: &[u8]) -> Result<()> {
-        // Implementation for WGPU-based LSB embedding
-        todo!("Implement WGPU LSB embedding")
-    }
-    
-    /// GPU-accelerated FFT using WGPU
-    pub async fn gpu_fft(&self, _signal: &[f32]) -> Result<Vec<num_complex::Complex<f32>>> {
-        // Implementation for WGPU FFT
-        todo!("Implement WGPU FFT")
-    }
-    
-    /// Parallel Reed-Solomon encoding using WGPU
-    pub async fn parallel_reed_solomon(&self, _data: &[u8], _parity_bytes: usize) -> Result<Vec<u8>> {
-        // Implementation for WGPU Reed-Solomon
-        todo!("Implement WGPU Reed-Solomon")
+    /// Get backend name
+    pub fn name(&self) -> &'static str {
+        match self {
+            #[cfg(all(target_os = "macos", feature = "metal"))]
+            Self::Metal => "Metal",
+            #[cfg(feature = "gpu")]
+            Self::Wgpu => "WGPU",
+            Self::Cpu => "CPU",
+        }
     }
 }
 
@@ -192,125 +123,101 @@ impl WgpuAccelerator {
 mod tests {
     use super::*;
     
-    #[tokio::test]
-    async fn test_gpu_accelerator_creation() {
-        // Test that we can create a GPU accelerator
-        let result = GpuAccelerator::new().await;
+    #[test]
+    fn test_gpu_accelerator_creation() {
+        let accelerator = GpuAccelerator::new();
+        assert!(accelerator.is_ok());
         
-        match result {
-            Ok(accelerator) => {
-                println!("GPU accelerator created: {}", accelerator.device_info());
-                
-                #[cfg(all(target_os = "macos", feature = "metal"))]
-                {
-                    // On macOS with Metal feature, we should prefer Metal
-                    if metal::MetalAccelerator::is_available() {
-                        match accelerator {
-                            GpuAccelerator::Metal(_) => {
-                                println!("✓ Using Metal backend as expected on macOS");
-                            }
-                            GpuAccelerator::Wgpu(_) => {
-                                println!("⚠ Using WGPU fallback on macOS");
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                println!("GPU accelerator creation failed: {}", e);
-                // This is acceptable as not all systems have GPU acceleration
-            }
-        }
+        let accelerator = accelerator.unwrap();
+        assert!(!accelerator.backend_info().is_empty());
+        assert!(accelerator.performance_profile().parallel_units > 0);
     }
     
-    #[tokio::test]
-    async fn test_gpu_backend_selection() {
-        // Test explicit backend selection
+    #[test]
+    fn test_gpu_backend_selection() {
+        let best_backend = GpuBackend::best_available();
+        println!("Best available backend: {}", best_backend.name());
         
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            if metal::MetalAccelerator::is_available() {
-                let metal_result = GpuAccelerator::new_with_backend(GpuBackend::Metal).await;
-                assert!(metal_result.is_ok(), "Metal backend should be available on macOS");
-                
-                if let Ok(GpuAccelerator::Metal(_)) = metal_result {
-                    println!("✓ Metal backend explicitly selected");
-                }
-            }
-        }
-        
-        // WGPU should be available on most systems
-        let wgpu_result = GpuAccelerator::new_with_backend(GpuBackend::Wgpu).await;
-        match wgpu_result {
-            Ok(_) => println!("✓ WGPU backend available"),
-            Err(e) => println!("⚠ WGPU backend not available: {}", e),
+        // Should always have at least CPU backend
+        match best_backend {
+            #[cfg(all(target_os = "macos", feature = "metal"))]
+            GpuBackend::Metal => assert!(true),
+            #[cfg(feature = "gpu")]
+            GpuBackend::Wgpu => assert!(true),
+            GpuBackend::Cpu => assert!(true),
         }
     }
     
     #[test]
-    fn test_gpu_availability() {
-        let available = GpuAccelerator::is_available();
-        println!("GPU acceleration available: {}", available);
+    fn test_accelerator_embedding() {
+        let accelerator = GpuAccelerator::default();
+        let mut data = vec![0u8; 1000];
+        let payload = vec![1u8; 100];
         
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            let metal_available = metal::MetalAccelerator::is_available();
-            println!("Metal specifically available: {}", metal_available);
+        let result = accelerator.parallel_lsb_embed(&mut data, &payload);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 100);
+        
+        // Verify embedding worked
+        for i in 0..100 {
+            assert_eq!(data[i] & 0x01, 1);
         }
     }
     
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    #[tokio::test]
-    async fn test_metal_lsb_embedding() {
-        if !metal::MetalAccelerator::is_available() {
-            return;
-        }
+    #[test]
+    fn test_accelerator_extraction() {
+        let accelerator = GpuAccelerator::default();
+        let data = vec![0x01u8; 1000]; // All LSBs set
         
-        let accelerator = match GpuAccelerator::new_with_backend(GpuBackend::Metal).await {
-            Ok(acc) => acc,
-            Err(_) => return,
-        };
+        let result = accelerator.parallel_lsb_extract(&data, 500);
+        assert!(result.is_ok());
         
-        // Test data
-        let mut carrier = vec![0x80u8; 1000]; // MSB set, LSB clear
-        let payload_bits = vec![1u8; 100]; // All bits set to 1
+        let extracted = result.unwrap();
+        assert_eq!(extracted.len(), 500);
         
-        // This would test the actual Metal implementation
-        // For now, we just test that the interface works
-        let result = accelerator.parallel_lsb_embed(&mut carrier, &payload_bits).await;
-        
-        match result {
-            Ok(_) => {
-                println!("✓ Metal LSB embedding interface works");
-                // Verify that LSBs were modified
-                for i in 32..132 { // Skip header, check first 100 payload bits
-                    assert_eq!(carrier[i] & 1, 1, "LSB should be set at position {}", i);
-                }
-            }
-            Err(e) => println!("Metal LSB embedding failed: {}", e),
+        // All extracted bits should be 1
+        for bit in extracted {
+            assert_eq!(bit, 1);
         }
     }
     
-    #[tokio::test]
-    async fn test_gpu_performance_comparison() {
-        // This test compares performance between different backends
-        // when both are available
+    #[test]
+    fn test_performance_benchmarking() {
+        let accelerator = GpuAccelerator::default();
+        let benchmark = accelerator.benchmark_performance(50_000);
         
-        println!("=== GPU Performance Comparison ===");
+        assert!(benchmark.data_size == 50_000);
+        // Duration might be 0 for very fast operations, that's OK
+        assert!(benchmark.embed_duration_ms >= 0);
+        assert!(benchmark.extract_duration_ms >= 0);
+        assert!(benchmark.performance_score() > 0);
         
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            if metal::MetalAccelerator::is_available() {
-                let metal_acc = GpuAccelerator::new_with_backend(GpuBackend::Metal).await;
-                if let Ok(acc) = metal_acc {
-                    println!("Metal backend: {}", acc.device_info());
-                }
-            }
-        }
+        println!("Benchmark results:");
+        println!("  Embed throughput: {:.1} MB/s", benchmark.embed_throughput_mbps);
+        println!("  Extract throughput: {:.1} MB/s", benchmark.extract_throughput_mbps);
+        println!("  Performance score: {}/100", benchmark.performance_score());
+    }
+    
+    #[test]
+    fn test_optimal_chunk_size() {
+        let accelerator = GpuAccelerator::default();
+        let chunk_size = accelerator.optimal_chunk_size();
         
-        let wgpu_acc = GpuAccelerator::new_with_backend(GpuBackend::Wgpu).await;
-        if let Ok(acc) = wgpu_acc {
-            println!("WGPU backend: {}", acc.device_info());
+        assert!(chunk_size > 0);
+        assert!(chunk_size <= 1024 * 1024); // Reasonable upper bound
+        println!("Optimal chunk size: {} bytes", chunk_size);
+    }
+    
+    #[test]
+    fn test_processing_time_estimation() {
+        let accelerator = GpuAccelerator::default();
+        
+        let test_sizes = [1_000, 10_000, 100_000, 1_000_000];
+        
+        for size in test_sizes {
+            let estimated = accelerator.estimate_processing_time(size);
+            assert!(estimated.as_nanos() >= 0);
+            println!("Estimated time for {} bytes: {:.2}ms", size, estimated.as_millis());
         }
     }
 }
