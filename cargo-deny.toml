@@ -25,7 +25,9 @@ ignore = [
 ]
 
 [licenses]
-# License allowlist for dependencies
+# License allowlist for DEPENDENCIES ONLY
+# Note: This project itself is PROPRIETARY SOFTWARE
+# These licenses are allowed for external dependencies we use
 unlicensed = "deny"
 allow = [
     "MIT",
