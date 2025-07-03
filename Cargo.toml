@@ -2,10 +2,10 @@
 name = "stegano"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Stegano Contributors"]
 description = "High-performance scientific data steganography system"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/stegano-sci"
+repository = "https://github.com/yourusername/stegano"
 
 [dependencies]
 # Core async runtime
