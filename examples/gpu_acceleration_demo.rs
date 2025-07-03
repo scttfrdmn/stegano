@@ -8,7 +8,7 @@ use std::time::Instant;
 use std::collections::HashMap;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     
     println!("🚀 Stegano GPU Acceleration Demo");
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn demo_cpu_operations() -> Result<(), Box<dyn std::error::Error>> {
+async fn demo_cpu_operations() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("\n💻 CPU-Only Operations Demo:");
     
     // Create test data
@@ -71,8 +71,7 @@ async fn demo_cpu_operations() -> Result<(), Box<dyn std::error::Error>> {
     
     let start = Instant::now();
     
-    // Use generic handler for CPU-based LSB embedding
-    let handler = handlers::generic::GenericHandler::new();
+    // Use registry to get handler for CPU-based embedding
     let mut carrier = CarrierData {
         format: DataFormat::BINARY,
         raw_data: carrier_data,
@@ -81,6 +80,8 @@ async fn demo_cpu_operations() -> Result<(), Box<dyn std::error::Error>> {
         sampling_rate: None,
     };
     
+    let registry = handlers::HandlerRegistry::new();
+    let handler = registry.get_handler(&carrier.format).unwrap();
     let params = EmbedParams::new(b"test_key".to_vec());
     
     // Embed data
@@ -101,7 +102,7 @@ async fn demo_cpu_operations() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn test_gpu_backends() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gpu_backends() -> std::result::Result<(), Box<dyn std::error::Error>> {
     
     // Test WGPU backend
     println!("Testing WGPU backend...");
@@ -145,7 +146,7 @@ async fn test_gpu_backends() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn performance_comparison(gpu_accelerator: &gpu::GpuAccelerator) -> Result<(), Box<dyn std::error::Error>> {
+async fn performance_comparison(gpu_accelerator: &gpu::GpuAccelerator) -> std::result::Result<(), Box<dyn std::error::Error>> {
     
     // Test data sizes
     let test_sizes = vec![
@@ -205,7 +206,7 @@ async fn performance_comparison(gpu_accelerator: &gpu::GpuAccelerator) -> Result
     Ok(())
 }
 
-async fn advanced_gpu_demo(gpu_accelerator: &gpu::GpuAccelerator) -> Result<(), Box<dyn std::error::Error>> {
+async fn advanced_gpu_demo(gpu_accelerator: &gpu::GpuAccelerator) -> std::result::Result<(), Box<dyn std::error::Error>> {
     
     println!("Testing advanced GPU operations:");
     

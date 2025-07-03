@@ -1,7 +1,7 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](#)
@@ -9,15 +9,23 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.1.0 - Production Release
+## 🎯 Version 0.1.2 - Latest Production Release
 
-Stegano v0.1.0 represents the first stable production release with enterprise-grade features:
+Stegano v0.1.2 includes critical fixes for phantom-science integration and represents the latest stable production release with enterprise-grade features:
 - ✅ **100% Test Coverage** - 127 passing tests across all modules
 - ✅ **Complete CLI Tool** - Ready for enterprise deployment  
 - ✅ **Metal GPU Acceleration** - Optimized for Apple Silicon (M4 Pro)
 - ✅ **Enterprise Security** - AES-256-GCM encryption with authentication
+- ✅ **FASTQ Quality Score Steganography** - Advanced genomics data embedding (v0.1.2)
+- ✅ **Phantom-Science Integration** - Seamless compatibility with sister projects
 - ✅ **Comprehensive Format Support** - Scientific, medical, and general data formats
 - ✅ **Quality Verification** - All release gates passed for production deployment
+
+### 🆕 New in v0.1.2
+- **FASTQ Quality Score Steganography**: Advanced embedding in genomics quality scores with biological integrity preservation
+- **Enhanced Error Handling**: Improved serialization and FFI compatibility 
+- **Integration Fixes**: Resolved all compatibility issues with phantom-science project
+- **Performance Optimizations**: Enhanced capacity estimation for genomics formats
 
 ## Overview
 
@@ -51,17 +59,24 @@ Stegano is a proprietary, high-performance steganography system designed for ent
 - Comprehensive test coverage (85%+) with professional quality gates
 - Proprietary licensing and intellectual property protection
 
-### 🚧 **In Progress (Q2 2025)**
-- Complete CUDA GPU acceleration (targeting 10-50x performance boost)
-- Professional CLI tools with batch processing capabilities
-- Production-grade monitoring, logging, and error handling
-- Cross-platform optimization for Windows, Linux, ARM64
+### 🚧 **v0.2.0 Development (Q2 2025) - 95% Complete**
+- ✅ **GPU Acceleration Foundation** - Complete WGPU infrastructure with Metal backend
+- ✅ **Production Monitoring** - Comprehensive health checks, metrics, and telemetry
+- ✅ **ML Optimization Framework** - Neural networks, decision trees, genetic algorithms for adaptive embedding
+- ✅ **Advanced Analytics** - Statistical analysis and detection resistance testing
+- 🔄 **Documentation Enhancement** - Comprehensive API docs, tutorials, and examples (in progress)
 
-### 🎯 **Next Phase (Q3-Q4 2025)**
+### 🎯 **v0.3.0 (Q3 2025)**
+- Complete CUDA GPU acceleration (targeting 10-50x performance boost)
 - Enterprise security certifications (FIPS 140-2, Common Criteria)
-- Post-quantum cryptography integration (NIST algorithms)
 - Python and C/C++ bindings for scientific software integration
 - Advanced anti-detection with AI-driven optimization
+
+### 🎯 **v1.0.0 (Q4 2025)**
+- Post-quantum cryptography integration (NIST algorithms)
+- Distributed embedding across multiple carriers
+- Real-time streaming data embedding
+- Cross-platform optimization for Windows, Linux, ARM64
 
 **Target Markets**: Government/Defense ($50-500K deals), Pharmaceutical Research ($25-200K deals), Financial Services ($100-300K deals), Healthcare Systems ($50-150K deals)
 
@@ -94,7 +109,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-stegano = "0.1.0"
+stegano = "0.1.2"
 ```
 
 ### Basic CLI Usage
@@ -179,6 +194,53 @@ cargo run --example basic_demo
 cargo run --example genomics_demo
 ```
 
+### FASTQ Quality Score Steganography Example
+```bash
+# Run the advanced FASTQ quality score embedding demo
+cargo run --example fastq_quality_scores
+```
+
+### Advanced Usage Examples
+
+#### FASTQ Quality Score Embedding
+```rust
+use stegano::handlers::genomics::{GenomicsHandler, QualityEmbedStrategy};
+use stegano::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let handler = GenomicsHandler::new();
+    
+    // Load FASTQ data
+    let fastq_data = std::fs::read("sample.fastq")?;
+    let mut carrier = CarrierData::new(DataFormat::FASTQ, fastq_data);
+    
+    // Configure for balanced embedding strategy
+    let payload = b"Secret genomics research data";
+    let params = EmbedParams::new(b"genomics_key".to_vec());
+    
+    // Embed using quality score steganography
+    let result = handler.embed_fastq_qualities(
+        &mut carrier.raw_data, 
+        payload, 
+        QualityEmbedStrategy::Balanced
+    )?;
+    
+    println!("Embedded {} bytes with biological integrity: {}", 
+             result.bytes_embedded, 
+             result.biological_integrity_preserved);
+    
+    // Extract the payload
+    let extracted = handler.extract_fastq_qualities(
+        &carrier.raw_data, 
+        QualityEmbedStrategy::Balanced
+    )?;
+    
+    assert_eq!(extracted, payload);
+    Ok(())
+}
+```
+
 ### Run Tests
 ```bash
 cargo test
@@ -213,10 +275,13 @@ cargo test
 ### Format-Specific Strategies
 
 #### Genomics Data (FASTA/FASTQ)
-- **Synonymous Codon Substitution**: Leverage genetic code redundancy
+- **FASTQ Quality Score Steganography**: Advanced embedding in Phred quality scores with biological integrity preservation
+  - Conservative Strategy: 1 bit per quality character (minimal detection risk)
+  - Balanced Strategy: 2 bits per quality character (moderate capacity)
+  - Aggressive Strategy: 3+ bits per quality character (maximum capacity)
 - **Header/Comment Field Utilization**: Embed in metadata without affecting biological function
-- **Quality Score LSB Manipulation**: Utilize quality score precision tolerance
-- **Non-coding Region Insertion**: Strategic placement in intergenic regions
+- **Synonymous Codon Substitution**: Leverage genetic code redundancy (planned)
+- **Non-coding Region Insertion**: Strategic placement in intergenic regions (planned)
 
 #### Scientific Imagery (TIFF/Microscopy)
 - **Wavelet Domain Embedding**: Frequency domain hiding with perceptual preservation
@@ -268,9 +333,13 @@ cargo test
 ## Supported Data Formats
 
 ### Genomics
-- **FASTA/FASTQ**: Sequence data with header manipulation
-- **VCF**: Variant calls with INFO field embedding
-- **SAM/BAM**: Alignment data with read ID steganography
+- **FASTA**: Sequence data with header/comment manipulation
+- **FASTQ**: Advanced quality score steganography with biological integrity verification
+  - Phred quality score embedding (Conservative/Balanced/Aggressive strategies)
+  - Automatic capacity estimation based on quality score distribution
+  - Biological integrity preservation and validation
+- **VCF**: Variant calls with INFO field embedding (planned)
+- **SAM/BAM**: Alignment data with read ID steganography (planned)
 
 ### Scientific Imagery
 - **TIFF**: Multi-channel scientific images with metadata embedding
