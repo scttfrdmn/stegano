@@ -1,6 +1,5 @@
 //! Data integrity verification
 
-use crate::core::*;
 use blake3::Hash;
 
 pub struct IntegrityChecker;

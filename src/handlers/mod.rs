@@ -44,8 +44,19 @@ impl HandlerRegistry {
     }
     
     pub fn get_handler(&self, format: &DataFormat) -> Option<&dyn DataHandler> {
-        self.handlers.iter()
-            .find(|h| h.detect_format(&[]).map_or(false, |f| f == *format))
-            .map(|h| h.as_ref())
+        match format {
+            DataFormat::FASTA | DataFormat::FASTQ | DataFormat::VCF | DataFormat::SAM | DataFormat::BAM => {
+                Some(&*self.handlers[0]) // GenomicsHandler
+            },
+            DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY | DataFormat::DICOM => {
+                Some(&*self.handlers[1]) // ImageryHandler
+            },
+            DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries => {
+                Some(&*self.handlers[2]) // SignalHandler
+            },
+            DataFormat::BINARY | DataFormat::TEXT => {
+                Some(&*self.handlers[3]) // GenericHandler
+            },
+        }
     }
 }

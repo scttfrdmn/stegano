@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
     // Create a simple image data (simulated)
     let image_data = vec![128u8; 4096]; // 64x64 grayscale image
     
-    let mut carrier = CarrierData {
+    let carrier = CarrierData {
         format: DataFormat::PNG,
         raw_data: image_data,
         metadata: HashMap::new(),

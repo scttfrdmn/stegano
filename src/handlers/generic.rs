@@ -193,7 +193,7 @@ impl DataHandler for GenericHandler {
     async fn embed(&self, carrier: &mut CarrierData, payload: &[u8], _params: &EmbedParams) -> Result<EmbedResult> {
         let start_time = Instant::now();
         
-        let bits_embedded = self.lsb_embed(&mut carrier.raw_data, payload)?;
+        let _bits_embedded = self.lsb_embed(&mut carrier.raw_data, payload)?;
         
         let embedding_time = start_time.elapsed().as_millis() as u64;
         
@@ -410,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn test_lsb_embedding_roundtrip() {
         let handler = GenericHandler::new();
-        let mut carrier_data = vec![0x80; 1000]; // 1000 bytes, MSB set
+        let carrier_data = vec![0x80; 1000]; // 1000 bytes, MSB set
         let payload = b"Hello, steganography world!";
         
         let mut carrier = CarrierData {

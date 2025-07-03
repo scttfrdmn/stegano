@@ -73,6 +73,9 @@ env_logger = "0.10"
 # Utilities
 hex = "0.4"
 
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.2"
@@ -126,3 +129,7 @@ path = "examples/signals/demo.rs"
 name = "gpu_acceleration_demo"
 path = "examples/gpu_acceleration_demo.rs"
 required-features = ["gpu"]
+
+[[bin]]
+name = "stegano"
+path = "src/bin/stegano.rs"

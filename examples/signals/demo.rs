@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
         signal_data.extend_from_slice(&sample.to_le_bytes());
     }
     
-    let mut carrier = CarrierData {
+    let carrier = CarrierData {
         format: DataFormat::WAV,
         raw_data: signal_data,
         metadata: HashMap::new(),

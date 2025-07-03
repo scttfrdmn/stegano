@@ -19,9 +19,12 @@ pub enum GpuAccelerator {
 /// WGPU-based GPU accelerator for cross-platform support
 #[derive(Debug)]
 pub struct WgpuAccelerator {
+    #[allow(dead_code)]
     device: wgpu::Device,
+    #[allow(dead_code)]
     queue: wgpu::Queue,
     adapter: wgpu::Adapter,
+    #[allow(dead_code)]
     compute_pipelines: std::collections::HashMap<String, wgpu::ComputePipeline>,
 }
 

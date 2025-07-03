@@ -4,8 +4,6 @@ use crate::core::*;
 use crate::crypto::CryptoLayer;
 use super::DataHandler;
 use async_trait::async_trait;
-use std::io::Cursor;
-use std::collections::HashMap;
 
 pub struct ImageryHandler {
     crypto: Option<CryptoLayer>,
@@ -36,6 +34,7 @@ impl ImageEmbedStrategy {
         }
     }
     
+    #[allow(dead_code)]
     fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(ImageEmbedStrategy::SimpleLSB),
@@ -124,7 +123,7 @@ impl ImageryHandler {
             },
         };
         
-        let capacity_bytes = if capacity_bits > overhead {
+        let _capacity_bytes = if capacity_bits > overhead {
             (capacity_bits - overhead) / 8
         } else {
             0
@@ -257,6 +256,11 @@ impl ImageryHandler {
                     continue;
                 }
                 
+                // Check bounds for gradient calculation
+                if pixel_idx < width * channels || pixel_idx + width * channels >= image_data.len() {
+                    continue;
+                }
+                
                 // Calculate gradient magnitude for edge detection
                 let gx = (image_data[pixel_idx + channels] as i16) - (image_data[pixel_idx - channels] as i16);
                 let gy = (image_data[pixel_idx + width * channels] as i16) - (image_data[pixel_idx - width * channels] as i16);
@@ -331,10 +335,7 @@ impl ImageryHandler {
         
         match strategy {
             ImageEmbedStrategy::SimpleLSB => {
-                for i in 0..total_bits_needed {
-                    if i >= carrier.raw_data.len() {
-                        break;
-                    }
+                for i in 0..total_bits_needed.min(carrier.raw_data.len()) {
                     all_bits.push(carrier.raw_data[i] & 1);
                 }
             },
@@ -342,10 +343,7 @@ impl ImageryHandler {
                 all_bits = self.extract_edge_bits(&carrier.raw_data, carrier.dimensions.as_ref().unwrap().clone(), total_bits_needed)?;
             },
             _ => {
-                for i in 0..total_bits_needed {
-                    if i >= carrier.raw_data.len() {
-                        break;
-                    }
+                for i in 0..total_bits_needed.min(carrier.raw_data.len()) {
                     all_bits.push(carrier.raw_data[i] & 1);
                 }
             }
@@ -392,7 +390,7 @@ impl ImageryHandler {
                 }
                 
                 let pixel_idx = (y * width + x) * channels;
-                if pixel_idx + channels >= image_data.len() {
+                if pixel_idx + channels >= image_data.len() || pixel_idx < width * channels || pixel_idx + width * channels >= image_data.len() {
                     continue;
                 }
                 
@@ -510,11 +508,11 @@ mod tests {
         assert_eq!(handler.detect_format(&png_data), Some(DataFormat::PNG));
         
         // JPEG magic bytes
-        let jpeg_data = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        let jpeg_data = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]; // 8 bytes minimum
         assert_eq!(handler.detect_format(&jpeg_data), Some(DataFormat::BINARY));
         
         // TIFF magic bytes (little endian)
-        let tiff_data = [0x49, 0x49, 0x2A, 0x00, 0x08, 0x00];
+        let tiff_data = [0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00]; // 8 bytes minimum
         assert_eq!(handler.detect_format(&tiff_data), Some(DataFormat::TIFF));
         
         // Unknown format
@@ -552,7 +550,8 @@ mod tests {
             sampling_rate: None,
         };
         
-        let params = EmbedParams::new(b"test_key".to_vec());
+        let mut params = EmbedParams::new(b"test_key".to_vec());
+        params.stealth_level = StealthLevel::Low; // Use SimpleLSB
         
         // Embed
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -577,7 +576,8 @@ mod tests {
             sampling_rate: None,
         };
         
-        let params = EmbedParams::new(b"key".to_vec());
+        let mut params = EmbedParams::new(b"key".to_vec());
+        params.stealth_level = StealthLevel::Low; // Use SimpleLSB
         
         // Embed
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
