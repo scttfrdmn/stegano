@@ -112,6 +112,7 @@ fn to_c_error(error: &SteganoError) -> SteganoErrorCode {
         SteganoError::IntegrityError(_) => SteganoErrorCode::DataCorrupted,
         SteganoError::GpuError(_) => SteganoErrorCode::GpuError,
         SteganoError::IoError(_) => SteganoErrorCode::IoError,
+        SteganoError::SerializationError(_) => SteganoErrorCode::InvalidParameter,
     }
 }
 
