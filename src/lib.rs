@@ -10,6 +10,7 @@ pub mod error_correction;
 pub mod capacity;
 pub mod integrity;
 pub mod core;
+pub mod ffi;
 
 pub use core::*;
 

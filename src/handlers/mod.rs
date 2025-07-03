@@ -44,8 +44,34 @@ impl HandlerRegistry {
     }
     
     pub fn get_handler(&self, format: &DataFormat) -> Option<&dyn DataHandler> {
+        use crate::core::DataFormat;
+        
+        // Match format to appropriate handler by index
+        // This is a temporary fix until handlers implement proper format detection
+        match format {
+            DataFormat::FASTA | DataFormat::FASTQ | DataFormat::VCF | DataFormat::SAM | DataFormat::BAM => {
+                // Return genomics handler (first in the list)
+                self.handlers.get(0).map(|h| h.as_ref())
+            }
+            DataFormat::TIFF | DataFormat::PNG | DataFormat::MICROSCOPY | DataFormat::DICOM => {
+                // Return imagery handler (second in the list)
+                self.handlers.get(1).map(|h| h.as_ref())
+            }
+            DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries => {
+                // Return signal handler (third in the list)
+                self.handlers.get(2).map(|h| h.as_ref())
+            }
+            _ => {
+                // Return generic handler (last in the list)
+                self.handlers.get(3).map(|h| h.as_ref())
+            }
+        }
+    }
+    
+    /// Get handler by data content analysis
+    pub fn get_handler_by_data(&self, data: &[u8]) -> Option<&dyn DataHandler> {
         self.handlers.iter()
-            .find(|h| h.detect_format(&[]).map_or(false, |f| f == *format))
+            .find(|h| h.detect_format(data).is_some())
             .map(|h| h.as_ref())
     }
 }

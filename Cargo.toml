@@ -5,7 +5,11 @@ edition = "2021"
 authors = ["Stegano Contributors"]
 description = "High-performance scientific data steganography system"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/stegano"
+repository = "https://github.com/scttfrdmn/stegano"
+
+[lib]
+name = "stegano"
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Core async runtime
