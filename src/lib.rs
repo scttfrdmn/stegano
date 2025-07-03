@@ -64,6 +64,7 @@ pub mod integrity;
 pub mod core;
 pub mod cli;
 pub mod ffi;
+pub mod monitoring;
 
 pub use core::*;
 
@@ -73,3 +74,4 @@ pub use crypto::{CryptoLayer, SecurePayload};
 pub use gpu::GpuAccelerator;
 pub use error_correction::IntegritySystem;
 pub use capacity::CapacityEstimator;
+pub use monitoring::{MonitoringSystem, MonitoringConfig};
