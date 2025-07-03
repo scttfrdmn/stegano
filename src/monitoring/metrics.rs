@@ -543,7 +543,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_metrics_processing() {
-        let mut collector = MetricsCollector::new(5).unwrap(); // Small retention limit
+        let collector = MetricsCollector::new(5).unwrap(); // Small retention limit
         
         // Record more operations than the retention limit
         for i in 0..10 {

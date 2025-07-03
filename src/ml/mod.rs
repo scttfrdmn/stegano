@@ -412,7 +412,7 @@ mod tests {
             format: DataFormat::PNG,
             raw_data: vec![0, 1, 2, 3, 4, 5],
             metadata: HashMap::new(),
-            dimensions: Some((100, 100)),
+            dimensions: Some(crate::core::Dimensions::new_2d(100, 100)),
             sampling_rate: None,
         };
         
@@ -429,7 +429,7 @@ mod tests {
             format: DataFormat::PNG,
             raw_data: vec![0, 1, 2, 3, 4, 5],
             metadata: HashMap::new(),
-            dimensions: Some((100, 100)),
+            dimensions: Some(crate::core::Dimensions::new_2d(100, 100)),
             sampling_rate: None,
         };
         let payload = b"test payload";

@@ -992,7 +992,6 @@ impl DetectionEvaluator for HistogramDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     
     #[test]
     fn test_analysis_config_default() {
