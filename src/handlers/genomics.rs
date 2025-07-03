@@ -86,6 +86,29 @@ impl GenomicsHandler {
         })
     }
 
+    /// Estimate capacity for FASTQ files based on header space
+    fn estimate_fastq_capacity(&self, data: &[u8]) -> Result<CapacityInfo> {
+        let data_str = String::from_utf8_lossy(data);
+        let header_count = data_str.matches('@').count();
+        
+        // FASTQ headers are typically shorter than FASTA, but still usable
+        let estimated_bytes = header_count * 40; // More conservative for FASTQ
+        let total_bits = data.len() * 8;
+        let recommended_bits = estimated_bytes * 8;
+        
+        let mut format_info = HashMap::new();
+        format_info.insert("method".to_string(), serde_json::Value::String("fastq_header_comment".to_string()));
+        format_info.insert("reads".to_string(), serde_json::Value::Number(header_count.into()));
+        format_info.insert("estimated_capacity_bytes".to_string(), serde_json::Value::Number(estimated_bytes.into()));
+        
+        Ok(CapacityInfo {
+            total_bits,
+            recommended_bits,
+            steganographic_ratio: recommended_bits as f64 / total_bits as f64,
+            format_specific_info: format_info,
+        })
+    }
+
     /// Check if data is FASTA format
     fn is_fasta(&self, data: &[u8]) -> bool {
         if data.is_empty() {
@@ -122,13 +145,7 @@ impl DataHandler for GenomicsHandler {
     fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo> {
         match carrier.format {
             DataFormat::FASTA => self.estimate_fasta_capacity(&carrier.raw_data),
-            DataFormat::FASTQ => {
-                // FASTQ has similar capacity to FASTA but slightly less due to quality scores
-                let mut fasta_capacity = self.estimate_fasta_capacity(&carrier.raw_data)?;
-                fasta_capacity.recommended_bits = (fasta_capacity.recommended_bits as f64 * 0.8) as usize;
-                fasta_capacity.steganographic_ratio *= 0.8;
-                Ok(fasta_capacity)
-            },
+            DataFormat::FASTQ => self.estimate_fastq_capacity(&carrier.raw_data),
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
         }
     }

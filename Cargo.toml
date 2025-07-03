@@ -1,11 +1,15 @@
 [package]
 name = "stegano"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Scott Friedman <scott@friedman.dev>"]
 description = "High-performance scientific data steganography system"
 license-file = "LICENSE"
 repository = "https://github.com/scttfrdmn/stegano"
+
+[lib]
+name = "stegano"
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Core async runtime
@@ -76,6 +80,9 @@ hex = "0.4"
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 
+# FFI
+libc = "0.2"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.2"
@@ -129,6 +136,19 @@ path = "examples/signals/demo.rs"
 name = "gpu_acceleration_demo"
 path = "examples/gpu_acceleration_demo.rs"
 required-features = ["gpu"]
+
+# Phantom-science integration examples
+[[example]]
+name = "basic_integration"
+path = "examples/phantom_science/basic_integration.rs"
+
+[[example]]
+name = "fasta_embedding"
+path = "examples/phantom_science/fasta_embedding.rs"
+
+[[example]]
+name = "fastq_quality_scores"
+path = "examples/phantom_science/fastq_quality_scores.rs"
 
 [[bin]]
 name = "stegano"

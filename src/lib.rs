@@ -14,6 +14,7 @@ pub mod capacity;
 pub mod integrity;
 pub mod core;
 pub mod cli;
+pub mod ffi;
 
 pub use core::*;
 

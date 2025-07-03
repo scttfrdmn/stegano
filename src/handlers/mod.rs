@@ -59,4 +59,16 @@ impl HandlerRegistry {
             },
         }
     }
+    
+    /// Get handler by data content detection
+    pub fn get_handler_by_data(&self, data: &[u8]) -> Option<&dyn DataHandler> {
+        self.handlers.iter()
+            .find(|h| h.detect_format(data).is_some())
+            .map(|h| h.as_ref())
+    }
+    
+    /// Get all handlers for FFI iteration
+    pub fn get_handlers(&self) -> &[Box<dyn DataHandler>] {
+        &self.handlers
+    }
 }
