@@ -59,10 +59,6 @@ impl GpuAccelerator {
                 let wgpu_acc = WgpuAccelerator::new().await?;
                 Ok(GpuAccelerator::Wgpu(wgpu_acc))
             }
-            #[cfg(not(all(target_os = "macos", feature = "metal")))]
-            GpuBackend::Metal => {
-                Err(SteganoError::GpuError("Metal not available on this platform".to_string()))
-            }
         }
     }
     

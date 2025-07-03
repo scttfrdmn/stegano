@@ -20,7 +20,7 @@ pub struct MetalAccelerator {
 #[cfg(all(target_os = "macos", feature = "metal"))]
 impl MetalAccelerator {
     /// Create a new Metal accelerator instance
-    pub fn new() -> Result<Self> {
+    pub fn new() -> crate::core::Result<Self> {
         let device = Device::system_default()
             .ok_or_else(|| SteganoError::GpuError("No Metal device found".to_string()))?;
         
@@ -75,6 +75,12 @@ impl MetalAccelerator {
         encoder.set_compute_pipeline_state(&pipeline);
         encoder.set_buffer(0, Some(&carrier_buffer), 0);
         encoder.set_buffer(1, Some(&payload_buffer), 0);
+        
+        // Set payload length as buffer(2)
+        let payload_length = payload_bits.len() as u32;
+        encoder.set_bytes(2, mem::size_of::<u32>() as u64, unsafe {
+            mem::transmute(&payload_length)
+        });
         
         // Calculate thread configuration
         let threads_per_threadgroup = MTLSize::new(256, 1, 1);
@@ -131,6 +137,12 @@ impl MetalAccelerator {
         encoder.set_compute_pipeline_state(&pipeline);
         encoder.set_buffer(0, Some(&input_buffer), 0);
         encoder.set_buffer(1, Some(&output_buffer), 0);
+        
+        // Set signal length as buffer(2)
+        let signal_length = signal.len() as u32;
+        encoder.set_bytes(2, mem::size_of::<u32>() as u64, unsafe {
+            mem::transmute(&signal_length)
+        });
         
         let threads_per_threadgroup = MTLSize::new(256, 1, 1);
         let threadgroups_per_grid = MTLSize::new(
@@ -191,7 +203,15 @@ impl MetalAccelerator {
         encoder.set_compute_pipeline_state(&pipeline);
         encoder.set_buffer(0, Some(&input_buffer), 0);
         encoder.set_buffer(1, Some(&output_buffer), 0);
+        
+        // Set data_length as buffer(2)
+        let data_length = data.len() as u32;
         encoder.set_bytes(2, mem::size_of::<u32>() as u64, unsafe { 
+            mem::transmute(&data_length)
+        });
+        
+        // Set parity_bytes as buffer(3)
+        encoder.set_bytes(3, mem::size_of::<u32>() as u64, unsafe { 
             mem::transmute(&(parity_bytes as u32)) 
         });
         
@@ -248,8 +268,8 @@ pub struct MetalAccelerator;
 
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 impl MetalAccelerator {
-    pub fn new() -> Result<Self> {
-        Err(SteganoError::GpuError("Metal not available on this platform".to_string()))
+    pub fn new() -> crate::core::Result<Self> {
+        Err(crate::core::SteganoError::GpuError("Metal not available on this platform".to_string()))
     }
     
     pub fn is_available() -> bool {
