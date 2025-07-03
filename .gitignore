@@ -1,0 +1,75 @@
+# Rust
+/target/
+/Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+
+# Benchmark results
+criterion/
+
+# Temporary files
+*.tmp
+*.temp
+
+# GPU compute cache
+*.cache
+
+# Test data (except samples)
+/data/test_samples/*.large
+/data/benchmarks/*.bin
+
+# Build artifacts
+/docs/book/
+/docs/target/
+
+# Profiling data
+perf.data*
+flamegraph.svg
+
+# Local development
+.local/
+local_config.toml
