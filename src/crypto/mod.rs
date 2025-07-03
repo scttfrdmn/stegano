@@ -9,6 +9,7 @@ pub struct CryptoLayer {
     cipher: Aes256Gcm,
 }
 
+#[derive(Debug)]
 pub struct SecurePayload {
     pub encrypted_data: Vec<u8>,
     pub nonce: [u8; 12],
@@ -145,5 +146,286 @@ impl CryptoLayer {
             nonce,
             hash,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crypto_layer_from_password() {
+        let crypto = CryptoLayer::new_from_password("test_password").unwrap();
+        // Test that we can create a crypto layer and use it
+        let test_data = b"test";
+        let encrypted = crypto.encrypt(test_data).unwrap();
+        let decrypted = crypto.decrypt(&encrypted).unwrap();
+        assert_eq!(test_data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_crypto_layer_from_key() {
+        let key = [1u8; 32];
+        let crypto = CryptoLayer::new_from_key(&key).unwrap();
+        // Test that we can create a crypto layer and use it
+        let test_data = b"test";
+        let encrypted = crypto.encrypt(test_data).unwrap();
+        let decrypted = crypto.decrypt(&encrypted).unwrap();
+        assert_eq!(test_data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_crypto_layer_from_key_invalid_length() {
+        let key = [1u8; 16]; // Invalid length
+        let result = CryptoLayer::new_from_key(&key);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SteganoError::EncryptionError(_)));
+        }
+    }
+
+    #[test]
+    fn test_key_derivation_deterministic() {
+        let key1 = CryptoLayer::derive_key("password123").unwrap();
+        let key2 = CryptoLayer::derive_key("password123").unwrap();
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn test_key_derivation_different_passwords() {
+        let key1 = CryptoLayer::derive_key("password1").unwrap();
+        let key2 = CryptoLayer::derive_key("password2").unwrap();
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn test_encryption_decryption_roundtrip() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"Secret scientific data";
+        
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        let decrypted = crypto.decrypt(&encrypted).unwrap();
+        
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_encryption_produces_different_nonces() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"Same data";
+        
+        let encrypted1 = crypto.encrypt(plaintext).unwrap();
+        let encrypted2 = crypto.encrypt(plaintext).unwrap();
+        
+        assert_ne!(encrypted1.nonce, encrypted2.nonce);
+        assert_ne!(encrypted1.encrypted_data, encrypted2.encrypted_data);
+    }
+
+    #[test]
+    fn test_empty_data_encryption() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"";
+        
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        let decrypted = crypto.decrypt(&encrypted).unwrap();
+        
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_large_data_encryption() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = vec![0xAAu8; 10000]; // 10KB of data
+        
+        let encrypted = crypto.encrypt(&plaintext).unwrap();
+        let decrypted = crypto.decrypt(&encrypted).unwrap();
+        
+        assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
+    fn test_tampered_encrypted_data_fails() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"Secret data";
+        
+        let mut encrypted = crypto.encrypt(plaintext).unwrap();
+        
+        // Tamper with encrypted data
+        if !encrypted.encrypted_data.is_empty() {
+            encrypted.encrypted_data[0] ^= 1;
+        }
+        
+        let result = crypto.decrypt(&encrypted);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SteganoError::IntegrityError(_)));
+        }
+    }
+
+    #[test]
+    fn test_tampered_nonce_fails() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"Secret data";
+        
+        let mut encrypted = crypto.encrypt(plaintext).unwrap();
+        
+        // Tamper with nonce
+        encrypted.nonce[0] ^= 1;
+        
+        let result = crypto.decrypt(&encrypted);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SteganoError::IntegrityError(_)));
+        }
+    }
+
+    #[test]
+    fn test_tampered_hash_fails() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"Secret data";
+        
+        let mut encrypted = crypto.encrypt(plaintext).unwrap();
+        
+        // Tamper with hash
+        encrypted.hash[0] ^= 1;
+        
+        let result = crypto.decrypt(&encrypted);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SteganoError::IntegrityError(_)));
+        }
+    }
+
+    #[test]
+    fn test_payload_serialization_roundtrip() {
+        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
+        let plaintext = b"Data to serialize";
+        
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        let serialized = CryptoLayer::serialize_payload(&encrypted);
+        let deserialized = CryptoLayer::deserialize_payload(&serialized).unwrap();
+        
+        assert_eq!(encrypted.encrypted_data, deserialized.encrypted_data);
+        assert_eq!(encrypted.nonce, deserialized.nonce);
+        assert_eq!(encrypted.hash, deserialized.hash);
+    }
+
+    #[test]
+    fn test_empty_payload_serialization() {
+        let payload = SecurePayload {
+            encrypted_data: vec![],
+            nonce: [0u8; 12],
+            hash: [0u8; 32],
+        };
+        
+        let serialized = CryptoLayer::serialize_payload(&payload);
+        let deserialized = CryptoLayer::deserialize_payload(&serialized).unwrap();
+        
+        assert_eq!(payload.encrypted_data, deserialized.encrypted_data);
+        assert_eq!(payload.nonce, deserialized.nonce);
+        assert_eq!(payload.hash, deserialized.hash);
+    }
+
+    #[test]
+    fn test_deserialization_too_short() {
+        let data = vec![0u8; 40]; // Less than 48 bytes
+        let result = CryptoLayer::deserialize_payload(&data);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SteganoError::IntegrityError(_)));
+        }
+    }
+
+    #[test]
+    fn test_deserialization_size_mismatch() {
+        let mut data = vec![0u8; 48];
+        // Set length to 100 but provide only 48 total bytes
+        data[0..4].copy_from_slice(&100u32.to_le_bytes());
+        
+        let result = CryptoLayer::deserialize_payload(&data);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, SteganoError::IntegrityError(_)));
+        }
+    }
+
+    #[test]
+    fn test_serialization_format() {
+        let payload = SecurePayload {
+            encrypted_data: vec![0xAA, 0xBB, 0xCC],
+            nonce: [1u8; 12],
+            hash: [2u8; 32],
+        };
+        
+        let serialized = CryptoLayer::serialize_payload(&payload);
+        
+        // Check length field
+        assert_eq!(u32::from_le_bytes([serialized[0], serialized[1], serialized[2], serialized[3]]), 3);
+        
+        // Check nonce
+        assert_eq!(&serialized[4..16], &[1u8; 12]);
+        
+        // Check hash
+        assert_eq!(&serialized[16..48], &[2u8; 32]);
+        
+        // Check encrypted data
+        assert_eq!(&serialized[48..], &[0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn test_full_crypto_workflow() {
+        let crypto = CryptoLayer::new_from_password("workflow_test").unwrap();
+        let original_data = b"Complete workflow test data with various characters: !@#$%^&*()";
+        
+        // Encrypt
+        let encrypted_payload = crypto.encrypt(original_data).unwrap();
+        
+        // Serialize
+        let serialized = CryptoLayer::serialize_payload(&encrypted_payload);
+        
+        // Deserialize
+        let deserialized_payload = CryptoLayer::deserialize_payload(&serialized).unwrap();
+        
+        // Decrypt
+        let decrypted_data = crypto.decrypt(&deserialized_payload).unwrap();
+        
+        assert_eq!(original_data, decrypted_data.as_slice());
+    }
+
+    #[test]
+    fn test_different_passwords_different_results() {
+        let crypto1 = CryptoLayer::new_from_password("password1").unwrap();
+        let crypto2 = CryptoLayer::new_from_password("password2").unwrap();
+        let plaintext = b"Same plaintext";
+        
+        let encrypted1 = crypto1.encrypt(plaintext).unwrap();
+        let encrypted2 = crypto2.encrypt(plaintext).unwrap();
+        
+        // Different passwords should produce different encrypted results
+        assert_ne!(encrypted1.encrypted_data, encrypted2.encrypted_data);
+        
+        // Cross-decryption should fail
+        let result = crypto1.decrypt(&encrypted2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secure_payload_structure() {
+        let crypto = CryptoLayer::new_from_password("structure_test").unwrap();
+        let plaintext = b"Test data";
+        
+        let encrypted = crypto.encrypt(plaintext).unwrap();
+        
+        // Verify nonce length
+        assert_eq!(encrypted.nonce.len(), 12);
+        
+        // Verify hash length
+        assert_eq!(encrypted.hash.len(), 32);
+        
+        // Verify encrypted data is different from plaintext
+        assert_ne!(encrypted.encrypted_data, plaintext);
+        
+        // Verify encrypted data is not empty (for non-empty plaintext)
+        assert!(!encrypted.encrypted_data.is_empty());
     }
 }

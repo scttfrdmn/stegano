@@ -335,17 +335,28 @@ git security  # Run security audit
 To enable GPU acceleration:
 
 ```bash
-# Build with GPU features
+# Build with GPU features (includes WGPU)
 cargo build --features gpu
+
+# Build with Metal support on macOS (optimal performance)
+cargo build --features "gpu,metal"
 
 # Run with GPU enabled
 RUST_LOG=debug cargo run --example basic_demo
 ```
 
-Requirements:
+**GPU Backend Selection:**
+- **Metal**: Native macOS acceleration using Apple's Metal framework (recommended on macOS)
 - **WGPU**: Cross-platform compute shaders (Metal/Vulkan/DirectX/OpenGL)
-- **CUDA**: NVIDIA-specific maximum performance kernels (optional)
+- **CUDA**: NVIDIA-specific maximum performance kernels (planned)
 - **OpenCL**: Cross-vendor compatibility (planned)
+
+**Metal on macOS Benefits:**
+- Direct access to Apple Silicon GPU cores
+- Optimized memory management with unified memory architecture
+- Lower overhead compared to WGPU abstraction layer
+- Native integration with macOS graphics stack
+- Support for specialized Apple GPU features
 
 ## Contributing
 

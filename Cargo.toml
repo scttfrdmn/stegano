@@ -49,6 +49,12 @@ tiff = "0.9"
 wgpu = { version = "22.0", optional = true }
 bytemuck = { version = "1.14", features = ["derive"] }
 
+# Metal support for macOS
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "0.29", optional = true }
+objc = { version = "0.2", optional = true }
+core-graphics-types = { version = "0.1", optional = true }
+
 # Error correction
 reed-solomon = "0.2"
 
@@ -63,6 +69,9 @@ criterion = { version = "0.5", optional = true }
 # Logging
 log = "0.4"
 env_logger = "0.10"
+
+# Utilities
+hex = "0.4"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -80,6 +89,7 @@ mockall = "0.12"     # For mocking in tests
 [features]
 default = ["gpu"]
 gpu = ["wgpu"]
+metal = ["dep:metal", "dep:objc", "dep:core-graphics-types"]
 cuda = []
 benchmarks = ["criterion"]
 
@@ -111,3 +121,8 @@ path = "examples/imagery/demo.rs"
 [[example]]
 name = "signal_demo"
 path = "examples/signals/demo.rs"
+
+[[example]]
+name = "gpu_acceleration_demo"
+path = "examples/gpu_acceleration_demo.rs"
+required-features = ["gpu"]
