@@ -1,0 +1,115 @@
+#!/bin/bash
+# Pre-commit hook for stegano development
+# This hook runs basic checks before allowing commits
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+print_info() {
+    echo -e "${YELLOW}🔍 $1${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+print_info "Running pre-commit checks..."
+
+# Check if cargo is available
+if ! command -v cargo &> /dev/null; then
+    print_error "Cargo not found. Please install Rust."
+    exit 1
+fi
+
+# 1. Check code formatting
+print_info "Checking code formatting..."
+if ! cargo fmt -- --check; then
+    print_error "Code formatting issues found. Run 'cargo fmt' to fix."
+    exit 1
+fi
+print_success "Code formatting is correct"
+
+# 2. Run clippy for linting
+print_info "Running clippy..."
+if ! cargo clippy --all-features --all-targets -- -D warnings; then
+    print_error "Clippy warnings found. Please fix them."
+    exit 1
+fi
+print_success "No clippy warnings"
+
+# 3. Check that the project builds
+print_info "Checking build..."
+if ! cargo check --all-features; then
+    print_error "Build failed. Please fix compilation errors."
+    exit 1
+fi
+print_success "Build successful"
+
+# 4. Run unit tests
+print_info "Running unit tests..."
+if ! cargo test --lib --all-features; then
+    print_error "Unit tests failed. Please fix failing tests."
+    exit 1
+fi
+print_success "Unit tests passed"
+
+# 5. Check for secrets (basic check)
+print_info "Checking for potential secrets..."
+if git diff --cached --name-only | xargs grep -l "password\|secret\|key\|token" | grep -v "test\|example" 2>/dev/null; then
+    print_error "Potential secrets found in staged files. Please review."
+    print_info "If these are test files or examples, add them to .gitignore or this hook's exclusions."
+    exit 1
+fi
+print_success "No obvious secrets found"
+
+# 6. Check documentation (if doc comments added)
+staged_rs_files=$(git diff --cached --name-only | grep "\.rs$" || true)
+if [ -n "$staged_rs_files" ]; then
+    print_info "Checking documentation..."
+    if ! cargo doc --all-features --no-deps --quiet; then
+        print_error "Documentation build failed. Please fix doc issues."
+        exit 1
+    fi
+    print_success "Documentation builds correctly"
+fi
+
+# 7. Security audit (if Cargo.lock changed)
+if git diff --cached --name-only | grep -q "Cargo.lock"; then
+    print_info "Running security audit..."
+    if command -v cargo-audit &> /dev/null; then
+        if ! cargo audit; then
+            print_error "Security vulnerabilities found. Please update dependencies."
+            exit 1
+        fi
+        print_success "No security vulnerabilities found"
+    else
+        print_info "cargo-audit not installed, skipping security audit"
+    fi
+fi
+
+# 8. Check commit message format (if commit message provided)
+commit_regex='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .{1,72}'
+if [ -f ".git/COMMIT_EDITMSG" ]; then
+    commit_msg=$(head -n1 .git/COMMIT_EDITMSG)
+    if [[ ! $commit_msg =~ $commit_regex ]]; then
+        print_error "Commit message format is incorrect."
+        print_info "Please use conventional commits format:"
+        print_info "  type(scope): description"
+        print_info "  Examples:"
+        print_info "    feat(gpu): add WGPU compute shader implementation"
+        print_info "    fix(handlers): resolve genomics format detection issue"
+        print_info "    docs(api): update core module documentation"
+        exit 1
+    fi
+fi
+
+print_success "All pre-commit checks passed! 🎉"

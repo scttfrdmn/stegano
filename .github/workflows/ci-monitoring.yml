@@ -1,0 +1,275 @@
+name: CI/CD Flow Monitoring
+
+on:
+  # Monitor CI/CD status periodically
+  schedule:
+    # Every 30 minutes during work hours (9 AM - 6 PM UTC, Mon-Fri)
+    - cron: '*/30 9-18 * * 1-5'
+    # Every 2 hours during off-hours and weekends
+    - cron: '0 */2 * * *'
+  
+  # Also run on workflow completion
+  workflow_run:
+    workflows: ["Feature Branch CI", "Develop Integration Pipeline", "Release Pipeline"]
+    types: [completed]
+  
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      notification_level:
+        description: 'Notification level (info, warning, error, all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - info
+        - warning
+        - error
+        - all
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  monitor-ci-status:
+    name: Monitor CI/CD Status
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python for monitoring scripts
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install monitoring dependencies
+        run: |
+          pip install requests pyyaml jinja2 slack-sdk discord-py
+          
+      - name: Check recent CI/CD runs
+        id: check-status
+        run: |
+          python3 scripts/monitor-ci.py --format github-actions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTIFICATION_LEVEL: ${{ github.event.inputs.notification_level || 'all' }}
+          
+      - name: Generate status report
+        id: generate-report
+        run: |
+          python3 scripts/generate-ci-report.py \
+            --input ci-status.json \
+            --output ci-report.md \
+            --format markdown
+            
+      - name: Upload status report
+        uses: actions/upload-artifact@v3
+        with:
+          name: ci-status-report-${{ github.run_number }}
+          path: |
+            ci-status.json
+            ci-report.md
+          retention-days: 30
+          
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL && (steps.check-status.outputs.has_issues == 'true' || github.event.inputs.notification_level == 'all')
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              "text": "🔍 CI/CD Status Report for stegano",
+              "attachments": [
+                {
+                  "color": "${{ steps.check-status.outputs.status_color }}",
+                  "fields": [
+                    {
+                      "title": "Overall Status",
+                      "value": "${{ steps.check-status.outputs.overall_status }}",
+                      "short": true
+                    },
+                    {
+                      "title": "Failed Workflows",
+                      "value": "${{ steps.check-status.outputs.failed_count }}",
+                      "short": true
+                    },
+                    {
+                      "title": "Branch Health",
+                      "value": "${{ steps.check-status.outputs.branch_status }}",
+                      "short": false
+                    }
+                  ],
+                  "actions": [
+                    {
+                      "type": "button",
+                      "text": "View Details",
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          
+      - name: Send Discord notification
+        if: env.DISCORD_WEBHOOK_URL && (steps.check-status.outputs.has_issues == 'true' || github.event.inputs.notification_level == 'all')
+        run: |
+          python3 scripts/send-discord-notification.py \
+            --webhook "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            --status-file ci-status.json \
+            --report-file ci-report.md
+            
+      - name: Send email notification
+        if: env.SMTP_ENABLED && steps.check-status.outputs.has_critical_issues == 'true'
+        run: |
+          python3 scripts/send-email-notification.py \
+            --smtp-server "${{ secrets.SMTP_SERVER }}" \
+            --smtp-port "${{ secrets.SMTP_PORT }}" \
+            --username "${{ secrets.SMTP_USERNAME }}" \
+            --password "${{ secrets.SMTP_PASSWORD }}" \
+            --from "${{ secrets.NOTIFICATION_EMAIL_FROM }}" \
+            --to "${{ secrets.NOTIFICATION_EMAIL_TO }}" \
+            --subject "🚨 Critical CI/CD Issues - stegano" \
+            --status-file ci-status.json
+        env:
+          SMTP_ENABLED: ${{ secrets.SMTP_ENABLED }}
+          
+      - name: Update status badge
+        if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master'
+        run: |
+          python3 scripts/update-status-badge.py \
+            --status-file ci-status.json \
+            --badge-file .github/badges/ci-status.svg
+            
+      - name: Create GitHub issue for persistent failures
+        if: steps.check-status.outputs.persistent_failures == 'true'
+        run: |
+          python3 scripts/create-failure-issue.py \
+            --status-file ci-status.json \
+            --dry-run false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Workflow health check
+  workflow-health:
+    name: Workflow Health Analysis
+    runs-on: ubuntu-latest
+    needs: monitor-ci-status
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Analyze workflow performance
+        run: |
+          python3 scripts/analyze-workflow-performance.py \
+            --period "7 days" \
+            --output workflow-health.json
+            
+      - name: Check for performance degradation
+        id: perf-check
+        run: |
+          python3 scripts/check-performance-regression.py \
+            --health-file workflow-health.json \
+            --threshold-duration 300 \
+            --threshold-success-rate 95
+            
+      - name: Generate performance report
+        run: |
+          python3 scripts/generate-performance-report.py \
+            --health-file workflow-health.json \
+            --output performance-report.md
+            
+      - name: Alert on performance issues
+        if: steps.perf-check.outputs.has_regression == 'true'
+        run: |
+          echo "⚠️ CI/CD Performance regression detected"
+          echo "Duration increase: ${{ steps.perf-check.outputs.duration_increase }}%"
+          echo "Success rate: ${{ steps.perf-check.outputs.success_rate }}%"
+
+  # Security and dependency monitoring
+  security-monitoring:
+    name: Security & Dependencies
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          
+      - name: Check for security advisories
+        run: |
+          cargo install cargo-audit
+          cargo audit --json > security-audit.json
+          
+      - name: Check dependency freshness
+        run: |
+          cargo install cargo-outdated
+          cargo outdated --format json > dependency-status.json
+          
+      - name: Analyze security status
+        id: security-check
+        run: |
+          python3 scripts/analyze-security-status.py \
+            --audit-file security-audit.json \
+            --deps-file dependency-status.json \
+            --output security-report.json
+            
+      - name: Alert on security issues
+        if: steps.security-check.outputs.has_vulnerabilities == 'true'
+        run: |
+          echo "🚨 Security vulnerabilities detected!"
+          python3 scripts/send-security-alert.py \
+            --report-file security-report.json \
+            --severity ${{ steps.security-check.outputs.max_severity }}
+
+  # Resource usage monitoring
+  resource-monitoring:
+    name: Resource Usage Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Analyze GitHub Actions usage
+        run: |
+          python3 scripts/analyze-github-actions-usage.py \
+            --period "30 days" \
+            --output usage-report.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Check usage limits
+        id: usage-check
+        run: |
+          python3 scripts/check-usage-limits.py \
+            --usage-file usage-report.json \
+            --warning-threshold 80 \
+            --critical-threshold 95
+            
+      - name: Generate usage dashboard
+        run: |
+          python3 scripts/generate-usage-dashboard.py \
+            --usage-file usage-report.json \
+            --output usage-dashboard.html
+            
+      - name: Upload usage dashboard
+        uses: actions/upload-artifact@v3
+        with:
+          name: usage-dashboard-${{ github.run_number }}
+          path: usage-dashboard.html
+          
+      - name: Alert on high usage
+        if: steps.usage-check.outputs.usage_warning == 'true'
+        run: |
+          echo "⚠️ High GitHub Actions usage detected"
+          echo "Current usage: ${{ steps.usage-check.outputs.usage_percentage }}%"
+          echo "Remaining quota: ${{ steps.usage-check.outputs.remaining_minutes }} minutes"
