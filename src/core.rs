@@ -323,7 +323,7 @@ impl Dimensions {
 ///     format_specific: format_params,
 /// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EmbedParams {
     /// Encryption key for payload protection
     pub encryption_key: Vec<u8>,
@@ -395,7 +395,7 @@ impl EmbedParams {
 /// assert_eq!(level.overhead_percent(), 0.25);
 /// assert_eq!(level.total_size(100), 125); // 100 + 25% overhead
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ECLevel {
     /// No error correction (0% overhead)
     None,
@@ -447,7 +447,7 @@ impl ECLevel {
 /// let level = StealthLevel::High;
 /// assert_eq!(level.capacity_multiplier(), 0.3);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StealthLevel {
     /// Maximum stealth, minimal capacity (10% multiplier)
     Maximum,
@@ -607,6 +607,9 @@ pub enum SteganoError {
     
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
 }
 
 impl SteganoError {
@@ -628,6 +631,7 @@ impl SteganoError {
             SteganoError::IntegrityError(_) => "integrity",
             SteganoError::InvalidParameter(_) => "parameter",
             SteganoError::IoError(_) => "io",
+            SteganoError::SerializationError(_) => "serialization",
         }
     }
 }

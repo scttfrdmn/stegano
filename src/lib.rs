@@ -58,6 +58,7 @@
 pub mod handlers;
 pub mod crypto;
 pub mod gpu;
+pub mod ml;
 pub mod error_correction;
 pub mod capacity;
 pub mod integrity;
@@ -72,6 +73,7 @@ pub use core::*;
 pub use handlers::DataHandler;
 pub use crypto::{CryptoLayer, SecurePayload};
 pub use gpu::GpuAccelerator;
+pub use ml::{MLOptimizer, StrategyRecommendation};
 pub use error_correction::IntegritySystem;
 pub use capacity::CapacityEstimator;
 pub use monitoring::{MonitoringSystem, MonitoringConfig};
