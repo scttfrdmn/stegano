@@ -1,0 +1,31 @@
+# YAML linting configuration for Stegano project
+
+extends: default
+
+rules:
+  # Line length
+  line-length:
+    max: 120
+    level: warning
+
+  # Comments
+  comments:
+    min-spaces-from-content: 2
+    require-starting-space: true
+
+  # Document start
+  document-start:
+    present: false
+
+  # Indentation  
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+
+  # Key ordering
+  key-ordering: disable
+
+  # Truthy values
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no']

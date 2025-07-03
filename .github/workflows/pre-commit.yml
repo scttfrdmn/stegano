@@ -1,0 +1,67 @@
+name: Pre-commit Hooks
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+jobs:
+  pre-commit:
+    name: Pre-commit Hook Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+        
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-pre-commit-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+        
+    - name: Install Rust tools
+      run: |
+        cargo install cargo-tarpaulin cargo-audit
+        
+    - name: Install pre-commit and tools
+      run: |
+        pip install pre-commit yamllint markdownlint-cli detect-secrets ggshield
+        
+    - name: Cache pre-commit
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pre-commit
+        key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+        
+    - name: Run pre-commit hooks
+      run: |
+        pre-commit install
+        pre-commit run --all-files --show-diff-on-failure
+        
+    - name: Upload pre-commit results
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: pre-commit-failures
+        path: |
+          .pre-commit-hooks.log
+          target/coverage/

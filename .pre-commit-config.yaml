@@ -1,0 +1,141 @@
+# Pre-commit hooks configuration for Stegano project
+# Enforces code quality, coverage, and security standards
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=100000']
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+      - id: mixed-line-ending
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  # Rust-specific hooks
+  - repo: local
+    hooks:
+      # Code formatting
+      - id: cargo-fmt
+        name: Rust Format Check
+        entry: cargo fmt
+        language: system
+        types: [rust]
+        args: ['--all', '--', '--check']
+        pass_filenames: false
+
+      # Linting with Clippy
+      - id: cargo-clippy
+        name: Rust Clippy Linting
+        entry: cargo clippy
+        language: system
+        types: [rust]
+        args: ['--all-targets', '--all-features', '--', '-D', 'warnings']
+        pass_filenames: false
+
+      # Code coverage check (BLOCKING)
+      - id: cargo-coverage
+        name: Code Coverage Check (≥85%)
+        entry: cargo tarpaulin
+        language: system
+        types: [rust]
+        args: ['--skip-clean', '--fail-under', '85', '--timeout', '300']
+        pass_filenames: false
+
+      # Security audit
+      - id: cargo-audit
+        name: Security Vulnerability Check
+        entry: cargo audit
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # Test execution
+      - id: cargo-test
+        name: Run Tests
+        entry: cargo test
+        language: system
+        types: [rust]
+        args: ['--all-features', '--', '--test-threads', '1']
+        pass_filenames: false
+
+      # Documentation check
+      - id: cargo-doc
+        name: Documentation Build Check
+        entry: cargo doc
+        language: system
+        types: [rust]
+        args: ['--no-deps', '--all-features', '--document-private-items']
+        pass_filenames: false
+
+  # YAML linting
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.32.0
+    hooks:
+      - id: yamllint
+        args: [-c=.yamllint]
+
+  # Markdown linting
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.37.0
+    hooks:
+      - id: markdownlint
+        args: ['--config', '.markdownlint.json']
+
+  # Shell script linting
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.9.0.5
+    hooks:
+      - id: shellcheck
+        args: ['-e', 'SC1091']  # Ignore source file not found errors
+
+  # TOML formatting
+  - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+    rev: v2.10.0
+    hooks:
+      - id: pretty-format-toml
+        args: [--autofix]
+
+  # Secrets detection
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: ^(\.secrets\.baseline|DEVELOPMENT_RULES\.md)$
+
+  # Additional security checks
+  - repo: https://github.com/gitguardian/ggshield
+    rev: v1.25.0
+    hooks:
+      - id: ggshield
+        language: python
+        stages: [commit]
+
+# Global configuration
+default_language_version:
+  python: python3
+
+# Hook execution settings
+minimum_pre_commit_version: "3.0.0"
+
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+    
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

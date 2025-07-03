@@ -32,11 +32,19 @@ cargo run --example basic_demo
 
 ## Development Guidelines
 
+### Quality Standards (MANDATORY)
+- **Overall Coverage**: ≥ 85%
+- **Individual Files**: ≥ 80%
+- **Security Modules**: ≥ 95% (crypto, handlers, core)
+- **Zero Clippy Warnings**: All code must pass `cargo clippy -- -D warnings`
+- **Proper Formatting**: All code must pass `cargo fmt --check`
+
 ### Code Style
 - Follow standard Rust formatting (`cargo fmt`)
-- Use `cargo clippy` for linting
-- Add documentation for public APIs
+- Use `cargo clippy` for linting with zero warnings
+- Add documentation for public APIs (100% coverage required)
 - Include unit tests for new functionality
+- Use conventional commit format for commit messages
 
 ### Commit Messages
 - Use clear, descriptive commit messages
@@ -137,9 +145,12 @@ When working on cryptographic or security features:
 
 1. **Before Submitting**
    - Ensure all tests pass
-   - Run `cargo fmt` and `cargo clippy`
+   - Verify code coverage ≥ 85% (`cargo tarpaulin --fail-under 85`)
+   - Run `cargo fmt` and `cargo clippy -- -D warnings`
+   - Run security audit (`cargo audit`)
    - Update documentation
    - Add/update tests as needed
+   - Ensure pre-commit hooks pass (`pre-commit run --all-files`)
 
 2. **PR Description**
    - Clearly describe the changes

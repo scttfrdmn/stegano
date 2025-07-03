@@ -1,0 +1,49 @@
+[tool.tarpaulin]
+# Coverage configuration for Stegano project
+# Enforces 85% overall coverage, 80% individual file coverage
+
+# Exclusions
+exclude = [
+    "examples/*",
+    "gpu_kernels/*", 
+    "scripts/*",
+    "stegano_project_setup.sh"
+]
+exclude-files = [
+    "**/tests/*",
+    "**/benches/*",
+    "**/main.rs"
+]
+
+# Coverage types
+count = true
+line = true
+branch = true
+
+# Output formats
+out = ["Html", "Lcov", "Json", "Stdout"]
+output-dir = "target/coverage"
+
+# Thresholds
+fail-under = 85.0
+
+# Reporting
+verbose = true
+follow-exec = true
+post-args = ["--", "--test-threads", "1"]
+
+# Engine configuration
+[tool.tarpaulin.engines]
+llvm = true
+
+# Per-package configuration
+[[tool.tarpaulin.packages]]
+name = "stegano"
+exclude-files = [
+    "src/main.rs"
+]
+
+# Individual file thresholds (80% minimum)
+[tool.tarpaulin.thresholds]
+line = 80.0
+branch = 75.0

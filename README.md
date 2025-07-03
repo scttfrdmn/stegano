@@ -247,6 +247,36 @@ pub trait DataHandler: Send + Sync {
 
 ## Development
 
+### Setup Development Environment
+
+```bash
+# Clone repository
+git clone https://github.com/yourusername/stegano.git
+cd stegano
+
+# Run setup script to install tools and hooks
+./scripts/setup-hooks.sh
+
+# Verify setup
+cargo test
+cargo tarpaulin --skip-clean
+```
+
+### Development Rules
+
+**🎯 Quality Standards:**
+- **Overall Coverage**: ≥ 85% (MANDATORY)
+- **Individual Files**: ≥ 80% (MANDATORY)
+- **Security Modules**: ≥ 95% (crypto, handlers, core)
+
+**🔧 Pre-commit Hooks (Automated):**
+- Code coverage verification
+- Rust linting (clippy) with zero warnings
+- Code formatting verification
+- Security vulnerability scanning
+- File format linting (YAML, Markdown, TOML)
+- Secrets detection
+
 ### Building
 
 ```bash
@@ -263,18 +293,42 @@ cargo build --release --features gpu
 cargo build --release --all-features
 ```
 
-### Testing
+### Testing & Coverage
 
 ```bash
 # Run all tests
 cargo test
+
+# Run with coverage (enforced ≥85%)
+cargo tarpaulin --fail-under 85
 
 # Run specific test
 cargo test test_basic_steganography_roundtrip
 
 # Run benchmarks
 cargo bench --features benchmarks
+
+# Quick development aliases
+git coverage  # Run coverage check
+git lint      # Run clippy linting
+git security  # Run security audit
 ```
+
+### Code Quality Gates
+
+**All commits must pass:**
+- [ ] Code coverage ≥ 85% overall, ≥ 80% per file
+- [ ] Zero clippy warnings (`cargo clippy -- -D warnings`)
+- [ ] Proper formatting (`cargo fmt --check`)
+- [ ] Security audit clean (`cargo audit`)
+- [ ] All tests passing
+- [ ] Documentation builds successfully
+
+**Pull requests require:**
+- [ ] All pre-commit hooks passing
+- [ ] Minimum 1 reviewer approval
+- [ ] CI/CD pipeline success
+- [ ] Security review (for crypto/handler changes)
 
 ### GPU Acceleration
 
