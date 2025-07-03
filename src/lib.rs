@@ -1,5 +1,8 @@
 //! Scientific Data Steganography System
 //! 
+//! Copyright (c) 2025 Scott Friedman. All rights reserved.
+//! This software is proprietary and confidential.
+//! 
 //! High-performance, multi-format steganography library for protecting
 //! scientific data including genomics, imagery, and signal data.
 

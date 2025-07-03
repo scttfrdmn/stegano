@@ -1,8 +1,8 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/yourusername/stegano)
+[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 
 **High-performance, multi-format steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
@@ -419,12 +419,11 @@ RUST_LOG=debug cargo run --example basic_demo
 
 ## License
 
-This project is licensed under either of
+Copyright (c) 2025 Scott Friedman. All rights reserved.
 
- * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
- * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+This software is proprietary and confidential. See [LICENSE](LICENSE) for full terms.
 
-at your option.
+**This is proprietary software - All rights reserved. Unauthorized copying, distribution, or use is strictly prohibited.**
 
 ## Acknowledgments
 
@@ -434,6 +433,8 @@ at your option.
 
 ## Contact
 
-For questions, issues, or contributions, please visit the [GitHub repository](https://github.com/yourusername/stegano).
+For licensing inquiries and authorized use, please contact Scott Friedman.
+
+**Note**: This is proprietary software. Unauthorized access or use is prohibited.
 
 **Key Innovation**: Purpose-built steganographic protection tailored specifically for scientific workflows, with GPU acceleration and multi-format support in a unified high-performance framework.

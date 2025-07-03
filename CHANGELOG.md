@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handlers now support multiple embedding strategies per format
 - Improved test coverage for enhanced handlers
 - Better error handling for insufficient capacity scenarios
+- Updated license to proprietary software with Copyright (c) 2025 Scott Friedman
 
 ## [0.1.0] - 2025-01-03
 
