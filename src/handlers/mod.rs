@@ -2,6 +2,8 @@
 
 pub mod genomics;
 pub mod vcf;
+pub mod dicom;
+pub mod sam_bam;
 pub mod imagery;
 pub mod signals;
 pub mod generic;
@@ -38,6 +40,8 @@ impl HandlerRegistry {
             handlers: vec![
                 Box::new(genomics::GenomicsHandler::new()),
                 Box::new(vcf::VcfHandler::new()),
+                Box::new(dicom::DicomHandler::new()),
+                Box::new(sam_bam::SamBamHandler),
                 Box::new(imagery::ImageryHandler::new()),
                 Box::new(signals::SignalHandler::new()),
                 Box::new(generic::GenericHandler::new()),
@@ -47,20 +51,26 @@ impl HandlerRegistry {
     
     pub fn get_handler(&self, format: &DataFormat) -> Option<&dyn DataHandler> {
         match format {
-            DataFormat::FASTA | DataFormat::FASTQ | DataFormat::SAM | DataFormat::BAM => {
+            DataFormat::FASTA | DataFormat::FASTQ => {
                 Some(&*self.handlers[0]) // GenomicsHandler
             },
             DataFormat::VCF => {
                 Some(&*self.handlers[1]) // VcfHandler
             },
-            DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY | DataFormat::DICOM => {
-                Some(&*self.handlers[2]) // ImageryHandler
+            DataFormat::DICOM => {
+                Some(&*self.handlers[2]) // DicomHandler
+            },
+            DataFormat::SAM | DataFormat::BAM => {
+                Some(&*self.handlers[3]) // SamBamHandler
+            },
+            DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY => {
+                Some(&*self.handlers[4]) // ImageryHandler
             },
             DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries => {
-                Some(&*self.handlers[3]) // SignalHandler
+                Some(&*self.handlers[5]) // SignalHandler
             },
             DataFormat::BINARY | DataFormat::TEXT => {
-                Some(&*self.handlers[4]) // GenericHandler
+                Some(&*self.handlers[6]) // GenericHandler
             },
         }
     }
