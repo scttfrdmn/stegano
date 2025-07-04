@@ -61,6 +61,17 @@ pub struct FeatureNormalization {
     feature_names: Vec<String>,
 }
 
+impl FeatureNormalization {
+    /// Create new empty feature normalization
+    pub fn new() -> Self {
+        Self {
+            means: Vec::new(),
+            std_devs: Vec::new(),
+            feature_names: Vec::new(),
+        }
+    }
+}
+
 /// Decision tree model for interpretable strategy selection
 #[derive(Debug)]
 pub struct DecisionTreeModel {
@@ -192,11 +203,7 @@ impl NeuralNetworkModel {
                 r_squared: 0.0,
                 sample_size: 0,
             },
-            normalization: FeatureNormalization {
-                means: Vec::new(),
-                std_devs: Vec::new(),
-                feature_names: Vec::new(),
-            },
+            normalization: FeatureNormalization::new(),
         }
     }
     

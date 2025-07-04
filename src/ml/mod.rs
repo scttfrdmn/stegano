@@ -9,6 +9,7 @@ pub mod models;
 pub mod training;
 pub mod optimization;
 pub mod analysis;
+pub mod cuda_models;
 
 use crate::core::*;
 use std::collections::HashMap;
@@ -239,10 +240,10 @@ impl MLOptimizer {
             let predicted_performance = self.predict_performance(&features, &params)?;
             
             Ok(StrategyRecommendation {
-                params,
+                params: params.clone(),
                 predicted_performance,
                 confidence,
-                alternatives: Vec::new(), // TODO: Generate alternatives
+                alternatives: self.generate_alternative_strategies(&features, &params)?,
                 reasoning: format!(
                     "ML model for {:?} format recommends strategy based on {} training examples",
                     carrier.format,
@@ -341,10 +342,165 @@ impl MLOptimizer {
         entropy
     }
     
-    /// Analyze frequency domain characteristics
-    fn analyze_frequency_domain(&self, _carrier: &CarrierData) -> Result<Vec<f32>> {
-        // TODO: Implement FFT-based frequency analysis
-        Ok(vec![0.0; 10]) // Placeholder
+    /// Analyze frequency domain characteristics using FFT
+    fn analyze_frequency_domain(&self, carrier: &CarrierData) -> Result<Vec<f32>> {
+        let data = &carrier.raw_data;
+        
+        // Convert bytes to f32 for FFT processing
+        let samples: Vec<f32> = data.iter().map(|&x| x as f32).collect();
+        
+        // Ensure we have a power of 2 for FFT efficiency
+        let mut fft_size = 1;
+        while fft_size < samples.len() {
+            fft_size *= 2;
+        }
+        fft_size = fft_size.min(4096); // Limit to reasonable size
+        
+        let mut signal = samples.clone();
+        signal.resize(fft_size, 0.0);
+        
+        // Simple FFT implementation using DFT
+        let frequency_bins = self.compute_dft(&signal);
+        
+        // Calculate magnitude spectrum
+        let magnitude_spectrum: Vec<f32> = frequency_bins
+            .chunks(2)
+            .map(|chunk| {
+                let real = chunk[0];
+                let imag = chunk.get(1).copied().unwrap_or(0.0);
+                (real * real + imag * imag).sqrt()
+            })
+            .collect();
+        
+        // Extract meaningful frequency features
+        let mut features = Vec::new();
+        
+        // 1. Low frequency energy (0-25% of spectrum)
+        let low_freq_end = magnitude_spectrum.len() / 4;
+        let low_freq_energy = magnitude_spectrum[..low_freq_end].iter().sum::<f32>();
+        features.push(low_freq_energy);
+        
+        // 2. Mid frequency energy (25-50% of spectrum)
+        let mid_freq_start = low_freq_end;
+        let mid_freq_end = magnitude_spectrum.len() / 2;
+        let mid_freq_energy = magnitude_spectrum[mid_freq_start..mid_freq_end].iter().sum::<f32>();
+        features.push(mid_freq_energy);
+        
+        // 3. High frequency energy (50-75% of spectrum)
+        let high_freq_start = mid_freq_end;
+        let high_freq_end = magnitude_spectrum.len() * 3 / 4;
+        let high_freq_energy = magnitude_spectrum[high_freq_start..high_freq_end].iter().sum::<f32>();
+        features.push(high_freq_energy);
+        
+        // 4. Spectral centroid (center of mass of spectrum)
+        let total_energy: f32 = magnitude_spectrum.iter().sum();
+        let spectral_centroid = if total_energy > 0.0 {
+            magnitude_spectrum
+                .iter()
+                .enumerate()
+                .map(|(i, &mag)| i as f32 * mag)
+                .sum::<f32>() / total_energy
+        } else {
+            0.0
+        };
+        features.push(spectral_centroid);
+        
+        // 5. Spectral rolloff (frequency below which 85% of energy lies)
+        let rolloff_threshold = total_energy * 0.85;
+        let mut cumulative_energy = 0.0;
+        let mut rolloff_freq = 0.0;
+        for (i, &mag) in magnitude_spectrum.iter().enumerate() {
+            cumulative_energy += mag;
+            if cumulative_energy >= rolloff_threshold {
+                rolloff_freq = i as f32;
+                break;
+            }
+        }
+        features.push(rolloff_freq);
+        
+        // 6. Spectral flatness (measure of noise-like vs tonal content)
+        let geometric_mean = if !magnitude_spectrum.is_empty() {
+            let log_sum: f32 = magnitude_spectrum.iter()
+                .filter(|&&x| x > 0.0)
+                .map(|&x| x.ln())
+                .sum();
+            (log_sum / magnitude_spectrum.len() as f32).exp()
+        } else {
+            0.0
+        };
+        let arithmetic_mean = magnitude_spectrum.iter().sum::<f32>() / magnitude_spectrum.len() as f32;
+        let spectral_flatness = if arithmetic_mean > 0.0 {
+            geometric_mean / arithmetic_mean
+        } else {
+            0.0
+        };
+        features.push(spectral_flatness);
+        
+        // 7. Zero crossing rate (for temporal analysis)
+        let zero_crossings = data.windows(2)
+            .filter(|window| {
+                (window[0] as i16 - 128) * (window[1] as i16 - 128) < 0
+            })
+            .count();
+        let zero_crossing_rate = zero_crossings as f32 / data.len() as f32;
+        features.push(zero_crossing_rate);
+        
+        // 8. Peak frequency (dominant frequency component)
+        let peak_index = magnitude_spectrum
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        features.push(peak_index as f32);
+        
+        // 9. Bandwidth (spread of frequencies around centroid)
+        let bandwidth = if total_energy > 0.0 {
+            magnitude_spectrum
+                .iter()
+                .enumerate()
+                .map(|(i, &mag)| (i as f32 - spectral_centroid).powi(2) * mag)
+                .sum::<f32>() / total_energy
+        } else {
+            0.0
+        };
+        features.push(bandwidth.sqrt());
+        
+        // 10. Harmonic-to-noise ratio estimate
+        let harmonics_energy = magnitude_spectrum.iter()
+            .step_by(peak_index.max(1))
+            .take(5)
+            .sum::<f32>();
+        let hnr = if total_energy > harmonics_energy {
+            harmonics_energy / (total_energy - harmonics_energy)
+        } else {
+            0.0
+        };
+        features.push(hnr);
+        
+        Ok(features)
+    }
+    
+    /// Compute Discrete Fourier Transform (simple implementation)
+    fn compute_dft(&self, signal: &[f32]) -> Vec<f32> {
+        let n = signal.len();
+        let mut result = vec![0.0; n * 2]; // Real and imaginary parts
+        
+        for k in 0..n {
+            let mut real_sum = 0.0;
+            let mut imag_sum = 0.0;
+            
+            for j in 0..n {
+                let angle = -2.0 * std::f32::consts::PI * (k * j) as f32 / n as f32;
+                real_sum += signal[j] * angle.cos();
+                imag_sum += signal[j] * angle.sin();
+            }
+            
+            result[k * 2] = real_sum;
+            result[k * 2 + 1] = imag_sum;
+        }
+        
+        result
     }
     
     /// Calculate complexity measures
@@ -359,21 +515,480 @@ impl MLOptimizer {
         Ok(HashMap::new()) // Placeholder
     }
     
-    /// Predict performance metrics for given features and parameters
+    /// Predict performance metrics for given features and parameters based on historical data
     fn predict_performance(
         &self,
-        _features: &CarrierFeatures,
-        _params: &EmbedParams,
+        features: &CarrierFeatures,
+        params: &EmbedParams,
     ) -> Result<PerformanceMetrics> {
-        // TODO: Implement performance prediction based on historical data
+        if self.training_data.is_empty() {
+            // Fallback to heuristic-based prediction
+            return Ok(self.heuristic_performance_prediction(features, params));
+        }
+        
+        // Find similar examples in training data
+        let similar_examples = self.find_similar_examples(features, params, 10);
+        
+        if similar_examples.is_empty() {
+            return Ok(self.heuristic_performance_prediction(features, params));
+        }
+        
+        // Weight examples by similarity and recency
+        let mut weighted_metrics = PerformanceMetrics {
+            capacity_efficiency: 0.0,
+            embedding_time_ms: 0,
+            extraction_accuracy: 0.0,
+            quality_preservation: 0.0,
+            memory_usage: 0,
+            gpu_acceleration_benefit: 0.0,
+        };
+        
+        let mut total_weight = 0.0;
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        for (example, similarity) in &similar_examples {
+            // Calculate time-based weight (more recent examples have higher weight)
+            let age_weight = if current_time > example.timestamp {
+                let age_hours = (current_time - example.timestamp) as f32 / 3600.0;
+                (-age_hours / 168.0).exp() // Decay over one week
+            } else {
+                1.0
+            };
+            
+            let combined_weight = similarity * age_weight;
+            total_weight += combined_weight;
+            
+            // Accumulate weighted metrics
+            weighted_metrics.capacity_efficiency += example.performance.capacity_efficiency * combined_weight;
+            weighted_metrics.embedding_time_ms += (example.performance.embedding_time_ms as f32 * combined_weight) as u64;
+            weighted_metrics.extraction_accuracy += example.performance.extraction_accuracy * combined_weight;
+            weighted_metrics.quality_preservation += example.performance.quality_preservation * combined_weight;
+            weighted_metrics.memory_usage += (example.performance.memory_usage as f32 * combined_weight) as usize;
+            weighted_metrics.gpu_acceleration_benefit += example.performance.gpu_acceleration_benefit * combined_weight;
+        }
+        
+        // Normalize by total weight
+        if total_weight > 0.0 {
+            weighted_metrics.capacity_efficiency /= total_weight;
+            weighted_metrics.embedding_time_ms = (weighted_metrics.embedding_time_ms as f32 / total_weight) as u64;
+            weighted_metrics.extraction_accuracy /= total_weight;
+            weighted_metrics.quality_preservation /= total_weight;
+            weighted_metrics.memory_usage = (weighted_metrics.memory_usage as f32 / total_weight) as usize;
+            weighted_metrics.gpu_acceleration_benefit /= total_weight;
+        }
+        
+        // Apply confidence-based adjustments
+        let confidence = self.calculate_prediction_confidence(&similar_examples);
+        let base_prediction = self.heuristic_performance_prediction(features, params);
+        
+        // Blend historical and heuristic predictions based on confidence
         Ok(PerformanceMetrics {
-            capacity_efficiency: 0.7,
-            embedding_time_ms: 500,
-            extraction_accuracy: 0.95,
-            quality_preservation: 0.9,
-            memory_usage: 1024 * 1024,
-            gpu_acceleration_benefit: 2.0,
+            capacity_efficiency: confidence * weighted_metrics.capacity_efficiency + 
+                               (1.0 - confidence) * base_prediction.capacity_efficiency,
+            embedding_time_ms: ((confidence * weighted_metrics.embedding_time_ms as f32 + 
+                               (1.0 - confidence) * base_prediction.embedding_time_ms as f32) as u64),
+            extraction_accuracy: confidence * weighted_metrics.extraction_accuracy + 
+                               (1.0 - confidence) * base_prediction.extraction_accuracy,
+            quality_preservation: confidence * weighted_metrics.quality_preservation + 
+                                (1.0 - confidence) * base_prediction.quality_preservation,
+            memory_usage: ((confidence * weighted_metrics.memory_usage as f32 + 
+                          (1.0 - confidence) * base_prediction.memory_usage as f32) as usize),
+            gpu_acceleration_benefit: confidence * weighted_metrics.gpu_acceleration_benefit + 
+                                   (1.0 - confidence) * base_prediction.gpu_acceleration_benefit,
         })
+    }
+    
+    /// Find similar examples from training data
+    fn find_similar_examples(
+        &self,
+        features: &CarrierFeatures,
+        params: &EmbedParams,
+        max_results: usize,
+    ) -> Vec<(&TrainingExample, f32)> {
+        let mut similarities = Vec::new();
+        
+        for example in &self.training_data {
+            let feature_similarity = self.calculate_feature_similarity(features, &example.carrier_features);
+            let param_similarity = self.calculate_param_similarity(params, &example.embed_params);
+            
+            // Combined similarity (weighted towards features)
+            let combined_similarity = 0.7 * feature_similarity + 0.3 * param_similarity;
+            
+            similarities.push((example, combined_similarity));
+        }
+        
+        // Sort by similarity (highest first) and take top results
+        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        similarities.truncate(max_results);
+        
+        // Filter out examples with very low similarity
+        similarities.into_iter()
+            .filter(|(_, similarity)| *similarity > 0.1)
+            .collect()
+    }
+    
+    /// Calculate similarity between carrier features
+    fn calculate_feature_similarity(&self, features1: &CarrierFeatures, features2: &CarrierFeatures) -> f32 {
+        // Format match is important
+        let format_similarity = if features1.format == features2.format { 1.0 } else { 0.3 };
+        
+        // Size similarity (logarithmic scale)
+        let size_ratio = features1.size.min(features2.size) as f32 / features1.size.max(features2.size) as f32;
+        let size_similarity = size_ratio.ln().exp(); // Smooth similarity function
+        
+        // Entropy similarity
+        let entropy_diff = (features1.entropy - features2.entropy).abs();
+        let entropy_similarity = (-entropy_diff / 2.0).exp(); // Gaussian-like similarity
+        
+        // Frequency characteristics similarity
+        let freq_similarity = if features1.frequency_characteristics.len() == features2.frequency_characteristics.len() {
+            let mut sum_squared_diff = 0.0;
+            for (f1, f2) in features1.frequency_characteristics.iter().zip(&features2.frequency_characteristics) {
+                sum_squared_diff += (f1 - f2).powi(2);
+            }
+            let mse = sum_squared_diff / features1.frequency_characteristics.len() as f32;
+            (-mse.sqrt()).exp()
+        } else {
+            0.5 // Partial similarity if different lengths
+        };
+        
+        // Complexity similarity
+        let complexity_similarity = if features1.complexity_measures.len() == features2.complexity_measures.len() {
+            let mut sum_squared_diff = 0.0;
+            for (c1, c2) in features1.complexity_measures.iter().zip(&features2.complexity_measures) {
+                sum_squared_diff += (c1 - c2).powi(2);
+            }
+            let mse = sum_squared_diff / features1.complexity_measures.len() as f32;
+            (-mse.sqrt()).exp()
+        } else {
+            0.5
+        };
+        
+        // Weighted combination
+        0.3 * format_similarity + 
+        0.2 * size_similarity + 
+        0.2 * entropy_similarity + 
+        0.15 * freq_similarity + 
+        0.15 * complexity_similarity
+    }
+    
+    /// Calculate similarity between embedding parameters
+    fn calculate_param_similarity(&self, params1: &EmbedParams, params2: &EmbedParams) -> f32 {
+        let mut similarity_score = 0.0;
+        let mut total_weight = 0.0;
+        
+        // Error correction level similarity
+        let ec_similarity = if params1.error_correction_level == params2.error_correction_level {
+            1.0
+        } else {
+            0.3 // Some similarity even if different
+        };
+        similarity_score += 0.3 * ec_similarity;
+        total_weight += 0.3;
+        
+        // Stealth level similarity
+        let stealth_similarity = if params1.stealth_level == params2.stealth_level {
+            1.0
+        } else {
+            0.3
+        };
+        similarity_score += 0.3 * stealth_similarity;
+        total_weight += 0.3;
+        
+        // GPU usage similarity
+        let gpu_similarity = if params1.use_gpu == params2.use_gpu {
+            1.0
+        } else {
+            0.5 // Moderate similarity even if different
+        };
+        similarity_score += 0.2 * gpu_similarity;
+        total_weight += 0.2;
+        
+        // Encryption key similarity (simplified)
+        let key_similarity = if params1.encryption_key.is_empty() == params2.encryption_key.is_empty() {
+            1.0
+        } else {
+            0.2
+        };
+        similarity_score += 0.1 * key_similarity;
+        total_weight += 0.1;
+        
+        // Format-specific parameters similarity
+        let format_specific_similarity = if params1.format_specific.is_empty() && params2.format_specific.is_empty() {
+            1.0
+        } else {
+            // Count matching keys
+            let matching_keys = params1.format_specific.keys()
+                .filter(|k| params2.format_specific.contains_key(*k))
+                .count();
+            let total_keys = params1.format_specific.len().max(params2.format_specific.len());
+            if total_keys > 0 {
+                matching_keys as f32 / total_keys as f32
+            } else {
+                1.0
+            }
+        };
+        similarity_score += 0.1 * format_specific_similarity;
+        total_weight += 0.1;
+        
+        similarity_score / total_weight
+    }
+    
+    /// Calculate confidence in prediction based on similar examples
+    fn calculate_prediction_confidence(&self, similar_examples: &[(&TrainingExample, f32)]) -> f32 {
+        if similar_examples.is_empty() {
+            return 0.0;
+        }
+        
+        // Base confidence from number of examples
+        let count_confidence = (similar_examples.len() as f32 / 10.0).min(1.0);
+        
+        // Average similarity confidence
+        let avg_similarity = similar_examples.iter()
+            .map(|(_, similarity)| *similarity)
+            .sum::<f32>() / similar_examples.len() as f32;
+        
+        // Variance in performance (lower variance = higher confidence)
+        let performance_values: Vec<f32> = similar_examples.iter()
+            .map(|(example, _)| example.performance.capacity_efficiency)
+            .collect();
+        
+        let mean_performance = performance_values.iter().sum::<f32>() / performance_values.len() as f32;
+        let variance = performance_values.iter()
+            .map(|&x| (x - mean_performance).powi(2))
+            .sum::<f32>() / performance_values.len() as f32;
+        
+        let variance_confidence = (-variance * 10.0).exp(); // Lower variance = higher confidence
+        
+        // Combined confidence
+        (count_confidence + avg_similarity + variance_confidence) / 3.0
+    }
+    
+    /// Heuristic-based performance prediction when no historical data is available
+    fn heuristic_performance_prediction(&self, features: &CarrierFeatures, params: &EmbedParams) -> PerformanceMetrics {
+        // Base predictions based on format and size
+        let base_capacity = match features.format {
+            DataFormat::PNG | DataFormat::TIFF => 0.1, // Images have good capacity
+            DataFormat::WAV => 0.05, // Audio has moderate capacity
+            DataFormat::FASTQ | DataFormat::FASTA => 0.2, // Genomics data has excellent capacity
+            _ => 0.03, // Conservative estimate for other formats
+        };
+        
+        // Adjust based on size (larger files generally have better capacity efficiency)
+        let size_factor = (features.size as f32).log10() / 6.0; // Normalize to 0-1 range
+        let capacity_efficiency = (base_capacity * (1.0 + size_factor)).min(1.0);
+        
+        // Estimate embedding time based on size and GPU usage
+        let base_time_per_kb = if params.use_gpu { 0.1 } else { 0.5 }; // ms per KB
+        let embedding_time_ms = ((features.size as f32 / 1024.0) * base_time_per_kb) as u64;
+        
+        // Accuracy typically high for well-established formats
+        let extraction_accuracy = match features.format {
+            DataFormat::PNG | DataFormat::WAV | DataFormat::FASTQ => 0.98,
+            DataFormat::TIFF | DataFormat::FASTA => 0.95,
+            _ => 0.9,
+        };
+        
+        // Quality preservation depends on stealth level
+        let quality_preservation = match params.stealth_level {
+            StealthLevel::Maximum => 0.98,
+            StealthLevel::High => 0.95,
+            StealthLevel::Medium => 0.88,
+            StealthLevel::Low => 0.8,
+        };
+        
+        // Memory usage estimate
+        let memory_usage = features.size * 2; // Rough estimate: 2x input size
+        
+        // GPU acceleration benefit
+        let gpu_acceleration_benefit = if params.use_gpu {
+            match features.size {
+                size if size > 10_000_000 => 15.0, // Large files benefit most
+                size if size > 1_000_000 => 8.0,   // Medium files
+                _ => 3.0,                          // Small files have less benefit
+            }
+        } else {
+            1.0
+        };
+        
+        PerformanceMetrics {
+            capacity_efficiency,
+            embedding_time_ms,
+            extraction_accuracy,
+            quality_preservation,
+            memory_usage,
+            gpu_acceleration_benefit,
+        }
+    }
+    
+    /// Generate alternative embedding strategies with confidence scores
+    fn generate_alternative_strategies(
+        &self,
+        features: &CarrierFeatures,
+        primary_params: &EmbedParams,
+    ) -> Result<Vec<(EmbedParams, f32)>> {
+        let mut alternatives = Vec::new();
+        
+        // Generate parameter variations
+        let parameter_variations = self.generate_parameter_variations(primary_params);
+        
+        for variant_params in parameter_variations {
+            // Skip if identical to primary
+            if self.params_equal(&variant_params, primary_params) {
+                continue;
+            }
+            
+            // Predict performance for this variant
+            let predicted_performance = self.predict_performance(features, &variant_params)?;
+            
+            // Calculate confidence based on historical data and heuristics
+            let confidence = self.calculate_variant_confidence(features, &variant_params, &predicted_performance);
+            
+            // Only include alternatives with reasonable confidence
+            if confidence > 0.2 {
+                alternatives.push((variant_params, confidence));
+            }
+        }
+        
+        // Sort by confidence (highest first)
+        alternatives.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Limit to top 5 alternatives
+        alternatives.truncate(5);
+        
+        Ok(alternatives)
+    }
+    
+    /// Generate parameter variations for alternative strategies
+    fn generate_parameter_variations(&self, base_params: &EmbedParams) -> Vec<EmbedParams> {
+        let mut variations = Vec::new();
+        
+        // Variation 1: Different error correction level
+        let mut variant1 = base_params.clone();
+        variant1.error_correction_level = match base_params.error_correction_level {
+            ECLevel::Maximum => ECLevel::High,
+            ECLevel::High => ECLevel::Medium,
+            ECLevel::Medium => ECLevel::High,
+            ECLevel::Low => ECLevel::Medium,
+            ECLevel::None => ECLevel::Low,
+        };
+        variations.push(variant1);
+        
+        // Variation 2: Different stealth level
+        let mut variant2 = base_params.clone();
+        variant2.stealth_level = match base_params.stealth_level {
+            StealthLevel::Maximum => StealthLevel::High,
+            StealthLevel::High => StealthLevel::Medium,
+            StealthLevel::Medium => StealthLevel::High,
+            StealthLevel::Low => StealthLevel::Medium,
+        };
+        variations.push(variant2);
+        
+        // Variation 3: Toggle GPU usage
+        let mut variant3 = base_params.clone();
+        variant3.use_gpu = !base_params.use_gpu;
+        variations.push(variant3);
+        
+        // Variation 4: High performance variant (low stealth, high error correction)
+        let mut variant4 = base_params.clone();
+        variant4.error_correction_level = ECLevel::High;
+        variant4.stealth_level = StealthLevel::Low;
+        variant4.use_gpu = true;
+        variations.push(variant4);
+        
+        // Variation 5: High stealth variant (high stealth, medium error correction)
+        let mut variant5 = base_params.clone();
+        variant5.error_correction_level = ECLevel::Medium;
+        variant5.stealth_level = StealthLevel::High;
+        variations.push(variant5);
+        
+        // Variation 6: Conservative variant (low error correction, medium stealth)
+        let mut variant6 = base_params.clone();
+        variant6.error_correction_level = ECLevel::Low;
+        variant6.stealth_level = StealthLevel::Medium;
+        variant6.use_gpu = false;
+        variations.push(variant6);
+        
+        // Variation 7: Speed-optimized variant
+        let mut variant7 = base_params.clone();
+        variant7.error_correction_level = ECLevel::Low;
+        variant7.stealth_level = StealthLevel::Low;
+        variant7.use_gpu = true;
+        variations.push(variant7);
+        
+        variations
+    }
+    
+    /// Calculate confidence for a parameter variant
+    fn calculate_variant_confidence(
+        &self,
+        features: &CarrierFeatures,
+        params: &EmbedParams,
+        predicted_performance: &PerformanceMetrics,
+    ) -> f32 {
+        // Base confidence from historical data
+        let historical_confidence = if !self.training_data.is_empty() {
+            let similar_examples = self.find_similar_examples(features, params, 5);
+            if !similar_examples.is_empty() {
+                let avg_similarity = similar_examples.iter()
+                    .map(|(_, similarity)| *similarity)
+                    .sum::<f32>() / similar_examples.len() as f32;
+                avg_similarity
+            } else {
+                0.3 // Low confidence without similar examples
+            }
+        } else {
+            0.4 // Moderate confidence based on heuristics alone
+        };
+        
+        // Confidence from predicted performance quality
+        let performance_confidence = {
+            let mut score = 0.0;
+            
+            // High capacity efficiency increases confidence
+            score += predicted_performance.capacity_efficiency * 0.3;
+            
+            // High extraction accuracy increases confidence
+            score += predicted_performance.extraction_accuracy * 0.3;
+            
+            // High quality preservation increases confidence
+            score += predicted_performance.quality_preservation * 0.2;
+            
+            // Reasonable embedding time increases confidence
+            let time_score = if predicted_performance.embedding_time_ms < 1000 {
+                1.0
+            } else if predicted_performance.embedding_time_ms < 5000 {
+                0.7
+            } else {
+                0.3
+            };
+            score += time_score * 0.2;
+            
+            score
+        };
+        
+        // Confidence from parameter compatibility with carrier format
+        let format_confidence = match (features.format.clone(), params) {
+            (DataFormat::PNG | DataFormat::TIFF, p) if matches!(p.stealth_level, StealthLevel::High) => 0.9,
+            (DataFormat::WAV, p) if p.use_gpu => 0.8,
+            (DataFormat::FASTQ | DataFormat::FASTA, p) if matches!(p.error_correction_level, ECLevel::High) => 0.9,
+            _ => 0.6,
+        };
+        
+        // Combined confidence
+        let combined = (historical_confidence + performance_confidence + format_confidence) / 3.0;
+        combined.max(0.0).min(1.0)
+    }
+    
+    /// Check if two parameter sets are equal
+    fn params_equal(&self, params1: &EmbedParams, params2: &EmbedParams) -> bool {
+        params1.error_correction_level == params2.error_correction_level &&
+        params1.stealth_level == params2.stealth_level &&
+        params1.use_gpu == params2.use_gpu &&
+        params1.encryption_key == params2.encryption_key
     }
 }
 
