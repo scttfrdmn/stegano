@@ -447,7 +447,7 @@ impl ECLevel {
 /// let level = StealthLevel::High;
 /// assert_eq!(level.capacity_multiplier(), 0.3);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum StealthLevel {
     /// Maximum stealth, minimal capacity (10% multiplier)
     Maximum,

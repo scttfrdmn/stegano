@@ -10,6 +10,8 @@ pub mod training;
 pub mod optimization;
 pub mod analysis;
 pub mod cuda_models;
+pub mod bayesian;
+pub mod reinforcement;
 
 use crate::core::*;
 use std::collections::HashMap;

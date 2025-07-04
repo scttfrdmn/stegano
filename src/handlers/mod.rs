@@ -1,6 +1,7 @@
 //! Data format handlers for different scientific data types
 
 pub mod genomics;
+pub mod vcf;
 pub mod imagery;
 pub mod signals;
 pub mod generic;
@@ -36,6 +37,7 @@ impl HandlerRegistry {
         Self {
             handlers: vec![
                 Box::new(genomics::GenomicsHandler::new()),
+                Box::new(vcf::VcfHandler::new()),
                 Box::new(imagery::ImageryHandler::new()),
                 Box::new(signals::SignalHandler::new()),
                 Box::new(generic::GenericHandler::new()),
@@ -45,17 +47,20 @@ impl HandlerRegistry {
     
     pub fn get_handler(&self, format: &DataFormat) -> Option<&dyn DataHandler> {
         match format {
-            DataFormat::FASTA | DataFormat::FASTQ | DataFormat::VCF | DataFormat::SAM | DataFormat::BAM => {
+            DataFormat::FASTA | DataFormat::FASTQ | DataFormat::SAM | DataFormat::BAM => {
                 Some(&*self.handlers[0]) // GenomicsHandler
             },
+            DataFormat::VCF => {
+                Some(&*self.handlers[1]) // VcfHandler
+            },
             DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY | DataFormat::DICOM => {
-                Some(&*self.handlers[1]) // ImageryHandler
+                Some(&*self.handlers[2]) // ImageryHandler
             },
             DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries => {
-                Some(&*self.handlers[2]) // SignalHandler
+                Some(&*self.handlers[3]) // SignalHandler
             },
             DataFormat::BINARY | DataFormat::TEXT => {
-                Some(&*self.handlers[3]) // GenericHandler
+                Some(&*self.handlers[4]) // GenericHandler
             },
         }
     }

@@ -46,7 +46,7 @@ pub struct OptimizationConfig {
 }
 
 /// Available optimization algorithms
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OptimizationAlgorithm {
     /// Genetic Algorithm
     GeneticAlgorithm { mutation_rate: f32, crossover_rate: f32 },
@@ -71,7 +71,7 @@ pub enum OptimizationAlgorithm {
 }
 
 /// Acquisition functions for Bayesian optimization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AcquisitionFunction {
     ExpectedImprovement,
     UpperConfidenceBound { kappa: f32 },
@@ -393,7 +393,7 @@ impl OptimizationEngine {
         }
     }
     
-    /// Genetic algorithm implementation
+    /// Advanced genetic algorithm implementation with real crossover and mutation
     async fn genetic_algorithm(
         &mut self,
         carrier: &CarrierData,
@@ -401,44 +401,106 @@ impl OptimizationEngine {
         mutation_rate: f32,
         crossover_rate: f32,
     ) -> Result<OptimizationResult> {
-        // Initialize population
-        let mut population = self.initialize_population(self.config.population_size);
+        // Initialize population with diversity
+        let mut population = self.initialize_diverse_population(self.config.population_size);
         let mut best_solution = population[0].clone();
         let mut best_objective = f32::NEG_INFINITY;
+        let mut convergence_history = Vec::new();
+        let mut stagnation_counter = 0;
+        
+        // Track population diversity
+        let mut diversity_history = Vec::new();
         
         for iteration in 0..self.config.max_iterations {
             // Evaluate population
             let mut evaluated_population = Vec::new();
+            let mut generation_scores = Vec::new();
             
             for individual in &population {
                 let objective_value = self.objective_evaluator.evaluate(individual, carrier, payload).await?;
+                generation_scores.push(objective_value.combined_score);
                 
                 // Track best solution
                 if objective_value.combined_score > best_objective {
                     best_objective = objective_value.combined_score;
                     best_solution = individual.clone();
+                    stagnation_counter = 0;
+                } else {
+                    stagnation_counter += 1;
                 }
                 
                 evaluated_population.push((individual.clone(), objective_value));
             }
             
-            // Selection, crossover, and mutation
-            population = self.genetic_operators(&evaluated_population, mutation_rate, crossover_rate);
+            // Calculate population statistics
+            let avg_fitness = generation_scores.iter().sum::<f32>() / generation_scores.len() as f32;
+            let diversity = self.calculate_population_diversity(&population);
+            diversity_history.push(diversity);
+            convergence_history.push(avg_fitness);
+            
+            // Log progress
+            if iteration % 10 == 0 {
+                log::info!(
+                    "GA Iteration {}: Best={:.4}, Avg={:.4}, Diversity={:.4}",
+                    iteration, best_objective, avg_fitness, diversity
+                );
+            }
+            
+            // Check for premature convergence
+            if diversity < 0.01 {
+                log::warn!("Population diversity too low, introducing mutations");
+                population = self.introduce_diversity(&population);
+            }
+            
+            // Advanced genetic operators
+            population = self.advanced_genetic_operators(
+                &evaluated_population, 
+                mutation_rate, 
+                crossover_rate,
+                iteration,
+                stagnation_counter
+            );
+            
+            // Adaptive parameter adjustment
+            let adaptive_mutation_rate = self.adaptive_mutation_rate(mutation_rate, diversity, stagnation_counter);
+            let adaptive_crossover_rate = self.adaptive_crossover_rate(crossover_rate, avg_fitness);
             
             // Check convergence
-            if self.check_convergence(iteration, best_objective) {
+            if self.check_advanced_convergence(iteration, best_objective, &convergence_history) {
                 break;
             }
+            
+            // Record optimization step
+            self.optimization_history.push(OptimizationStep {
+                iteration,
+                parameters: best_solution.clone(),
+                objective_value: ObjectiveValue {
+                    scores: HashMap::new(),
+                    combined_score: best_objective,
+                    pareto_rank: None,
+                    crowding_distance: None,
+                },
+                constraint_violations: Vec::new(),
+                evaluation_time_ms: 0,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            });
         }
         
         Ok(OptimizationResult {
             best_parameters: best_solution.clone(),
             best_objective_value: self.objective_evaluator.evaluate(&best_solution, carrier, payload).await?,
             convergence: ConvergenceInfo {
-                converged: true,
-                iterations: self.config.max_iterations,
+                converged: stagnation_counter < 50,
+                iterations: self.optimization_history.len(),
                 convergence_measure: best_objective,
-                termination_reason: TerminationReason::Converged,
+                termination_reason: if stagnation_counter >= 50 {
+                    TerminationReason::NoImprovement
+                } else {
+                    TerminationReason::Converged
+                },
             },
             pareto_front: Vec::new(),
             statistics: self.objective_evaluator.get_statistics(),
@@ -590,32 +652,303 @@ impl OptimizationEngine {
         grid.into_iter().take(resolution).collect()
     }
     
-    /// Genetic algorithm operators
-    fn genetic_operators(
+    /// Advanced genetic operators with real crossover and mutation
+    fn advanced_genetic_operators(
         &self,
         evaluated_population: &[(EmbedParams, ObjectiveValue)],
-        _mutation_rate: f32,
-        _crossover_rate: f32,
+        mutation_rate: f32,
+        crossover_rate: f32,
+        iteration: usize,
+        stagnation_counter: usize,
     ) -> Vec<EmbedParams> {
-        // Simple tournament selection for now
         let mut new_population = Vec::new();
+        let population_size = evaluated_population.len();
         
-        for _ in 0..evaluated_population.len() {
-            // Tournament selection
+        // Elitism: Keep best individuals
+        let elite_count = (population_size as f32 * 0.1).ceil() as usize;
+        let mut sorted_population = evaluated_population.to_vec();
+        sorted_population.sort_by(|a, b| b.1.combined_score.partial_cmp(&a.1.combined_score).unwrap());
+        
+        // Add elite individuals
+        for i in 0..elite_count {
+            new_population.push(sorted_population[i].0.clone());
+        }
+        
+        // Generate offspring for the rest of the population
+        while new_population.len() < population_size {
+            // Selection
             let parent1 = self.tournament_selection(evaluated_population, 3);
             let parent2 = self.tournament_selection(evaluated_population, 3);
             
-            // Simple crossover (placeholder)
-            let offspring = if rand::random::<bool>() {
-                parent1.clone()
+            // Crossover
+            let mut offspring = if rand::random::<f32>() < crossover_rate {
+                self.uniform_crossover(&parent1, &parent2)
             } else {
-                parent2.clone()
+                // Clone better parent
+                if self.evaluate_fitness(&parent1) > self.evaluate_fitness(&parent2) {
+                    parent1.clone()
+                } else {
+                    parent2.clone()
+                }
             };
+            
+            // Mutation with adaptive rate
+            let adaptive_rate = if stagnation_counter > 20 {
+                mutation_rate * 2.0 // Increase mutation when stagnating
+            } else {
+                mutation_rate
+            };
+            
+            if rand::random::<f32>() < adaptive_rate {
+                offspring = self.gaussian_mutation(&offspring, iteration);
+            }
             
             new_population.push(offspring);
         }
         
+        new_population.truncate(population_size);
         new_population
+    }
+    
+    /// Initialize diverse population using different strategies
+    fn initialize_diverse_population(&self, size: usize) -> Vec<EmbedParams> {
+        let mut population = Vec::with_capacity(size);
+        
+        // Add some predefined good strategies
+        let strategies = [
+            // High security strategy
+            EmbedParams {
+                encryption_key: vec![],
+                error_correction_level: ECLevel::High,
+                stealth_level: StealthLevel::Maximum,
+                use_gpu: false,
+                format_specific: HashMap::new(),
+            },
+            // High performance strategy
+            EmbedParams {
+                encryption_key: vec![],
+                error_correction_level: ECLevel::Low,
+                stealth_level: StealthLevel::Low,
+                use_gpu: true,
+                format_specific: HashMap::new(),
+            },
+            // Balanced strategy
+            EmbedParams {
+                encryption_key: vec![],
+                error_correction_level: ECLevel::Medium,
+                stealth_level: StealthLevel::Medium,
+                use_gpu: false,
+                format_specific: HashMap::new(),
+            },
+        ];
+        
+        // Add predefined strategies
+        for strategy in &strategies {
+            if population.len() < size {
+                population.push(strategy.clone());
+            }
+        }
+        
+        // Fill remaining with random individuals
+        while population.len() < size {
+            population.push(self.generate_random_parameters());
+        }
+        
+        population
+    }
+    
+    /// Uniform crossover between two parents
+    fn uniform_crossover(&self, parent1: &EmbedParams, parent2: &EmbedParams) -> EmbedParams {
+        EmbedParams {
+            encryption_key: if rand::random::<bool>() {
+                parent1.encryption_key.clone()
+            } else {
+                parent2.encryption_key.clone()
+            },
+            error_correction_level: if rand::random::<bool>() {
+                parent1.error_correction_level.clone()
+            } else {
+                parent2.error_correction_level.clone()
+            },
+            stealth_level: if rand::random::<bool>() {
+                parent1.stealth_level.clone()
+            } else {
+                parent2.stealth_level.clone()
+            },
+            use_gpu: if rand::random::<bool>() {
+                parent1.use_gpu
+            } else {
+                parent2.use_gpu
+            },
+            format_specific: if rand::random::<bool>() {
+                parent1.format_specific.clone()
+            } else {
+                parent2.format_specific.clone()
+            },
+        }
+    }
+    
+    /// Gaussian mutation with adaptive strength
+    fn gaussian_mutation(&self, individual: &EmbedParams, iteration: usize) -> EmbedParams {
+        let mut mutated = individual.clone();
+        
+        // Mutation strength decreases over time
+        let mutation_strength = 1.0 / (1.0 + iteration as f32 * 0.01);
+        
+        // Mutate error correction level
+        if rand::random::<f32>() < 0.3 {
+            mutated.error_correction_level = match rand::random::<u8>() % 4 {
+                0 => ECLevel::None,
+                1 => ECLevel::Low,
+                2 => ECLevel::Medium,
+                3 => ECLevel::High,
+                _ => ECLevel::Maximum,
+            };
+        }
+        
+        // Mutate stealth level
+        if rand::random::<f32>() < 0.3 {
+            mutated.stealth_level = match rand::random::<u8>() % 4 {
+                0 => StealthLevel::Low,
+                1 => StealthLevel::Medium,
+                2 => StealthLevel::High,
+                _ => StealthLevel::Maximum,
+            };
+        }
+        
+        // Mutate GPU usage
+        if rand::random::<f32>() < 0.2 * mutation_strength {
+            mutated.use_gpu = !mutated.use_gpu;
+        }
+        
+        mutated
+    }
+    
+    /// Calculate population diversity using Hamming distance
+    fn calculate_population_diversity(&self, population: &[EmbedParams]) -> f32 {
+        if population.len() < 2 {
+            return 1.0;
+        }
+        
+        let mut total_distance = 0.0;
+        let mut comparisons = 0;
+        
+        for i in 0..population.len() {
+            for j in i+1..population.len() {
+                let distance = self.hamming_distance(&population[i], &population[j]);
+                total_distance += distance;
+                comparisons += 1;
+            }
+        }
+        
+        total_distance / comparisons as f32
+    }
+    
+    /// Calculate Hamming distance between two parameter sets
+    fn hamming_distance(&self, params1: &EmbedParams, params2: &EmbedParams) -> f32 {
+        let mut distance = 0.0;
+        
+        if params1.error_correction_level != params2.error_correction_level {
+            distance += 1.0;
+        }
+        if params1.stealth_level != params2.stealth_level {
+            distance += 1.0;
+        }
+        if params1.use_gpu != params2.use_gpu {
+            distance += 1.0;
+        }
+        if params1.encryption_key != params2.encryption_key {
+            distance += 1.0;
+        }
+        
+        distance / 4.0 // Normalize to [0, 1]
+    }
+    
+    /// Introduce diversity when population converges prematurely
+    fn introduce_diversity(&self, population: &[EmbedParams]) -> Vec<EmbedParams> {
+        let mut diverse_population = Vec::new();
+        
+        // Keep best individual
+        diverse_population.push(population[0].clone());
+        
+        // Mutate others heavily
+        for individual in population.iter().skip(1) {
+            let mut mutated = individual.clone();
+            
+            // Heavy mutation
+            if rand::random::<f32>() < 0.8 {
+                mutated = self.gaussian_mutation(&mutated, 0); // Use high mutation strength
+            }
+            
+            diverse_population.push(mutated);
+        }
+        
+        diverse_population
+    }
+    
+    /// Adaptive mutation rate based on diversity and stagnation
+    fn adaptive_mutation_rate(&self, base_rate: f32, diversity: f32, stagnation_counter: usize) -> f32 {
+        let diversity_factor = if diversity < 0.1 { 2.0 } else { 1.0 };
+        let stagnation_factor = 1.0 + (stagnation_counter as f32 * 0.05);
+        
+        (base_rate * diversity_factor * stagnation_factor).min(0.8)
+    }
+    
+    /// Adaptive crossover rate based on average fitness
+    fn adaptive_crossover_rate(&self, base_rate: f32, avg_fitness: f32) -> f32 {
+        // Increase crossover rate when fitness is improving
+        let fitness_factor = if avg_fitness > 0.7 { 1.2 } else { 0.8 };
+        (base_rate * fitness_factor).clamp(0.1, 0.95)
+    }
+    
+    /// Advanced convergence checking
+    fn check_advanced_convergence(&self, iteration: usize, best_objective: f32, history: &[f32]) -> bool {
+        // Check maximum iterations
+        if iteration >= self.config.max_iterations {
+            return true;
+        }
+        
+        // Check if we've reached a good enough solution
+        if best_objective > 0.95 {
+            return true;
+        }
+        
+        // Check for stagnation over last 20 iterations
+        if history.len() >= 20 {
+            let recent_improvement = history[history.len()-1] - history[history.len()-20];
+            if recent_improvement < self.config.tolerance {
+                return true;
+            }
+        }
+        
+        false
+    }
+    
+    /// Evaluate fitness of individual parameters (simplified)
+    fn evaluate_fitness(&self, params: &EmbedParams) -> f32 {
+        let mut fitness = 0.0;
+        
+        // Simple heuristic fitness based on parameter choices
+        fitness += match params.error_correction_level {
+            ECLevel::None => 0.1,
+            ECLevel::Low => 0.3,
+            ECLevel::Medium => 0.7,
+            ECLevel::High => 0.9,
+            ECLevel::Maximum => 0.8, // Slight penalty for overhead
+        };
+        
+        fitness += match params.stealth_level {
+            StealthLevel::Low => 0.2,
+            StealthLevel::Medium => 0.6,
+            StealthLevel::High => 0.8,
+            StealthLevel::Maximum => 0.9,
+        };
+        
+        if params.use_gpu {
+            fitness += 0.1; // Bonus for GPU usage
+        }
+        
+        fitness / 2.0 // Normalize
     }
     
     /// Tournament selection
