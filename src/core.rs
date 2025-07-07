@@ -47,8 +47,8 @@
 //!     .with_gpu();
 //! ```
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Data format enumeration covering all supported steganographic carriers.
 ///
@@ -82,11 +82,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// ```rust
 /// use stegano::core::DataFormat;
-/// 
+///
 /// // Genomics data
 /// let format = DataFormat::FASTQ;
 /// assert_eq!(format.is_genomics(), true);
-/// 
+///
 /// // Image data
 /// let format = DataFormat::PNG;
 /// assert_eq!(format.is_imagery(), true);
@@ -104,7 +104,7 @@ pub enum DataFormat {
     SAM,
     /// Binary Alignment/Map format (planned)
     BAM,
-    
+
     // Image formats
     /// Tagged Image File Format - Multi-channel scientific imagery
     TIFF,
@@ -114,7 +114,7 @@ pub enum DataFormat {
     MICROSCOPY,
     /// Digital Imaging and Communications in Medicine (planned)
     DICOM,
-    
+
     // Signal formats
     /// Waveform Audio File Format
     WAV,
@@ -122,7 +122,7 @@ pub enum DataFormat {
     BinarySignal,
     /// Comma-separated values time series
     CsvTimeseries,
-    
+
     // Generic
     /// Generic binary data
     BINARY,
@@ -133,19 +133,32 @@ pub enum DataFormat {
 impl DataFormat {
     /// Check if this format is a genomics format
     pub fn is_genomics(&self) -> bool {
-        matches!(self, DataFormat::FASTA | DataFormat::FASTQ | DataFormat::VCF | DataFormat::SAM | DataFormat::BAM)
+        matches!(
+            self,
+            DataFormat::FASTA
+                | DataFormat::FASTQ
+                | DataFormat::VCF
+                | DataFormat::SAM
+                | DataFormat::BAM
+        )
     }
-    
+
     /// Check if this format is an imagery format
     pub fn is_imagery(&self) -> bool {
-        matches!(self, DataFormat::TIFF | DataFormat::PNG | DataFormat::MICROSCOPY | DataFormat::DICOM)
+        matches!(
+            self,
+            DataFormat::TIFF | DataFormat::PNG | DataFormat::MICROSCOPY | DataFormat::DICOM
+        )
     }
-    
+
     /// Check if this format is a signal format
     pub fn is_signal(&self) -> bool {
-        matches!(self, DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries)
+        matches!(
+            self,
+            DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries
+        )
     }
-    
+
     /// Get the typical file extension for this format
     pub fn extension(&self) -> &'static str {
         match self {
@@ -589,25 +602,25 @@ impl CapacityInfo {
 pub enum SteganoError {
     #[error("Unsupported data format: {0:?}")]
     UnsupportedFormat(DataFormat),
-    
+
     #[error("Insufficient capacity: need {needed} bits, have {available}")]
     InsufficientCapacity { needed: usize, available: usize },
-    
+
     #[error("Encryption error: {0}")]
     EncryptionError(String),
-    
+
     #[error("GPU acceleration error: {0}")]
     GpuError(String),
-    
+
     #[error("Data integrity error: {0}")]
     IntegrityError(String),
-    
+
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
-    
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    
+
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 }
@@ -615,9 +628,9 @@ pub enum SteganoError {
 impl SteganoError {
     /// Check if error is recoverable
     pub fn is_recoverable(&self) -> bool {
-        matches!(self, 
-            SteganoError::InsufficientCapacity { .. } |
-            SteganoError::InvalidParameter(_)
+        matches!(
+            self,
+            SteganoError::InsufficientCapacity { .. } | SteganoError::InvalidParameter(_)
         )
     }
 
@@ -654,7 +667,7 @@ mod tests {
     fn test_carrier_data_creation() {
         let data = vec![1, 2, 3, 4, 5];
         let carrier = CarrierData::new(DataFormat::BINARY, data.clone());
-        
+
         assert_eq!(carrier.format, DataFormat::BINARY);
         assert_eq!(carrier.raw_data, data);
         assert_eq!(carrier.size(), 5);
@@ -664,12 +677,18 @@ mod tests {
     #[test]
     fn test_carrier_data_metadata() {
         let mut carrier = CarrierData::new(DataFormat::PNG, vec![]);
-        
+
         carrier.add_metadata("width".to_string(), serde_json::Value::Number(800.into()));
         carrier.add_metadata("height".to_string(), serde_json::Value::Number(600.into()));
-        
-        assert_eq!(carrier.get_metadata("width"), Some(&serde_json::Value::Number(800.into())));
-        assert_eq!(carrier.get_metadata("height"), Some(&serde_json::Value::Number(600.into())));
+
+        assert_eq!(
+            carrier.get_metadata("width"),
+            Some(&serde_json::Value::Number(800.into()))
+        );
+        assert_eq!(
+            carrier.get_metadata("height"),
+            Some(&serde_json::Value::Number(600.into()))
+        );
         assert_eq!(carrier.get_metadata("nonexistent"), None);
     }
 
@@ -689,7 +708,7 @@ mod tests {
     fn test_embed_params() {
         let key = b"test_key".to_vec();
         let params = EmbedParams::new(key.clone());
-        
+
         assert_eq!(params.encryption_key, key);
         assert_eq!(params.error_correction_level, ECLevel::Medium);
         assert_eq!(params.stealth_level, StealthLevel::High);
@@ -726,7 +745,7 @@ mod tests {
     fn test_embed_result() {
         let stats = PerformanceStats::new();
         let success = EmbedResult::success(100, stats.clone());
-        
+
         assert!(success.success);
         assert_eq!(success.bytes_embedded, 100);
         assert!(success.carrier_modified);
@@ -742,7 +761,7 @@ mod tests {
         let mut stats = PerformanceStats::new();
         stats.embedding_time_ms = 100;
         stats.encryption_time_ms = 50;
-        
+
         assert_eq!(stats.total_time_ms(), 150);
         assert_eq!(stats.throughput_bps(1500), 10000.0); // 1500 bytes in 150ms = 10,000 bytes/sec
     }
@@ -750,21 +769,24 @@ mod tests {
     #[test]
     fn test_capacity_info() {
         let capacity = CapacityInfo::new(1000, 800);
-        
+
         assert_eq!(capacity.total_bits, 1000);
         assert_eq!(capacity.recommended_bits, 800);
         assert_eq!(capacity.steganographic_ratio, 0.8);
         assert_eq!(capacity.recommended_bytes(), 100);
-        
+
         assert!(capacity.can_fit(50)); // 50 bytes = 400 bits < 800
         assert!(!capacity.can_fit(200)); // 200 bytes = 1600 bits > 800
-        
+
         assert_eq!(capacity.utilization_percent(50), 50.0); // 400 bits / 800 bits = 50%
     }
 
     #[test]
     fn test_stegano_error() {
-        let error = SteganoError::InsufficientCapacity { needed: 100, available: 50 };
+        let error = SteganoError::InsufficientCapacity {
+            needed: 100,
+            available: 50,
+        };
         assert!(error.is_recoverable());
         assert_eq!(error.category(), "capacity");
 

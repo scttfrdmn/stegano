@@ -1,5 +1,5 @@
 //! Foreign Function Interface (FFI) for C/C++ integration
-//! 
+//!
 //! Copyright (c) 2025 Scott Friedman. All rights reserved.
 //! This software is proprietary and confidential.
 
@@ -125,12 +125,12 @@ pub extern "C" fn stegano_init() -> SteganoErrorCode {
 }
 
 /// Detect the format of data
-/// 
+///
 /// # Arguments
 /// * `data` - Pointer to data buffer
 /// * `data_len` - Length of data buffer
 /// * `format_out` - Pointer to output format enum
-/// 
+///
 /// # Returns
 /// Error code (0 = success)
 #[no_mangle]
@@ -164,13 +164,13 @@ pub extern "C" fn stegano_detect_format(
 }
 
 /// Estimate embedding capacity for data
-/// 
+///
 /// # Arguments
 /// * `data` - Pointer to carrier data buffer
 /// * `data_len` - Length of carrier data buffer
 /// * `format` - Data format
 /// * `capacity_out` - Pointer to output capacity info
-/// 
+///
 /// # Returns
 /// Error code (0 = success)
 #[no_mangle]
@@ -186,7 +186,7 @@ pub extern "C" fn stegano_estimate_capacity(
 
     let data_slice = unsafe { slice::from_raw_parts(data, data_len as usize) };
     let rust_format = from_c_format(format);
-    
+
     let carrier = CarrierData {
         format: rust_format,
         raw_data: data_slice.to_vec(),
@@ -196,29 +196,27 @@ pub extern "C" fn stegano_estimate_capacity(
     };
 
     let registry = HandlerRegistry::new();
-    
+
     match registry.get_handler(&carrier.format) {
-        Some(handler) => {
-            match handler.estimate_capacity(&carrier) {
-                Ok(capacity) => {
-                    unsafe {
-                        *capacity_out = CCapacityInfo {
-                            total_bits: capacity.total_bits as c_uint,
-                            recommended_bits: capacity.recommended_bits as c_uint,
-                            steganographic_ratio: capacity.steganographic_ratio,
-                        };
-                    }
-                    SteganoErrorCode::Success
+        Some(handler) => match handler.estimate_capacity(&carrier) {
+            Ok(capacity) => {
+                unsafe {
+                    *capacity_out = CCapacityInfo {
+                        total_bits: capacity.total_bits as c_uint,
+                        recommended_bits: capacity.recommended_bits as c_uint,
+                        steganographic_ratio: capacity.steganographic_ratio,
+                    };
                 }
-                Err(error) => to_c_error(&error),
+                SteganoErrorCode::Success
             }
-        }
+            Err(error) => to_c_error(&error),
+        },
         None => SteganoErrorCode::FormatNotSupported,
     }
 }
 
 /// Embed payload into carrier data
-/// 
+///
 /// # Arguments
 /// * `carrier_data` - Pointer to carrier data buffer (will be modified)
 /// * `carrier_len` - Length of carrier data buffer
@@ -227,7 +225,7 @@ pub extern "C" fn stegano_estimate_capacity(
 /// * `format` - Data format
 /// * `password` - Password for encryption (null for no encryption)
 /// * `result_out` - Pointer to output embed result
-/// 
+///
 /// # Returns
 /// Error code (0 = success)
 #[no_mangle]
@@ -240,15 +238,19 @@ pub extern "C" fn stegano_embed(
     password: *const c_char,
     result_out: *mut CEmbedResult,
 ) -> SteganoErrorCode {
-    if carrier_data.is_null() || payload_data.is_null() || result_out.is_null() 
-        || carrier_len == 0 || payload_len == 0 {
+    if carrier_data.is_null()
+        || payload_data.is_null()
+        || result_out.is_null()
+        || carrier_len == 0
+        || payload_len == 0
+    {
         return SteganoErrorCode::InvalidParameter;
     }
 
     let carrier_slice = unsafe { slice::from_raw_parts_mut(carrier_data, carrier_len as usize) };
     let payload_slice = unsafe { slice::from_raw_parts(payload_data, payload_len as usize) };
     let rust_format = from_c_format(format);
-    
+
     // Handle password
     let encryption_key = if password.is_null() {
         vec![]
@@ -274,7 +276,7 @@ pub extern "C" fn stegano_embed(
     };
 
     let registry = HandlerRegistry::new();
-    
+
     match registry.get_handler(&carrier.format) {
         Some(handler) => {
             // Use a runtime for async call
@@ -288,11 +290,7 @@ pub extern "C" fn stegano_embed(
                     // Copy modified carrier data back
                     let copy_len = std::cmp::min(carrier.raw_data.len(), carrier_len as usize);
                     unsafe {
-                        ptr::copy_nonoverlapping(
-                            carrier.raw_data.as_ptr(),
-                            carrier_data,
-                            copy_len,
-                        );
+                        ptr::copy_nonoverlapping(carrier.raw_data.as_ptr(), carrier_data, copy_len);
                     }
 
                     unsafe {
@@ -301,7 +299,8 @@ pub extern "C" fn stegano_embed(
                             bytes_embedded: result.bytes_embedded as c_uint,
                             carrier_modified: result.carrier_modified,
                             embedding_time_ms: result.performance_stats.embedding_time_ms as c_uint,
-                            memory_usage_bytes: result.performance_stats.memory_usage_bytes as c_uint,
+                            memory_usage_bytes: result.performance_stats.memory_usage_bytes
+                                as c_uint,
                         };
                     }
                     SteganoErrorCode::Success
@@ -314,7 +313,7 @@ pub extern "C" fn stegano_embed(
 }
 
 /// Extract payload from carrier data
-/// 
+///
 /// # Arguments
 /// * `carrier_data` - Pointer to carrier data buffer
 /// * `carrier_len` - Length of carrier data buffer
@@ -322,7 +321,7 @@ pub extern "C" fn stegano_embed(
 /// * `password` - Password for decryption (null for no encryption)
 /// * `payload_out` - Pointer to output payload buffer (caller must free)
 /// * `payload_len_out` - Pointer to output payload length
-/// 
+///
 /// # Returns
 /// Error code (0 = success)
 #[no_mangle]
@@ -334,14 +333,17 @@ pub extern "C" fn stegano_extract(
     payload_out: *mut *mut u8,
     payload_len_out: *mut c_uint,
 ) -> SteganoErrorCode {
-    if carrier_data.is_null() || payload_out.is_null() || payload_len_out.is_null() 
-        || carrier_len == 0 {
+    if carrier_data.is_null()
+        || payload_out.is_null()
+        || payload_len_out.is_null()
+        || carrier_len == 0
+    {
         return SteganoErrorCode::InvalidParameter;
     }
 
     let carrier_slice = unsafe { slice::from_raw_parts(carrier_data, carrier_len as usize) };
     let rust_format = from_c_format(format);
-    
+
     // Handle password
     let encryption_key = if password.is_null() {
         vec![]
@@ -367,7 +369,7 @@ pub extern "C" fn stegano_extract(
     };
 
     let registry = HandlerRegistry::new();
-    
+
     match registry.get_handler(&carrier.format) {
         Some(handler) => {
             // Use a runtime for async call
@@ -379,20 +381,14 @@ pub extern "C" fn stegano_extract(
             match rt.block_on(handler.extract(&carrier, &params)) {
                 Ok(payload) => {
                     // Allocate memory for payload (caller must free)
-                    let payload_ptr = unsafe {
-                        libc::malloc(payload.len()) as *mut u8
-                    };
-                    
+                    let payload_ptr = unsafe { libc::malloc(payload.len()) as *mut u8 };
+
                     if payload_ptr.is_null() {
                         return SteganoErrorCode::Unknown;
                     }
 
                     unsafe {
-                        ptr::copy_nonoverlapping(
-                            payload.as_ptr(),
-                            payload_ptr,
-                            payload.len(),
-                        );
+                        ptr::copy_nonoverlapping(payload.as_ptr(), payload_ptr, payload.len());
                         *payload_out = payload_ptr;
                         *payload_len_out = payload.len() as c_uint;
                     }
@@ -406,7 +402,7 @@ pub extern "C" fn stegano_extract(
 }
 
 /// Free memory allocated by stegano_extract
-/// 
+///
 /// # Arguments
 /// * `ptr` - Pointer to memory to free
 #[no_mangle]
@@ -427,13 +423,13 @@ pub extern "C" fn stegano_version() -> *const c_char {
 }
 
 /// Verify data integrity after embedding
-/// 
+///
 /// # Arguments
 /// * `carrier_data` - Pointer to carrier data buffer
 /// * `carrier_len` - Length of carrier data buffer
 /// * `format` - Data format
 /// * `integrity_ok` - Pointer to output integrity result
-/// 
+///
 /// # Returns
 /// Error code (0 = success)
 #[no_mangle]
@@ -449,7 +445,7 @@ pub extern "C" fn stegano_verify_integrity(
 
     let carrier_slice = unsafe { slice::from_raw_parts(carrier_data, carrier_len as usize) };
     let rust_format = from_c_format(format);
-    
+
     let carrier = CarrierData {
         format: rust_format,
         raw_data: carrier_slice.to_vec(),
@@ -459,19 +455,17 @@ pub extern "C" fn stegano_verify_integrity(
     };
 
     let registry = HandlerRegistry::new();
-    
+
     match registry.get_handler(&carrier.format) {
-        Some(handler) => {
-            match handler.verify_integrity(&carrier) {
-                Ok(result) => {
-                    unsafe {
-                        *integrity_ok = result;
-                    }
-                    SteganoErrorCode::Success
+        Some(handler) => match handler.verify_integrity(&carrier) {
+            Ok(result) => {
+                unsafe {
+                    *integrity_ok = result;
                 }
-                Err(error) => to_c_error(&error),
+                SteganoErrorCode::Success
             }
-        }
+            Err(error) => to_c_error(&error),
+        },
         None => SteganoErrorCode::FormatNotSupported,
     }
 }
@@ -482,7 +476,10 @@ mod tests {
 
     #[test]
     fn test_format_conversion() {
-        assert_eq!(to_c_format(&DataFormat::FASTA) as u32, CDataFormat::Fasta as u32);
+        assert_eq!(
+            to_c_format(&DataFormat::FASTA) as u32,
+            CDataFormat::Fasta as u32
+        );
         assert_eq!(from_c_format(CDataFormat::Fastq), DataFormat::FASTQ);
     }
 
@@ -496,7 +493,7 @@ mod tests {
     fn test_version() {
         let version_ptr = stegano_version();
         assert!(!version_ptr.is_null());
-        
+
         let version_str = unsafe { CStr::from_ptr(version_ptr) };
         assert_eq!(version_str.to_str().unwrap(), "0.2.0");
     }

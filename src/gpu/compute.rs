@@ -6,7 +6,7 @@ impl ComputeEngine {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Check if GPU compute is available
     pub fn is_available(&self) -> bool {
         // Check if we can access any GPU backend
@@ -20,7 +20,7 @@ impl ComputeEngine {
             true
         }
     }
-    
+
     /// Estimate compute performance
     pub fn estimate_performance(&self) -> ComputePerformance {
         ComputePerformance {
@@ -49,54 +49,54 @@ pub struct ComputePerformance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_compute_engine_creation() {
         let engine = ComputeEngine::new();
         let performance = engine.estimate_performance();
         assert!(performance.parallel_units > 0);
     }
-    
+
     #[test]
     fn test_compute_engine_default() {
         let engine = ComputeEngine::default();
         let performance = engine.estimate_performance();
         assert!(performance.memory_bandwidth_gbps > 0.0);
     }
-    
+
     #[test]
     fn test_compute_availability() {
         let engine = ComputeEngine::new();
         let available = engine.is_available();
-        
+
         // On macOS with Metal, should be available
         #[cfg(all(target_os = "macos", feature = "metal"))]
         {
             println!("Metal availability: {}", available);
         }
-        
+
         // Availability is platform-dependent, just ensure it returns a boolean
         assert!(available == true || available == false);
     }
-    
+
     #[test]
     fn test_performance_estimation() {
         let engine = ComputeEngine::new();
         let performance = engine.estimate_performance();
-        
+
         // Performance metrics should be reasonable
         assert!(performance.parallel_units >= 1);
         assert!(performance.memory_bandwidth_gbps > 0.0);
         assert!(performance.compute_units >= 1);
-        
+
         // Unified memory support depends on platform
         #[cfg(target_os = "macos")]
         assert!(performance.supports_unified_memory);
-        
+
         #[cfg(not(target_os = "macos"))]
         assert!(!performance.supports_unified_memory);
     }
-    
+
     #[test]
     fn test_compute_performance_structure() {
         let performance = ComputePerformance {
@@ -105,18 +105,18 @@ mod tests {
             compute_units: 32,
             supports_unified_memory: true,
         };
-        
+
         assert_eq!(performance.parallel_units, 512);
         assert_eq!(performance.memory_bandwidth_gbps, 200.0);
         assert_eq!(performance.compute_units, 32);
         assert!(performance.supports_unified_memory);
     }
-    
+
     #[test]
     fn test_performance_with_gpu() {
         let engine = ComputeEngine::new();
         let performance = engine.estimate_performance();
-        
+
         if engine.is_available() {
             // With GPU, should have better performance
             assert!(performance.parallel_units >= 256);

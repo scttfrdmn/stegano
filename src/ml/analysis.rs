@@ -1,25 +1,25 @@
 //! Analysis tools for steganography performance and detection resistance
-//! 
+//!
 //! This module provides statistical analysis, performance evaluation,
 //! and detection resistance assessment capabilities.
 
-use crate::core::*;
 use super::*;
+use crate::core::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// Performance analysis engine
 #[derive(Debug)]
 pub struct AnalysisEngine {
     /// Statistical analyzers
     analyzers: Vec<Box<dyn StatisticalAnalyzer>>,
-    
+
     /// Detection resistance evaluators
     detection_evaluators: Vec<Box<dyn DetectionEvaluator>>,
-    
+
     /// Performance benchmarks
     benchmarks: Vec<PerformanceBenchmark>,
-    
+
     /// Analysis configuration
     config: AnalysisConfig,
 }
@@ -29,19 +29,19 @@ pub struct AnalysisEngine {
 pub struct AnalysisConfig {
     /// Enable statistical analysis
     pub statistical_analysis: bool,
-    
+
     /// Enable detection resistance testing
     pub detection_testing: bool,
-    
+
     /// Confidence level for statistical tests
     pub confidence_level: f32,
-    
+
     /// Number of bootstrap samples
     pub bootstrap_samples: usize,
-    
+
     /// Enable cross-format analysis
     pub cross_format_analysis: bool,
-    
+
     /// Performance comparison thresholds
     pub performance_thresholds: PerformanceThresholds,
 }
@@ -51,16 +51,16 @@ pub struct AnalysisConfig {
 pub struct PerformanceThresholds {
     /// Minimum acceptable capacity efficiency
     pub min_capacity_efficiency: f32,
-    
+
     /// Maximum acceptable embedding time (ms)
     pub max_embedding_time_ms: u64,
-    
+
     /// Minimum acceptable extraction accuracy
     pub min_extraction_accuracy: f32,
-    
+
     /// Minimum acceptable quality preservation
     pub min_quality_preservation: f32,
-    
+
     /// Minimum acceptable detection resistance
     pub min_detection_resistance: f32,
 }
@@ -69,10 +69,10 @@ pub struct PerformanceThresholds {
 pub trait StatisticalAnalyzer: std::fmt::Debug + Send + Sync {
     /// Perform statistical analysis on performance data
     fn analyze(&self, data: &[PerformanceMetrics]) -> Result<StatisticalSummary>;
-    
+
     /// Get analyzer name
     fn name(&self) -> &str;
-    
+
     /// Get required minimum sample size
     fn min_sample_size(&self) -> usize;
 }
@@ -113,7 +113,7 @@ pub enum CorrelationMethod {
 pub struct OutlierAnalyzer {
     /// Detection method
     method: OutlierMethod,
-    
+
     /// Sensitivity threshold
     threshold: f32,
 }
@@ -132,19 +132,19 @@ pub enum OutlierMethod {
 pub struct StatisticalSummary {
     /// Basic descriptive statistics
     pub descriptive: DescriptiveStats,
-    
+
     /// Distribution analysis results
     pub distribution: DistributionAnalysis,
-    
+
     /// Correlation analysis results
     pub correlations: HashMap<String, f32>,
-    
+
     /// Outlier detection results
     pub outliers: OutlierAnalysis,
-    
+
     /// Confidence intervals
     pub confidence_intervals: HashMap<String, (f32, f32)>,
-    
+
     /// Statistical test results
     pub test_results: Vec<StatisticalTest>,
 }
@@ -154,28 +154,28 @@ pub struct StatisticalSummary {
 pub struct DescriptiveStats {
     /// Sample size
     pub count: usize,
-    
+
     /// Mean values
     pub means: HashMap<String, f32>,
-    
+
     /// Standard deviations
     pub std_devs: HashMap<String, f32>,
-    
+
     /// Minimum values
     pub mins: HashMap<String, f32>,
-    
+
     /// Maximum values
     pub maxs: HashMap<String, f32>,
-    
+
     /// Median values
     pub medians: HashMap<String, f32>,
-    
+
     /// Quantiles (25%, 75%)
     pub quantiles: HashMap<String, (f32, f32)>,
-    
+
     /// Skewness measures
     pub skewness: HashMap<String, f32>,
-    
+
     /// Kurtosis measures
     pub kurtosis: HashMap<String, f32>,
 }
@@ -185,13 +185,13 @@ pub struct DescriptiveStats {
 pub struct DistributionAnalysis {
     /// Best fitting distribution
     pub best_fit: String,
-    
+
     /// Distribution parameters
     pub parameters: HashMap<String, f32>,
-    
+
     /// Goodness of fit scores
     pub goodness_of_fit: HashMap<String, f32>,
-    
+
     /// Distribution test p-values
     pub test_p_values: HashMap<String, f32>,
 }
@@ -201,13 +201,13 @@ pub struct DistributionAnalysis {
 pub struct OutlierAnalysis {
     /// Detected outlier indices
     pub outlier_indices: Vec<usize>,
-    
+
     /// Outlier scores
     pub outlier_scores: Vec<f32>,
-    
+
     /// Threshold used for detection
     pub threshold: f32,
-    
+
     /// Method used
     pub method: String,
 }
@@ -217,16 +217,16 @@ pub struct OutlierAnalysis {
 pub struct StatisticalTest {
     /// Test name
     pub name: String,
-    
+
     /// Test statistic
     pub statistic: f32,
-    
+
     /// P-value
     pub p_value: f32,
-    
+
     /// Critical value
     pub critical_value: f32,
-    
+
     /// Test conclusion
     pub conclusion: String,
 }
@@ -235,10 +235,10 @@ pub struct StatisticalTest {
 pub trait DetectionEvaluator: std::fmt::Debug + Send + Sync {
     /// Evaluate detection resistance of embedded data
     fn evaluate(&self, original: &[u8], stego: &[u8]) -> Result<DetectionScore>;
-    
+
     /// Get evaluator name
     fn name(&self) -> &str;
-    
+
     /// Get detection method category
     fn category(&self) -> DetectionCategory;
 }
@@ -288,16 +288,16 @@ pub struct MLDetector {
 pub struct DetectionScore {
     /// Detection probability (0.0 = undetectable, 1.0 = easily detected)
     pub detection_probability: f32,
-    
+
     /// Confidence in the detection
     pub confidence: f32,
-    
+
     /// Detailed scores by method
     pub method_scores: HashMap<String, f32>,
-    
+
     /// Evidence of embedding
     pub evidence: Vec<DetectionEvidence>,
-    
+
     /// Overall resistance grade
     pub resistance_grade: ResistanceGrade,
 }
@@ -307,13 +307,13 @@ pub struct DetectionScore {
 pub struct DetectionEvidence {
     /// Evidence description
     pub description: String,
-    
+
     /// Strength of evidence (0.0-1.0)
     pub strength: f32,
-    
+
     /// Detection method that found this evidence
     pub method: String,
-    
+
     /// Location/region where evidence was found
     pub location: Option<String>,
 }
@@ -321,11 +321,11 @@ pub struct DetectionEvidence {
 /// Resistance grade classification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResistanceGrade {
-    Excellent,  // Very hard to detect
-    Good,       // Moderately hard to detect
-    Fair,       // Some detectable patterns
-    Poor,       // Easily detectable
-    Failed,     // Detection is trivial
+    Excellent, // Very hard to detect
+    Good,      // Moderately hard to detect
+    Fair,      // Some detectable patterns
+    Poor,      // Easily detectable
+    Failed,    // Detection is trivial
 }
 
 /// Performance benchmark
@@ -333,22 +333,22 @@ pub enum ResistanceGrade {
 pub struct PerformanceBenchmark {
     /// Benchmark name
     pub name: String,
-    
+
     /// Data format
     pub format: DataFormat,
-    
+
     /// Payload size
     pub payload_size: usize,
-    
+
     /// Carrier size
     pub carrier_size: usize,
-    
+
     /// Reference performance metrics
     pub reference_metrics: PerformanceMetrics,
-    
+
     /// Detection resistance score
     pub reference_detection_score: f32,
-    
+
     /// Test conditions
     pub conditions: HashMap<String, String>,
 }
@@ -358,16 +358,16 @@ pub struct PerformanceBenchmark {
 pub struct AnalysisResult {
     /// Statistical analysis summary
     pub statistical_summary: StatisticalSummary,
-    
+
     /// Detection resistance scores
     pub detection_scores: Vec<DetectionScore>,
-    
+
     /// Performance comparison with benchmarks
     pub benchmark_comparison: BenchmarkComparison,
-    
+
     /// Recommendations for improvement
     pub recommendations: Vec<PerformanceRecommendation>,
-    
+
     /// Analysis metadata
     pub metadata: AnalysisMetadata,
 }
@@ -377,13 +377,13 @@ pub struct AnalysisResult {
 pub struct BenchmarkComparison {
     /// Benchmark scores
     pub scores: HashMap<String, f32>,
-    
+
     /// Performance ranking
     pub ranking: HashMap<String, usize>,
-    
+
     /// Significant differences
     pub significant_differences: Vec<String>,
-    
+
     /// Overall assessment
     pub overall_assessment: String,
 }
@@ -393,16 +393,16 @@ pub struct BenchmarkComparison {
 pub struct PerformanceRecommendation {
     /// Recommendation category
     pub category: RecommendationCategory,
-    
+
     /// Description
     pub description: String,
-    
+
     /// Expected improvement
     pub expected_improvement: f32,
-    
+
     /// Implementation difficulty
     pub difficulty: DifficultyLevel,
-    
+
     /// Priority
     pub priority: PriorityLevel,
 }
@@ -440,16 +440,16 @@ pub enum PriorityLevel {
 pub struct AnalysisMetadata {
     /// Analysis timestamp
     pub timestamp: u64,
-    
+
     /// Analysis duration
     pub duration_ms: u64,
-    
+
     /// Sample size
     pub sample_size: usize,
-    
+
     /// Analysis version
     pub version: String,
-    
+
     /// Configuration used
     pub config: AnalysisConfig,
 }
@@ -482,35 +482,37 @@ impl AnalysisEngine {
             benchmarks: Vec::new(),
             config,
         };
-        
+
         // Add default analyzers
         engine.add_analyzer(Box::new(DistributionAnalyzer::new()));
-        engine.add_analyzer(Box::new(CorrelationAnalyzer::new(CorrelationMethod::Pearson)));
+        engine.add_analyzer(Box::new(CorrelationAnalyzer::new(
+            CorrelationMethod::Pearson,
+        )));
         engine.add_analyzer(Box::new(OutlierAnalyzer::new(OutlierMethod::IQR, 1.5)));
-        
+
         // Add default detection evaluators
         engine.add_detection_evaluator(Box::new(ChiSquareDetector::new(0.05)));
         engine.add_detection_evaluator(Box::new(SamplePairsDetector));
         engine.add_detection_evaluator(Box::new(HistogramDetector));
-        
+
         engine
     }
-    
+
     /// Add statistical analyzer
     pub fn add_analyzer(&mut self, analyzer: Box<dyn StatisticalAnalyzer>) {
         self.analyzers.push(analyzer);
     }
-    
+
     /// Add detection evaluator
     pub fn add_detection_evaluator(&mut self, evaluator: Box<dyn DetectionEvaluator>) {
         self.detection_evaluators.push(evaluator);
     }
-    
+
     /// Add performance benchmark
     pub fn add_benchmark(&mut self, benchmark: PerformanceBenchmark) {
         self.benchmarks.push(benchmark);
     }
-    
+
     /// Perform comprehensive analysis
     pub async fn analyze(
         &self,
@@ -518,7 +520,7 @@ impl AnalysisEngine {
         stego_samples: &[(Vec<u8>, Vec<u8>)], // (original, stego) pairs
     ) -> Result<AnalysisResult> {
         let start_time = std::time::Instant::now();
-        
+
         // Statistical analysis
         let statistical_summary = if self.config.statistical_analysis {
             self.perform_statistical_analysis(performance_data).await?
@@ -552,22 +554,26 @@ impl AnalysisEngine {
                 test_results: Vec::new(),
             }
         };
-        
+
         // Detection resistance analysis
         let detection_scores = if self.config.detection_testing {
             self.perform_detection_analysis(stego_samples).await?
         } else {
             Vec::new()
         };
-        
+
         // Benchmark comparison
         let benchmark_comparison = self.compare_with_benchmarks(performance_data).await?;
-        
+
         // Generate recommendations
-        let recommendations = self.generate_recommendations(&statistical_summary, &detection_scores, &benchmark_comparison);
-        
+        let recommendations = self.generate_recommendations(
+            &statistical_summary,
+            &detection_scores,
+            &benchmark_comparison,
+        );
+
         let duration = start_time.elapsed().as_millis() as u64;
-        
+
         Ok(AnalysisResult {
             statistical_summary,
             detection_scores,
@@ -585,16 +591,18 @@ impl AnalysisEngine {
             },
         })
     }
-    
+
     /// Perform statistical analysis
     async fn perform_statistical_analysis(
         &self,
         performance_data: &[PerformanceMetrics],
     ) -> Result<StatisticalSummary> {
         if performance_data.is_empty() {
-            return Err(SteganoError::InvalidParameter("No performance data provided".to_string()));
+            return Err(SteganoError::InvalidParameter(
+                "No performance data provided".to_string(),
+            ));
         }
-        
+
         // Run all analyzers
         let mut combined_summary = StatisticalSummary {
             descriptive: self.calculate_descriptive_stats(performance_data),
@@ -614,7 +622,7 @@ impl AnalysisEngine {
             confidence_intervals: HashMap::new(),
             test_results: Vec::new(),
         };
-        
+
         for analyzer in &self.analyzers {
             if performance_data.len() >= analyzer.min_sample_size() {
                 let summary = analyzer.analyze(performance_data)?;
@@ -623,17 +631,17 @@ impl AnalysisEngine {
                 combined_summary.test_results.extend(summary.test_results);
             }
         }
-        
+
         Ok(combined_summary)
     }
-    
+
     /// Perform detection resistance analysis
     async fn perform_detection_analysis(
         &self,
         stego_samples: &[(Vec<u8>, Vec<u8>)],
     ) -> Result<Vec<DetectionScore>> {
         let mut detection_scores = Vec::new();
-        
+
         for (original, stego) in stego_samples {
             let mut combined_score = DetectionScore {
                 detection_probability: 0.0,
@@ -642,19 +650,22 @@ impl AnalysisEngine {
                 evidence: Vec::new(),
                 resistance_grade: ResistanceGrade::Good,
             };
-            
+
             for evaluator in &self.detection_evaluators {
                 let score = evaluator.evaluate(original, stego)?;
-                combined_score.method_scores.insert(evaluator.name().to_string(), score.detection_probability);
+                combined_score
+                    .method_scores
+                    .insert(evaluator.name().to_string(), score.detection_probability);
                 combined_score.evidence.extend(score.evidence);
             }
-            
+
             // Calculate overall detection probability
             if !combined_score.method_scores.is_empty() {
-                combined_score.detection_probability = combined_score.method_scores.values().sum::<f32>() 
-                    / combined_score.method_scores.len() as f32;
+                combined_score.detection_probability =
+                    combined_score.method_scores.values().sum::<f32>()
+                        / combined_score.method_scores.len() as f32;
             }
-            
+
             // Assign resistance grade
             combined_score.resistance_grade = match combined_score.detection_probability {
                 p if p < 0.2 => ResistanceGrade::Excellent,
@@ -663,13 +674,13 @@ impl AnalysisEngine {
                 p if p < 0.8 => ResistanceGrade::Poor,
                 _ => ResistanceGrade::Failed,
             };
-            
+
             detection_scores.push(combined_score);
         }
-        
+
         Ok(detection_scores)
     }
-    
+
     /// Compare performance with benchmarks
     async fn compare_with_benchmarks(
         &self,
@@ -677,18 +688,24 @@ impl AnalysisEngine {
     ) -> Result<BenchmarkComparison> {
         let mut scores = HashMap::new();
         let ranking = HashMap::new();
-        
+
         // Calculate average performance
         if !performance_data.is_empty() {
-            let avg_capacity = performance_data.iter().map(|p| p.capacity_efficiency).sum::<f32>() 
+            let avg_capacity = performance_data
+                .iter()
+                .map(|p| p.capacity_efficiency)
+                .sum::<f32>()
                 / performance_data.len() as f32;
-            let avg_time = performance_data.iter().map(|p| p.embedding_time_ms).sum::<u64>() 
+            let avg_time = performance_data
+                .iter()
+                .map(|p| p.embedding_time_ms)
+                .sum::<u64>()
                 / performance_data.len() as u64;
-            
+
             scores.insert("capacity_efficiency".to_string(), avg_capacity);
             scores.insert("embedding_time_ms".to_string(), avg_time as f32);
         }
-        
+
         Ok(BenchmarkComparison {
             scores,
             ranking,
@@ -696,7 +713,7 @@ impl AnalysisEngine {
             overall_assessment: "Analysis completed".to_string(),
         })
     }
-    
+
     /// Generate performance recommendations
     fn generate_recommendations(
         &self,
@@ -707,7 +724,9 @@ impl AnalysisEngine {
         vec![
             PerformanceRecommendation {
                 category: RecommendationCategory::Algorithm,
-                description: "Consider using adaptive embedding strategies based on carrier characteristics".to_string(),
+                description:
+                    "Consider using adaptive embedding strategies based on carrier characteristics"
+                        .to_string(),
                 expected_improvement: 0.15,
                 difficulty: DifficultyLevel::Medium,
                 priority: PriorityLevel::High,
@@ -721,28 +740,58 @@ impl AnalysisEngine {
             },
         ]
     }
-    
+
     /// Calculate descriptive statistics
     fn calculate_descriptive_stats(&self, data: &[PerformanceMetrics]) -> DescriptiveStats {
         let mut means = HashMap::new();
         let std_devs = HashMap::new();
         let mut mins = HashMap::new();
         let mut maxs = HashMap::new();
-        
+
         if !data.is_empty() {
             // Capacity efficiency
             let capacity_values: Vec<f32> = data.iter().map(|d| d.capacity_efficiency).collect();
-            means.insert("capacity_efficiency".to_string(), capacity_values.iter().sum::<f32>() / capacity_values.len() as f32);
-            mins.insert("capacity_efficiency".to_string(), *capacity_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
-            maxs.insert("capacity_efficiency".to_string(), *capacity_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
-            
+            means.insert(
+                "capacity_efficiency".to_string(),
+                capacity_values.iter().sum::<f32>() / capacity_values.len() as f32,
+            );
+            mins.insert(
+                "capacity_efficiency".to_string(),
+                *capacity_values
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap(),
+            );
+            maxs.insert(
+                "capacity_efficiency".to_string(),
+                *capacity_values
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap(),
+            );
+
             // Embedding time
             let time_values: Vec<f32> = data.iter().map(|d| d.embedding_time_ms as f32).collect();
-            means.insert("embedding_time_ms".to_string(), time_values.iter().sum::<f32>() / time_values.len() as f32);
-            mins.insert("embedding_time_ms".to_string(), *time_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
-            maxs.insert("embedding_time_ms".to_string(), *time_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap());
+            means.insert(
+                "embedding_time_ms".to_string(),
+                time_values.iter().sum::<f32>() / time_values.len() as f32,
+            );
+            mins.insert(
+                "embedding_time_ms".to_string(),
+                *time_values
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap(),
+            );
+            maxs.insert(
+                "embedding_time_ms".to_string(),
+                *time_values
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap(),
+            );
         }
-        
+
         DescriptiveStats {
             count: data.len(),
             means,
@@ -801,11 +850,11 @@ impl StatisticalAnalyzer for DistributionAnalyzer {
             test_results: Vec::new(),
         })
     }
-    
+
     fn name(&self) -> &str {
         "DistributionAnalyzer"
     }
-    
+
     fn min_sample_size(&self) -> usize {
         30
     }
@@ -820,12 +869,12 @@ impl CorrelationAnalyzer {
 impl StatisticalAnalyzer for CorrelationAnalyzer {
     fn analyze(&self, data: &[PerformanceMetrics]) -> Result<StatisticalSummary> {
         let mut correlations = HashMap::new();
-        
+
         if data.len() >= 2 {
             // Calculate simple correlation between capacity and time
             correlations.insert("capacity_time_correlation".to_string(), -0.3); // Placeholder
         }
-        
+
         Ok(StatisticalSummary {
             descriptive: DescriptiveStats {
                 count: data.len(),
@@ -855,11 +904,11 @@ impl StatisticalAnalyzer for CorrelationAnalyzer {
             test_results: Vec::new(),
         })
     }
-    
+
     fn name(&self) -> &str {
         "CorrelationAnalyzer"
     }
-    
+
     fn min_sample_size(&self) -> usize {
         10
     }
@@ -880,7 +929,7 @@ impl StatisticalAnalyzer for OutlierAnalyzer {
             threshold: self.threshold,
             method: format!("{:?}", self.method),
         };
-        
+
         Ok(StatisticalSummary {
             descriptive: DescriptiveStats {
                 count: data.len(),
@@ -905,11 +954,11 @@ impl StatisticalAnalyzer for OutlierAnalyzer {
             test_results: Vec::new(),
         })
     }
-    
+
     fn name(&self) -> &str {
         "OutlierAnalyzer"
     }
-    
+
     fn min_sample_size(&self) -> usize {
         20
     }
@@ -928,22 +977,20 @@ impl DetectionEvaluator for ChiSquareDetector {
             detection_probability: 0.3, // Placeholder
             confidence: 0.8,
             method_scores: HashMap::new(),
-            evidence: vec![
-                DetectionEvidence {
-                    description: "Statistical anomaly detected in byte distribution".to_string(),
-                    strength: 0.3,
-                    method: self.name().to_string(),
-                    location: None,
-                }
-            ],
+            evidence: vec![DetectionEvidence {
+                description: "Statistical anomaly detected in byte distribution".to_string(),
+                strength: 0.3,
+                method: self.name().to_string(),
+                location: None,
+            }],
             resistance_grade: ResistanceGrade::Good,
         })
     }
-    
+
     fn name(&self) -> &str {
         "ChiSquareDetector"
     }
-    
+
     fn category(&self) -> DetectionCategory {
         DetectionCategory::Statistical
     }
@@ -959,11 +1006,11 @@ impl DetectionEvaluator for SamplePairsDetector {
             resistance_grade: ResistanceGrade::Good,
         })
     }
-    
+
     fn name(&self) -> &str {
         "SamplePairsDetector"
     }
-    
+
     fn category(&self) -> DetectionCategory {
         DetectionCategory::Statistical
     }
@@ -979,11 +1026,11 @@ impl DetectionEvaluator for HistogramDetector {
             resistance_grade: ResistanceGrade::Excellent,
         })
     }
-    
+
     fn name(&self) -> &str {
         "HistogramDetector"
     }
-    
+
     fn category(&self) -> DetectionCategory {
         DetectionCategory::Visual
     }
@@ -992,7 +1039,7 @@ impl DetectionEvaluator for HistogramDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_analysis_config_default() {
         let config = AnalysisConfig::default();
@@ -1000,37 +1047,40 @@ mod tests {
         assert!(config.detection_testing);
         assert_eq!(config.confidence_level, 0.95);
     }
-    
+
     #[test]
     fn test_distribution_analyzer() {
         let analyzer = DistributionAnalyzer::new();
         assert_eq!(analyzer.name(), "DistributionAnalyzer");
         assert_eq!(analyzer.min_sample_size(), 30);
     }
-    
+
     #[test]
     fn test_chi_square_detector() {
         let detector = ChiSquareDetector::new(0.05);
         assert_eq!(detector.name(), "ChiSquareDetector");
-        assert!(matches!(detector.category(), DetectionCategory::Statistical));
+        assert!(matches!(
+            detector.category(),
+            DetectionCategory::Statistical
+        ));
     }
-    
+
     #[test]
     fn test_resistance_grade_ordering() {
         // Test that resistance grades can be compared
         let excellent = ResistanceGrade::Excellent;
         let poor = ResistanceGrade::Poor;
-        
+
         // These should be different variants
         assert!(matches!(excellent, ResistanceGrade::Excellent));
         assert!(matches!(poor, ResistanceGrade::Poor));
     }
-    
+
     #[tokio::test]
     async fn test_analysis_engine() {
         let config = AnalysisConfig::default();
         let engine = AnalysisEngine::new(config);
-        
+
         assert!(!engine.analyzers.is_empty());
         assert!(!engine.detection_evaluators.is_empty());
     }

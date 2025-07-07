@@ -1,12 +1,12 @@
 //! Genomics steganography demonstration
 
-use stegano::*;
 use std::collections::HashMap;
+use stegano::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    
+
     println!("🧬 Genomics Steganography Demo");
     println!("==============================\n");
 
@@ -47,12 +47,14 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
     println!("📊 FASTA Data Overview:");
     println!("   Total size: {} bytes", carrier.raw_data.len());
     println!("   Sequences: 3");
-    println!("   Content preview: {}...", 
-             String::from_utf8_lossy(&carrier.raw_data[..60]));
+    println!(
+        "   Content preview: {}...",
+        String::from_utf8_lossy(&carrier.raw_data[..60])
+    );
 
     // Secret genomics research data to embed
     let secret_research = "CONFIDENTIAL: Novel gene variant discovery - Position 1234567, Mutation A->G, Clinical significance: Pathogenic".as_bytes();
-    
+
     println!("\n🔒 Secret Research Data:");
     println!("   Content: '{}'", String::from_utf8_lossy(secret_research));
     println!("   Size: {} bytes", secret_research.len());
@@ -63,7 +65,10 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
     let serialized_payload = crypto::CryptoLayer::serialize_payload(&encrypted_payload);
 
     println!("\n🔐 Encryption:");
-    println!("   Encrypted payload size: {} bytes", serialized_payload.len());
+    println!(
+        "   Encrypted payload size: {} bytes",
+        serialized_payload.len()
+    );
 
     // Embedding parameters optimized for genomics
     let params = EmbedParams {
@@ -73,8 +78,14 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
         use_gpu: false,
         format_specific: {
             let mut specific = HashMap::new();
-            specific.insert("preserve_sequences".to_string(), serde_json::Value::Bool(true));
-            specific.insert("use_headers_only".to_string(), serde_json::Value::Bool(true));
+            specific.insert(
+                "preserve_sequences".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            specific.insert(
+                "use_headers_only".to_string(),
+                serde_json::Value::Bool(true),
+            );
             specific
         },
     };
@@ -82,22 +93,32 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
     // Note: For this demo, we'll use the generic handler since genomics-specific
     // handlers would require more complex implementation
     let registry = handlers::HandlerRegistry::new();
-    let handler = registry.get_handler(&DataFormat::BINARY) // Using generic for demo
+    let handler = registry
+        .get_handler(&DataFormat::BINARY) // Using generic for demo
         .ok_or_else(|| SteganoError::UnsupportedFormat(DataFormat::BINARY))?;
 
     // Analyze capacity for genomics data
     let capacity = handler.estimate_capacity(&carrier)?;
     println!("\n📈 Capacity Analysis for Genomics Data:");
     println!("   Total FASTA file bits: {}", capacity.total_bits);
-    println!("   Available for payload: {} bits ({} bytes)", 
-             capacity.recommended_bits, capacity.recommended_bits / 8);
-    println!("   Steganographic ratio: {:.2}%", capacity.steganographic_ratio * 100.0);
+    println!(
+        "   Available for payload: {} bits ({} bytes)",
+        capacity.recommended_bits,
+        capacity.recommended_bits / 8
+    );
+    println!(
+        "   Steganographic ratio: {:.2}%",
+        capacity.steganographic_ratio * 100.0
+    );
 
     // Check if we have enough capacity
     if serialized_payload.len() * 8 > capacity.recommended_bits {
         println!("\n❌ Insufficient capacity!");
-        println!("   Need: {} bits, Have: {} bits", 
-                 serialized_payload.len() * 8, capacity.recommended_bits);
+        println!(
+            "   Need: {} bits, Have: {} bits",
+            serialized_payload.len() * 8,
+            capacity.recommended_bits
+        );
         return Err(SteganoError::InsufficientCapacity {
             needed: serialized_payload.len() * 8,
             available: capacity.recommended_bits,
@@ -106,15 +127,26 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
 
     // Embed the research data
     println!("\n⚡ Genomics Embedding Process:");
-    let embed_result = handler.embed(&mut carrier, &serialized_payload, &params).await?;
+    let embed_result = handler
+        .embed(&mut carrier, &serialized_payload, &params)
+        .await?;
     println!("   Embedding successful: {}", embed_result.success);
-    println!("   Research data embedded: {} bytes", embed_result.bytes_embedded);
-    println!("   Processing time: {} ms", embed_result.performance_stats.embedding_time_ms);
+    println!(
+        "   Research data embedded: {} bytes",
+        embed_result.bytes_embedded
+    );
+    println!(
+        "   Processing time: {} ms",
+        embed_result.performance_stats.embedding_time_ms
+    );
 
     // Verify the FASTA structure integrity
     let modified_fasta = String::from_utf8_lossy(&carrier.raw_data);
     let sequence_count = modified_fasta.matches('>').count();
-    println!("   FASTA structure preserved: {} sequences detected", sequence_count);
+    println!(
+        "   FASTA structure preserved: {} sequences detected",
+        sequence_count
+    );
 
     // Extract and verify the hidden research data
     println!("\n🔍 Data Extraction:");
@@ -125,26 +157,40 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
     let deserialized_payload = crypto::CryptoLayer::deserialize_payload(&extracted_payload)?;
     let decrypted_research = crypto.decrypt(&deserialized_payload)?;
 
-    println!("   Decrypted research: '{}'", String::from_utf8_lossy(&decrypted_research));
+    println!(
+        "   Decrypted research: '{}'",
+        String::from_utf8_lossy(&decrypted_research)
+    );
 
     // Verify round-trip success
     let success = decrypted_research == secret_research;
     println!("\n🎯 Genomics Steganography Test:");
-    println!("   Data integrity: {}", if success { "✅ VERIFIED" } else { "❌ FAILED" });
+    println!(
+        "   Data integrity: {}",
+        if success {
+            "✅ VERIFIED"
+        } else {
+            "❌ FAILED"
+        }
+    );
 
     if success {
         println!("\n🚀 Genomics steganography completed successfully!");
         println!("   The confidential research data has been securely hidden within");
         println!("   the FASTA genomics data and successfully extracted.");
-        
+
         println!("\n📋 Security Summary:");
         println!("   • Research data encrypted with AES-256-GCM");
         println!("   • High error correction level for data integrity");
         println!("   • FASTA file structure preserved");
-        println!("   • Steganographic hiding ratio: {:.2}%", 
-                 capacity.steganographic_ratio * 100.0);
+        println!(
+            "   • Steganographic hiding ratio: {:.2}%",
+            capacity.steganographic_ratio * 100.0
+        );
     } else {
-        return Err(SteganoError::IntegrityError("Genomics data verification failed".to_string()));
+        return Err(SteganoError::IntegrityError(
+            "Genomics data verification failed".to_string(),
+        ));
     }
 
     Ok(())

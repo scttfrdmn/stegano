@@ -1,10 +1,10 @@
 //! Machine learning models for steganography optimization
-//! 
+//!
 //! This module implements various ML models for predicting optimal embedding
 //! strategies based on carrier characteristics and historical performance.
 
-use crate::core::*;
 use super::*;
+use crate::core::*;
 use std::collections::HashMap;
 
 /// Neural network model for strategy prediction
@@ -12,16 +12,16 @@ use std::collections::HashMap;
 pub struct NeuralNetworkModel {
     /// Network layers (weights and biases)
     layers: Vec<NetworkLayer>,
-    
+
     /// Learning rate for training
     learning_rate: f32,
-    
+
     /// Training history
     training_history: Vec<TrainingExample>,
-    
+
     /// Model performance metrics
     performance: ModelPerformance,
-    
+
     /// Input feature normalization parameters
     normalization: FeatureNormalization,
 }
@@ -31,10 +31,10 @@ pub struct NeuralNetworkModel {
 pub struct NetworkLayer {
     /// Weight matrix
     weights: Vec<Vec<f32>>,
-    
+
     /// Bias vector
     biases: Vec<f32>,
-    
+
     /// Activation function type
     activation: ActivationFunction,
 }
@@ -53,10 +53,10 @@ pub enum ActivationFunction {
 pub struct FeatureNormalization {
     /// Mean values for each feature
     means: Vec<f32>,
-    
+
     /// Standard deviations for each feature
     std_devs: Vec<f32>,
-    
+
     /// Feature names for reference
     feature_names: Vec<String>,
 }
@@ -77,13 +77,13 @@ impl FeatureNormalization {
 pub struct DecisionTreeModel {
     /// Root node of the decision tree
     root: Option<TreeNode>,
-    
+
     /// Maximum tree depth
     max_depth: usize,
-    
+
     /// Minimum samples per leaf
     min_samples_leaf: usize,
-    
+
     /// Training examples used to build tree
     training_data: Vec<TrainingExample>,
 }
@@ -93,22 +93,22 @@ pub struct DecisionTreeModel {
 pub struct TreeNode {
     /// Feature index for split (if internal node)
     feature_index: Option<usize>,
-    
+
     /// Threshold value for split
     threshold: Option<f32>,
-    
+
     /// Left child (feature <= threshold)
     left: Option<Box<TreeNode>>,
-    
+
     /// Right child (feature > threshold)
     right: Option<Box<TreeNode>>,
-    
+
     /// Predicted parameters (if leaf node)
     prediction: Option<EmbedParams>,
-    
+
     /// Confidence in prediction
     confidence: f32,
-    
+
     /// Number of training samples at this node
     sample_count: usize,
 }
@@ -118,13 +118,13 @@ pub struct TreeNode {
 pub struct RandomForestModel {
     /// Collection of decision trees
     trees: Vec<DecisionTreeModel>,
-    
+
     /// Number of trees in forest
     num_trees: usize,
-    
+
     /// Fraction of features to consider for each tree
     feature_fraction: f32,
-    
+
     /// Random seed for reproducibility
     random_seed: u64,
 }
@@ -134,13 +134,13 @@ pub struct RandomForestModel {
 pub struct LinearRegressionModel {
     /// Regression coefficients
     coefficients: Vec<f32>,
-    
+
     /// Intercept term
     intercept: f32,
-    
+
     /// Feature normalization
     normalization: FeatureNormalization,
-    
+
     /// R-squared score
     r_squared: f32,
 }
@@ -150,13 +150,13 @@ pub struct LinearRegressionModel {
 pub struct ClusteringModel {
     /// Cluster centroids
     centroids: Vec<Vec<f32>>,
-    
+
     /// Number of clusters
     num_clusters: usize,
-    
+
     /// Optimal strategies for each cluster
     cluster_strategies: HashMap<usize, EmbedParams>,
-    
+
     /// Cluster performance metrics
     cluster_performance: HashMap<usize, PerformanceMetrics>,
 }
@@ -165,11 +165,11 @@ impl NeuralNetworkModel {
     /// Create new neural network with specified architecture
     pub fn new(layer_sizes: &[usize], learning_rate: f32) -> Self {
         let mut layers = Vec::new();
-        
+
         for i in 0..layer_sizes.len() - 1 {
             let input_size = layer_sizes[i];
             let output_size = layer_sizes[i + 1];
-            
+
             // Initialize weights with Xavier initialization
             let mut weights = vec![vec![0.0; input_size]; output_size];
             for row in &mut weights {
@@ -177,21 +177,21 @@ impl NeuralNetworkModel {
                     *weight = (rand::random::<f32>() - 0.5) * 2.0 / (input_size as f32).sqrt();
                 }
             }
-            
+
             let biases = vec![0.0; output_size];
             let activation = if i == layer_sizes.len() - 2 {
                 ActivationFunction::Linear // Output layer
             } else {
                 ActivationFunction::ReLU // Hidden layers
             };
-            
+
             layers.push(NetworkLayer {
                 weights,
                 biases,
                 activation,
             });
         }
-        
+
         Self {
             layers,
             learning_rate,
@@ -206,28 +206,28 @@ impl NeuralNetworkModel {
             normalization: FeatureNormalization::new(),
         }
     }
-    
+
     /// Forward pass through network
     fn forward(&self, input: &[f32]) -> Vec<f32> {
         let mut current = input.to_vec();
-        
+
         for layer in &self.layers {
             current = self.layer_forward(&current, layer);
         }
-        
+
         current
     }
-    
+
     /// Forward pass through single layer
     fn layer_forward(&self, input: &[f32], layer: &NetworkLayer) -> Vec<f32> {
         let mut output = vec![0.0; layer.weights.len()];
-        
+
         for (i, (weights, &bias)) in layer.weights.iter().zip(&layer.biases).enumerate() {
             let mut sum = bias;
             for (weight, &input_val) in weights.iter().zip(input) {
                 sum += weight * input_val;
             }
-            
+
             output[i] = match layer.activation {
                 ActivationFunction::ReLU => sum.max(0.0),
                 ActivationFunction::Sigmoid => 1.0 / (1.0 + (-sum).exp()),
@@ -235,40 +235,38 @@ impl NeuralNetworkModel {
                 ActivationFunction::Linear => sum,
             };
         }
-        
+
         output
     }
-    
+
     /// Convert features to input vector
     fn features_to_input(&self, features: &CarrierFeatures) -> Vec<f32> {
-        let mut input = vec![
-            features.size as f32,
-            features.entropy,
-        ];
-        
+        let mut input = vec![features.size as f32, features.entropy];
+
         // Add frequency characteristics
         input.extend(&features.frequency_characteristics);
-        
+
         // Add complexity measures
         input.extend(&features.complexity_measures);
-        
+
         // Add format-specific features
         for (_, value) in &features.format_specific {
             input.push(*value);
         }
-        
+
         // Normalize if parameters are available
         if !self.normalization.means.is_empty() {
             for (i, value) in input.iter_mut().enumerate() {
                 if i < self.normalization.means.len() {
-                    *value = (*value - self.normalization.means[i]) / self.normalization.std_devs[i];
+                    *value =
+                        (*value - self.normalization.means[i]) / self.normalization.std_devs[i];
                 }
             }
         }
-        
+
         input
     }
-    
+
     /// Convert output vector to embedding parameters
     fn output_to_params(&self, output: &[f32]) -> EmbedParams {
         // Simple mapping for demonstration
@@ -277,15 +275,15 @@ impl NeuralNetworkModel {
         } else {
             ECLevel::Low
         };
-        
+
         let stealth_level = if output.get(1).unwrap_or(&0.0) > &0.5 {
             StealthLevel::High
         } else {
             StealthLevel::Low
         };
-        
+
         let use_gpu = output.get(2).unwrap_or(&0.0) > &0.5;
-        
+
         EmbedParams {
             encryption_key: vec![],
             error_correction_level: error_correction,
@@ -294,7 +292,7 @@ impl NeuralNetworkModel {
             format_specific: HashMap::new(),
         }
     }
-    
+
     /// Train network on batch of examples
     fn train_batch(&mut self, examples: &[TrainingExample]) {
         // Simple gradient descent (placeholder implementation)
@@ -302,30 +300,40 @@ impl NeuralNetworkModel {
             let input = self.features_to_input(&example.carrier_features);
             let target = self.params_to_target(&example.embed_params);
             let output = self.forward(&input);
-            
+
             // Calculate loss and update weights (simplified)
             let loss = self.calculate_loss(&output, &target);
             self.backpropagate(&input, &output, &target, loss);
         }
     }
-    
+
     /// Convert parameters to target vector
     fn params_to_target(&self, params: &EmbedParams) -> Vec<f32> {
         vec![
-            if matches!(params.error_correction_level, ECLevel::High) { 1.0 } else { 0.0 },
-            if matches!(params.stealth_level, StealthLevel::High) { 1.0 } else { 0.0 },
+            if matches!(params.error_correction_level, ECLevel::High) {
+                1.0
+            } else {
+                0.0
+            },
+            if matches!(params.stealth_level, StealthLevel::High) {
+                1.0
+            } else {
+                0.0
+            },
             if params.use_gpu { 1.0 } else { 0.0 },
         ]
     }
-    
+
     /// Calculate mean squared error loss
     fn calculate_loss(&self, output: &[f32], target: &[f32]) -> f32 {
-        output.iter()
+        output
+            .iter()
             .zip(target)
             .map(|(o, t)| (o - t).powi(2))
-            .sum::<f32>() / output.len() as f32
+            .sum::<f32>()
+            / output.len() as f32
     }
-    
+
     /// Backpropagation (simplified placeholder)
     fn backpropagate(&mut self, _input: &[f32], _output: &[f32], _target: &[f32], _loss: f32) {
         // Placeholder for actual backpropagation implementation
@@ -339,61 +347,61 @@ impl MLModel for NeuralNetworkModel {
         let output = self.forward(&input);
         Ok(self.output_to_params(&output))
     }
-    
+
     fn update(&mut self, example: &TrainingExample) -> Result<()> {
         self.training_history.push(example.clone());
-        
+
         // Retrain periodically
         if self.training_history.len() % 50 == 0 {
             let training_data = self.training_history.clone();
             self.train_batch(&training_data);
         }
-        
+
         Ok(())
     }
-    
+
     fn get_confidence(&self, features: &CarrierFeatures) -> f32 {
         // Simple confidence based on training data similarity
         if self.training_history.is_empty() {
             return 0.1;
         }
-        
+
         // Calculate similarity to training examples
         let mut max_similarity: f32 = 0.0;
         for example in &self.training_history {
             let similarity = self.calculate_similarity(features, &example.carrier_features);
             max_similarity = max_similarity.max(similarity);
         }
-        
+
         max_similarity
     }
-    
+
     fn evaluate(&self, test_data: &[TrainingExample]) -> Result<ModelPerformance> {
         if test_data.is_empty() {
             return Ok(self.performance.clone());
         }
-        
+
         let mut capacity_errors = Vec::new();
         let mut time_errors = Vec::new();
         let mut correct_strategies = 0;
-        
+
         for example in test_data {
             let predicted = self.predict_optimal_params(&example.carrier_features)?;
-            
+
             // Calculate prediction errors (simplified)
             capacity_errors.push(0.1); // Placeholder
             time_errors.push(100.0); // Placeholder
-            
+
             // Check strategy correctness (simplified)
             if predicted.error_correction_level == example.embed_params.error_correction_level {
                 correct_strategies += 1;
             }
         }
-        
+
         let capacity_mse = capacity_errors.iter().sum::<f32>() / capacity_errors.len() as f32;
         let time_mse = time_errors.iter().sum::<f32>() / time_errors.len() as f32;
         let strategy_accuracy = correct_strategies as f32 / test_data.len() as f32;
-        
+
         Ok(ModelPerformance {
             capacity_mse,
             time_mse,
@@ -402,34 +410,39 @@ impl MLModel for NeuralNetworkModel {
             sample_size: test_data.len(),
         })
     }
-    
+
     fn save(&self, path: &str) -> Result<()> {
         let serialized = serde_json::to_string(&self.training_history)?;
         std::fs::write(path, serialized)?;
         Ok(())
     }
-    
+
     fn load(&mut self, path: &str) -> Result<()> {
         let content = std::fs::read_to_string(path)?;
         self.training_history = serde_json::from_str(&content)?;
-        
+
         // Retrain model with loaded data
         if !self.training_history.is_empty() {
             let training_data = self.training_history.clone();
             self.train_batch(&training_data);
         }
-        
+
         Ok(())
     }
 }
 
 impl NeuralNetworkModel {
     /// Calculate similarity between two carrier features
-    fn calculate_similarity(&self, features1: &CarrierFeatures, features2: &CarrierFeatures) -> f32 {
+    fn calculate_similarity(
+        &self,
+        features1: &CarrierFeatures,
+        features2: &CarrierFeatures,
+    ) -> f32 {
         // Simple similarity based on size and entropy
-        let size_diff = (features1.size as f32 - features2.size as f32).abs() / features1.size.max(features2.size) as f32;
+        let size_diff = (features1.size as f32 - features2.size as f32).abs()
+            / features1.size.max(features2.size) as f32;
         let entropy_diff = (features1.entropy - features2.entropy).abs() / 8.0; // Max entropy is ~8
-        
+
         1.0 - (size_diff + entropy_diff) / 2.0
     }
 }
@@ -444,21 +457,22 @@ impl DecisionTreeModel {
             training_data: Vec::new(),
         }
     }
-    
+
     /// Build decision tree from training data
     fn build_tree(&mut self, examples: &[TrainingExample], depth: usize) -> Option<TreeNode> {
         if examples.len() < self.min_samples_leaf || depth >= self.max_depth {
             // Create leaf node
             return Some(self.create_leaf_node(examples));
         }
-        
+
         // Find best split
         if let Some((feature_idx, threshold)) = self.find_best_split(examples) {
-            let (left_examples, right_examples) = self.split_examples(examples, feature_idx, threshold);
-            
+            let (left_examples, right_examples) =
+                self.split_examples(examples, feature_idx, threshold);
+
             let left_child = self.build_tree(&left_examples, depth + 1).map(Box::new);
             let right_child = self.build_tree(&right_examples, depth + 1).map(Box::new);
-            
+
             Some(TreeNode {
                 feature_index: Some(feature_idx),
                 threshold: Some(threshold),
@@ -472,7 +486,7 @@ impl DecisionTreeModel {
             Some(self.create_leaf_node(examples))
         }
     }
-    
+
     /// Create leaf node with majority class
     fn create_leaf_node(&self, examples: &[TrainingExample]) -> TreeNode {
         // Find most common parameters (simplified)
@@ -487,26 +501,35 @@ impl DecisionTreeModel {
                 format_specific: HashMap::new(),
             }
         };
-        
+
         TreeNode {
             feature_index: None,
             threshold: None,
             left: None,
             right: None,
             prediction: Some(prediction),
-            confidence: if examples.is_empty() { 0.0 } else { 1.0 / examples.len() as f32 },
+            confidence: if examples.is_empty() {
+                0.0
+            } else {
+                1.0 / examples.len() as f32
+            },
             sample_count: examples.len(),
         }
     }
-    
+
     /// Find best feature and threshold for splitting
     fn find_best_split(&self, _examples: &[TrainingExample]) -> Option<(usize, f32)> {
         // Simplified implementation - would need proper information gain calculation
         Some((0, 0.5)) // Placeholder
     }
-    
+
     /// Split examples based on feature and threshold
-    fn split_examples(&self, examples: &[TrainingExample], _feature_idx: usize, _threshold: f32) -> (Vec<TrainingExample>, Vec<TrainingExample>) {
+    fn split_examples(
+        &self,
+        examples: &[TrainingExample],
+        _feature_idx: usize,
+        _threshold: f32,
+    ) -> (Vec<TrainingExample>, Vec<TrainingExample>) {
         // Simplified implementation
         let mid = examples.len() / 2;
         (examples[..mid].to_vec(), examples[mid..].to_vec())
@@ -530,27 +553,33 @@ impl MLModel for DecisionTreeModel {
                 })
             }
         } else {
-            Err(SteganoError::InvalidParameter("Decision tree not trained".to_string()))
+            Err(SteganoError::InvalidParameter(
+                "Decision tree not trained".to_string(),
+            ))
         }
     }
-    
+
     fn update(&mut self, example: &TrainingExample) -> Result<()> {
         self.training_data.push(example.clone());
-        
+
         // Rebuild tree periodically
         if self.training_data.len() % 100 == 0 {
             let training_data = self.training_data.clone();
             self.root = self.build_tree(&training_data, 0);
         }
-        
+
         Ok(())
     }
-    
+
     fn get_confidence(&self, _features: &CarrierFeatures) -> f32 {
         // Simplified confidence calculation
-        if self.training_data.is_empty() { 0.1 } else { 0.8 }
+        if self.training_data.is_empty() {
+            0.1
+        } else {
+            0.8
+        }
     }
-    
+
     fn evaluate(&self, _test_data: &[TrainingExample]) -> Result<ModelPerformance> {
         // Simplified evaluation
         Ok(ModelPerformance {
@@ -561,22 +590,22 @@ impl MLModel for DecisionTreeModel {
             sample_size: self.training_data.len(),
         })
     }
-    
+
     fn save(&self, path: &str) -> Result<()> {
         let serialized = serde_json::to_string(&self.training_data)?;
         std::fs::write(path, serialized)?;
         Ok(())
     }
-    
+
     fn load(&mut self, path: &str) -> Result<()> {
         let content = std::fs::read_to_string(path)?;
         self.training_data = serde_json::from_str(&content)?;
-        
+
         if !self.training_data.is_empty() {
             let training_data = self.training_data.clone();
             self.root = self.build_tree(&training_data, 0);
         }
-        
+
         Ok(())
     }
 }
@@ -585,14 +614,14 @@ impl MLModel for DecisionTreeModel {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    
+
     #[test]
     fn test_neural_network_creation() {
         let model = NeuralNetworkModel::new(&[10, 5, 3], 0.01);
         assert_eq!(model.layers.len(), 2);
         assert_eq!(model.learning_rate, 0.01);
     }
-    
+
     #[test]
     fn test_neural_network_forward_pass() {
         let model = NeuralNetworkModel::new(&[3, 2, 1], 0.01);
@@ -600,7 +629,7 @@ mod tests {
         let output = model.forward(&input);
         assert_eq!(output.len(), 1);
     }
-    
+
     #[test]
     fn test_decision_tree_creation() {
         let model = DecisionTreeModel::new(5, 10);
@@ -608,7 +637,7 @@ mod tests {
         assert_eq!(model.min_samples_leaf, 10);
         assert!(model.root.is_none());
     }
-    
+
     #[test]
     fn test_features_to_input() {
         let model = NeuralNetworkModel::new(&[5, 3, 2], 0.01);
@@ -620,17 +649,17 @@ mod tests {
             complexity_measures: vec![0.5],
             format_specific: HashMap::new(),
         };
-        
+
         let input = model.features_to_input(&features);
         assert_eq!(input.len(), 5); // size, entropy, 2 freq, 1 complexity
     }
-    
+
     #[test]
     fn test_output_to_params() {
         let model = NeuralNetworkModel::new(&[3, 2, 3], 0.01);
         let output = vec![0.8, 0.3, 0.9];
         let params = model.output_to_params(&output);
-        
+
         assert!(matches!(params.error_correction_level, ECLevel::High));
         assert!(matches!(params.stealth_level, StealthLevel::Low));
         assert!(params.use_gpu);

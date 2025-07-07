@@ -1,7 +1,7 @@
 //! Basic steganography demonstration
 
-use stegano::*;
 use std::collections::HashMap;
+use stegano::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -55,15 +55,22 @@ async fn main() -> Result<()> {
 
     // Get handler and estimate capacity
     let registry = handlers::HandlerRegistry::new();
-    let handler = registry.get_handler(&DataFormat::BINARY)
+    let handler = registry
+        .get_handler(&DataFormat::BINARY)
         .ok_or_else(|| SteganoError::UnsupportedFormat(DataFormat::BINARY))?;
 
     let capacity = handler.estimate_capacity(&carrier)?;
     println!("\n📊 Capacity Analysis:");
     println!("   Total carrier bits: {}", capacity.total_bits);
-    println!("   Available for payload: {} bits ({} bytes)", 
-             capacity.recommended_bits, capacity.recommended_bits / 8);
-    println!("   Steganographic ratio: {:.2}%", capacity.steganographic_ratio * 100.0);
+    println!(
+        "   Available for payload: {} bits ({} bytes)",
+        capacity.recommended_bits,
+        capacity.recommended_bits / 8
+    );
+    println!(
+        "   Steganographic ratio: {:.2}%",
+        capacity.steganographic_ratio * 100.0
+    );
 
     if serialized_payload.len() * 8 > capacity.recommended_bits {
         return Err(SteganoError::InsufficientCapacity {
@@ -74,15 +81,26 @@ async fn main() -> Result<()> {
 
     // Embed the encrypted payload
     println!("\n⚡ Embedding Process:");
-    let embed_result = handler.embed(&mut carrier, &serialized_payload, &params).await?;
+    let embed_result = handler
+        .embed(&mut carrier, &serialized_payload, &params)
+        .await?;
     println!("   Success: {}", embed_result.success);
     println!("   Bytes embedded: {}", embed_result.bytes_embedded);
-    println!("   Embedding time: {} ms", embed_result.performance_stats.embedding_time_ms);
-    println!("   Memory usage: {} bytes", embed_result.performance_stats.memory_usage_bytes);
+    println!(
+        "   Embedding time: {} ms",
+        embed_result.performance_stats.embedding_time_ms
+    );
+    println!(
+        "   Memory usage: {} bytes",
+        embed_result.performance_stats.memory_usage_bytes
+    );
 
     // Verify integrity
     let integrity_ok = handler.verify_integrity(&carrier)?;
-    println!("   Integrity check: {}", if integrity_ok { "✅ PASS" } else { "❌ FAIL" });
+    println!(
+        "   Integrity check: {}",
+        if integrity_ok { "✅ PASS" } else { "❌ FAIL" }
+    );
 
     // Extract the payload
     println!("\n🔍 Extraction Process:");
@@ -93,28 +111,40 @@ async fn main() -> Result<()> {
     let deserialized_payload = crypto::CryptoLayer::deserialize_payload(&extracted_payload)?;
     let decrypted_message = crypto.decrypt(&deserialized_payload)?;
 
-    println!("   Decrypted message: '{}'", String::from_utf8_lossy(&decrypted_message));
+    println!(
+        "   Decrypted message: '{}'",
+        String::from_utf8_lossy(&decrypted_message)
+    );
 
     // Verify the round-trip was successful
     let success = decrypted_message == secret_message;
     println!("\n🎯 Round-trip Test:");
-    println!("   Original == Extracted: {}", if success { "✅ SUCCESS" } else { "❌ FAILED" });
+    println!(
+        "   Original == Extracted: {}",
+        if success { "✅ SUCCESS" } else { "❌ FAILED" }
+    );
 
     if success {
         println!("\n🚀 Steganography demonstration completed successfully!");
         println!("   The secret data was successfully hidden, extracted, and verified.");
     } else {
         println!("\n❌ Steganography demonstration failed!");
-        return Err(SteganoError::IntegrityError("Round-trip verification failed".to_string()));
+        return Err(SteganoError::IntegrityError(
+            "Round-trip verification failed".to_string(),
+        ));
     }
 
     // Show some statistics
     println!("\n📈 Performance Statistics:");
-    println!("   Overhead: {:.1}% ({} bytes added)", 
-             (serialized_payload.len() as f64 / secret_message.len() as f64 - 1.0) * 100.0,
-             serialized_payload.len() - secret_message.len());
-    println!("   Carrier modification: {:.3}% of bytes affected",
-             (serialized_payload.len() * 8) as f64 / carrier.raw_data.len() as f64 * 100.0);
+    println!(
+        "   Overhead: {:.1}% ({} bytes added)",
+        (serialized_payload.len() as f64 / secret_message.len() as f64 - 1.0) * 100.0,
+        serialized_payload.len() - secret_message.len()
+    );
+    println!(
+        "   Carrier modification: {:.3}% of bytes affected",
+        (serialized_payload.len() * 8) as f64 / carrier.raw_data.len() as f64 * 100.0
+    );
 
     Ok(())
 }

@@ -1,8 +1,8 @@
 //! # Scientific Data Steganography System
-//! 
+//!
 //! Copyright (c) 2025 Scott Friedman. All rights reserved.
 //! This software is proprietary and confidential.
-//! 
+//!
 //! A high-performance, multi-format steganography library designed specifically for protecting
 //! scientific data including genomics, imagery, and signal data.
 //!
@@ -27,7 +27,7 @@
 //! async fn main() -> Result<()> {
 //!     // Create carrier data
 //!     let mut carrier = CarrierData::new(
-//!         DataFormat::BINARY, 
+//!         DataFormat::BINARY,
 //!         std::fs::read("data.bin")?
 //!     );
 //!
@@ -50,30 +50,30 @@
 //! ## Core Modules
 //!
 //! - [`handlers`]: Format-specific embedding and extraction implementations
-//! - [`crypto`]: Cryptographic layer with AES-GCM and Blake3 
+//! - [`crypto`]: Cryptographic layer with AES-GCM and Blake3
 //! - [`gpu`]: GPU acceleration using WGPU compute shaders
 //! - [`core`]: Core types, traits, and data structures
 //! - [`ffi`]: Foreign Function Interface for C/C++ integration
 
-pub mod handlers;
-pub mod crypto;
-pub mod gpu;
-pub mod ml;
-pub mod error_correction;
 pub mod capacity;
-pub mod integrity;
-pub mod core;
 pub mod cli;
+pub mod core;
+pub mod crypto;
+pub mod error_correction;
 pub mod ffi;
+pub mod gpu;
+pub mod handlers;
+pub mod integrity;
+pub mod ml;
 pub mod monitoring;
 
 pub use core::*;
 
 // Re-export main API types
-pub use handlers::DataHandler;
-pub use crypto::{CryptoLayer, SecurePayload};
-pub use gpu::GpuAccelerator;
-pub use ml::{MLOptimizer, StrategyRecommendation};
-pub use error_correction::IntegritySystem;
 pub use capacity::CapacityEstimator;
-pub use monitoring::{MonitoringSystem, MonitoringConfig};
+pub use crypto::{CryptoLayer, SecurePayload};
+pub use error_correction::IntegritySystem;
+pub use gpu::GpuAccelerator;
+pub use handlers::DataHandler;
+pub use ml::{MLOptimizer, StrategyRecommendation};
+pub use monitoring::{MonitoringConfig, MonitoringSystem};
