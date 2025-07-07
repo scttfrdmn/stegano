@@ -1099,7 +1099,7 @@ mod tests {
             sampling_rate: None,
         };
 
-        let payload = b"secret"; // Small payload for quality score strategy
+        let payload = b"x"; // 1 byte payload for quality score strategy
         let mut params = EmbedParams {
             encryption_key: vec![],
             error_correction_level: ECLevel::None,

@@ -1349,7 +1349,7 @@ mod tests {
         };
 
         let features = agent.state_to_features(&state);
-        assert_eq!(features.len(), 24); // Total feature dimensions
+        assert_eq!(features.len(), 25); // Total feature dimensions (5+4+4+4+4+4)
     }
 
     #[test]
