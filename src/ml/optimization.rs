@@ -109,6 +109,17 @@ pub struct MultiObjectiveConfig {
     pub max_pareto_solutions: usize,
 }
 
+impl Default for MultiObjectiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            objective_weights: HashMap::new(),
+            pareto_method: ParetoMethod::NSGA2,
+            max_pareto_solutions: 100,
+        }
+    }
+}
+
 /// Pareto front approximation methods
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ParetoMethod {
@@ -128,6 +139,16 @@ pub struct ParallelOptimizationConfig {
 
     /// Batch size for parallel evaluation
     pub batch_size: usize,
+}
+
+impl Default for ParallelOptimizationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            num_workers: 1,
+            batch_size: 1,
+        }
+    }
 }
 
 /// Particle velocity for PSO
