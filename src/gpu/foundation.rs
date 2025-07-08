@@ -380,8 +380,7 @@ mod tests {
 
         assert!(benchmark.data_size == 10_000);
         // Duration might be 0 for very fast operations, that's OK
-        assert!(benchmark.embed_duration_ms >= 0);
-        assert!(benchmark.extract_duration_ms >= 0);
+        // Note: Duration fields are unsigned, so >= 0 check is redundant
         assert!(benchmark.embed_throughput_mbps > 0.0);
         assert!(benchmark.extract_throughput_mbps > 0.0);
 
@@ -404,7 +403,7 @@ mod tests {
         let estimated_time = foundation.estimate_processing_time(1_000_000);
 
         // Estimated time might be very small, that's OK
-        assert!(estimated_time.as_nanos() >= 0);
+        // Note: Duration values are unsigned, so >= 0 check is redundant
         assert!(estimated_time.as_secs() < 60); // Should be reasonable
     }
 

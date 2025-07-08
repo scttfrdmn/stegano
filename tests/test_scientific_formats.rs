@@ -8,6 +8,7 @@ use stegano::core::*;
 use stegano::handlers::dicom::*;
 use stegano::handlers::sam_bam::*;
 use stegano::handlers::vcf::*;
+use stegano::DataHandler;
 
 /// Helper function to create VCF test data
 fn create_test_vcf_data() -> Vec<u8> {
@@ -239,7 +240,7 @@ async fn test_vcf_format_fields_embedding() {
 #[tokio::test]
 async fn test_dicom_private_elements_embedding() {
     let dicom_data = create_test_dicom_data();
-    let carrier = CarrierData::new(dicom_data, DataFormat::DICOM);
+    let carrier = CarrierData::new(DataFormat::DICOM, dicom_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -299,7 +300,7 @@ async fn test_dicom_private_elements_embedding() {
 #[tokio::test]
 async fn test_dicom_pixel_lsb_embedding() {
     let dicom_data = create_test_dicom_data();
-    let carrier = CarrierData::new(dicom_data, DataFormat::DICOM);
+    let carrier = CarrierData::new(DataFormat::DICOM, dicom_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -355,7 +356,7 @@ async fn test_dicom_pixel_lsb_embedding() {
 #[tokio::test]
 async fn test_dicom_unused_metadata_embedding() {
     let dicom_data = create_test_dicom_data();
-    let carrier = CarrierData::new(dicom_data, DataFormat::DICOM);
+    let carrier = CarrierData::new(DataFormat::DICOM, dicom_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -408,7 +409,7 @@ async fn test_dicom_unused_metadata_embedding() {
 #[tokio::test]
 async fn test_sam_optional_fields_embedding() {
     let sam_data = create_test_sam_data();
-    let carrier = CarrierData::new(sam_data, DataFormat::SAM);
+    let carrier = CarrierData::new(DataFormat::SAM, sam_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -469,7 +470,7 @@ async fn test_sam_optional_fields_embedding() {
 #[tokio::test]
 async fn test_sam_quality_scores_embedding() {
     let sam_data = create_test_sam_data();
-    let carrier = CarrierData::new(sam_data, DataFormat::SAM);
+    let carrier = CarrierData::new(DataFormat::SAM, sam_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -519,7 +520,7 @@ async fn test_sam_quality_scores_embedding() {
 #[tokio::test]
 async fn test_sam_comment_lines_embedding() {
     let sam_data = create_test_sam_data();
-    let carrier = CarrierData::new(sam_data, DataFormat::SAM);
+    let carrier = CarrierData::new(DataFormat::SAM, sam_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -572,7 +573,7 @@ async fn test_scientific_format_capacity_analysis() {
     ];
 
     for (format_name, data, format_type) in test_cases {
-        let carrier = CarrierData::new(data, format_type);
+        let carrier = CarrierData::new(format_type.clone(), data);
 
         let capacity_info = match format_type {
             DataFormat::VCF => {
@@ -632,23 +633,20 @@ async fn test_scientific_format_integrity_preservation() {
 
     let test_cases = vec![
         (
-            VcfHandler::new(),
-            CarrierData::new(vcf_data, DataFormat::VCF),
+            CarrierData::new(DataFormat::VCF, vcf_data),
             "VCF",
         ),
         (
-            DicomHandler::new(),
-            CarrierData::new(dicom_data, DataFormat::DICOM),
+            CarrierData::new(DataFormat::DICOM, dicom_data),
             "DICOM",
         ),
         (
-            SamBamHandler::new(),
-            CarrierData::new(sam_data, DataFormat::SAM),
+            CarrierData::new(DataFormat::SAM, sam_data),
             "SAM",
         ),
     ];
 
-    for (handler, carrier, format_name) in test_cases {
+    for (carrier, format_name) in test_cases {
         // Verify integrity before embedding
         let initial_integrity = match format_name {
             "VCF" => {
@@ -693,7 +691,7 @@ async fn test_cross_format_embedding_extraction() {
     ];
 
     for (format_name, data, format_type) in formats {
-        let carrier = CarrierData::new(data, format_type);
+        let carrier = CarrierData::new(format_type.clone(), data);
 
         let params = EmbedParams {
             format_specific: HashMap::new(), // Use defaults
@@ -713,7 +711,7 @@ async fn test_cross_format_embedding_extraction() {
                 let extract = if embed.is_ok() {
                     handler.extract(&carrier_mut, &params).await
                 } else {
-                    Err(SteganoError::EmbeddingFailed("Embed failed".to_string()))
+                    Err(SteganoError::InvalidParameter("Embed failed".to_string()))
                 };
                 (embed, extract)
             }
@@ -724,7 +722,7 @@ async fn test_cross_format_embedding_extraction() {
                 let extract = if embed.is_ok() {
                     handler.extract(&carrier_mut, &params).await
                 } else {
-                    Err(SteganoError::EmbeddingFailed("Embed failed".to_string()))
+                    Err(SteganoError::InvalidParameter("Embed failed".to_string()))
                 };
                 (embed, extract)
             }
@@ -735,7 +733,7 @@ async fn test_cross_format_embedding_extraction() {
                 let extract = if embed.is_ok() {
                     handler.extract(&carrier_mut, &params).await
                 } else {
-                    Err(SteganoError::EmbeddingFailed("Embed failed".to_string()))
+                    Err(SteganoError::InvalidParameter("Embed failed".to_string()))
                 };
                 (embed, extract)
             }
@@ -770,7 +768,7 @@ fn test_scientific_format_error_handling() {
 
     // Test invalid VCF
     let invalid_vcf = b"##fileformat=VCFv4.2\nINVALID_LINE_WITHOUT_TABS";
-    let vcf_carrier = CarrierData::new(invalid_vcf.to_vec(), DataFormat::VCF);
+    let vcf_carrier = CarrierData::new(DataFormat::VCF, invalid_vcf.to_vec());
     let vcf_handler = VcfHandler::new();
 
     let vcf_capacity = vcf_handler.estimate_capacity(&vcf_carrier);
@@ -779,7 +777,7 @@ fn test_scientific_format_error_handling() {
 
     // Test invalid DICOM (missing DICM prefix)
     let invalid_dicom = vec![0u8; 200]; // Just zeros, no valid DICOM structure
-    let dicom_carrier = CarrierData::new(invalid_dicom, DataFormat::DICOM);
+    let dicom_carrier = CarrierData::new(DataFormat::DICOM, invalid_dicom);
     let dicom_handler = DicomHandler::new();
 
     let dicom_capacity = dicom_handler.estimate_capacity(&dicom_carrier);
@@ -788,7 +786,7 @@ fn test_scientific_format_error_handling() {
 
     // Test invalid SAM (missing header)
     let invalid_sam = b"r001\t99\tchr1\t7\t30\t8M\t=\t37\t39\tTTAGATAAAGGATACTG\t*"; // No @HD header
-    let sam_carrier = CarrierData::new(invalid_sam.to_vec(), DataFormat::SAM);
+    let sam_carrier = CarrierData::new(DataFormat::SAM, invalid_sam.to_vec());
     let sam_handler = SamBamHandler::new();
 
     let sam_capacity = sam_handler.estimate_capacity(&sam_carrier);

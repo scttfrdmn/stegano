@@ -190,8 +190,7 @@ mod tests {
 
         assert!(benchmark.data_size == 50_000);
         // Duration might be 0 for very fast operations, that's OK
-        assert!(benchmark.embed_duration_ms >= 0);
-        assert!(benchmark.extract_duration_ms >= 0);
+        // Note: Duration fields are unsigned, so >= 0 check is redundant
         assert!(benchmark.performance_score() > 0);
 
         println!("Benchmark results:");
@@ -224,7 +223,7 @@ mod tests {
 
         for size in test_sizes {
             let estimated = accelerator.estimate_processing_time(size);
-            assert!(estimated.as_nanos() >= 0);
+            // Note: Duration values are unsigned, so >= 0 check is redundant
             println!(
                 "Estimated time for {} bytes: {:.2}ms",
                 size,

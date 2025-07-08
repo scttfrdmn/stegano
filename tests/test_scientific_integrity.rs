@@ -8,6 +8,7 @@ use stegano::core::*;
 use stegano::handlers::dicom::*;
 use stegano::handlers::sam_bam::*;
 use stegano::handlers::vcf::*;
+use stegano::DataHandler;
 
 /// Helper to create realistic VCF data for integrity testing
 fn create_realistic_vcf_data() -> Vec<u8> {
@@ -171,7 +172,7 @@ async fn test_vcf_allele_frequency_preservation() {
     assert!(result.bytes_embedded > 0);
 
     // Extract allele frequencies after embedding
-    let modified_afs = extract_allele_frequencies(&carrier_mut.data);
+    let modified_afs = extract_allele_frequencies(&carrier_mut.raw_data);
     assert_eq!(
         original_afs.len(),
         modified_afs.len(),
@@ -192,7 +193,7 @@ async fn test_vcf_allele_frequency_preservation() {
     }
 
     // Verify Hardy-Weinberg equilibrium is preserved
-    verify_hardy_weinberg_equilibrium(&carrier_mut.data);
+    verify_hardy_weinberg_equilibrium(&carrier_mut.raw_data);
 
     // Verify extraction works
     let extracted = handler.extract(&carrier_mut, &params).await.unwrap();
@@ -232,7 +233,7 @@ async fn test_vcf_population_genetics_integrity() {
     let payload = b"population_structure_preservation_test";
 
     // Analyze original population structure
-    let original_stats = analyze_population_structure(&carrier.data);
+    let original_stats = analyze_population_structure(&carrier.raw_data);
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
@@ -242,7 +243,7 @@ async fn test_vcf_population_genetics_integrity() {
         .unwrap();
 
     // Analyze modified population structure
-    let modified_stats = analyze_population_structure(&carrier_mut.data);
+    let modified_stats = analyze_population_structure(&carrier_mut.raw_data);
 
     // Verify key population genetics metrics are preserved
     assert_relative_eq(
@@ -278,7 +279,7 @@ async fn test_vcf_population_genetics_integrity() {
 async fn test_dicom_diagnostic_quality_preservation() {
     // Test that diagnostic quality metrics are preserved after embedding
     let dicom_data = create_realistic_dicom_data();
-    let carrier = CarrierData::new(dicom_data, DataFormat::DICOM);
+    let carrier = CarrierData::new(DataFormat::DICOM, dicom_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -311,7 +312,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
     let payload = b"diagnostic_metadata_preservation_test";
 
     // Analyze original image quality metrics
-    let original_metrics = analyze_dicom_image_quality(&carrier.data);
+    let original_metrics = analyze_dicom_image_quality(&carrier.raw_data);
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
@@ -321,7 +322,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
         .unwrap();
 
     // Analyze modified image quality metrics
-    let modified_metrics = analyze_dicom_image_quality(&carrier_mut.data);
+    let modified_metrics = analyze_dicom_image_quality(&carrier_mut.raw_data);
 
     // Verify diagnostic quality is preserved
     assert_relative_eq(
@@ -342,7 +343,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
     );
 
     // Verify pixel changes are within medical tolerance (± 1 HU)
-    let pixel_differences = calculate_pixel_differences(&carrier.data, &carrier_mut.data);
+    let pixel_differences = calculate_pixel_differences(&carrier.raw_data, &carrier_mut.raw_data);
     let max_diff = pixel_differences.iter().cloned().fold(0.0f64, f64::max);
     assert!(
         max_diff <= 1.0,
@@ -351,7 +352,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
     );
 
     // Verify no artifacts in critical regions
-    let artifact_score = detect_embedding_artifacts(&carrier.data, &carrier_mut.data);
+    let artifact_score = detect_embedding_artifacts(&carrier.raw_data, &carrier_mut.raw_data);
     assert!(
         artifact_score < 0.1,
         "Embedding artifacts detected: score {}",
@@ -375,7 +376,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
 async fn test_dicom_medical_compliance() {
     // Test that DICOM files remain medically compliant after embedding
     let dicom_data = create_realistic_dicom_data();
-    let carrier = CarrierData::new(dicom_data, DataFormat::DICOM);
+    let carrier = CarrierData::new(DataFormat::DICOM, dicom_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -408,7 +409,7 @@ async fn test_dicom_medical_compliance() {
     let payload = b"hipaa_compliant_medical_research_data";
 
     // Verify original DICOM compliance
-    let original_compliance = verify_dicom_compliance(&carrier.data);
+    let original_compliance = verify_dicom_compliance(&carrier.raw_data);
     assert!(
         original_compliance.is_valid,
         "Original DICOM should be compliant"
@@ -422,7 +423,7 @@ async fn test_dicom_medical_compliance() {
         .unwrap();
 
     // Verify post-embedding DICOM compliance
-    let modified_compliance = verify_dicom_compliance(&carrier_mut.data);
+    let modified_compliance = verify_dicom_compliance(&carrier_mut.raw_data);
     assert!(
         modified_compliance.is_valid,
         "Modified DICOM should remain compliant"
@@ -441,12 +442,12 @@ async fn test_dicom_medical_compliance() {
 
     // Verify no PHI leakage
     assert!(
-        !check_phi_leakage(&carrier_mut.data),
+        !check_phi_leakage(&carrier_mut.raw_data),
         "No PHI should be exposed"
     );
 
     // Verify medical device compatibility
-    let compatibility = check_medical_device_compatibility(&carrier_mut.data);
+    let compatibility = check_medical_device_compatibility(&carrier_mut.raw_data);
     assert!(
         compatibility.pacs_compatible,
         "Should remain PACS compatible"
@@ -464,7 +465,7 @@ async fn test_dicom_medical_compliance() {
 async fn test_sam_alignment_quality_preservation() {
     // Test that alignment quality metrics are preserved after embedding
     let sam_data = create_realistic_sam_data();
-    let carrier = CarrierData::new(sam_data, DataFormat::SAM);
+    let carrier = CarrierData::new(DataFormat::SAM, sam_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -497,7 +498,7 @@ async fn test_sam_alignment_quality_preservation() {
     let payload = b"alignment_metadata_preservation_test";
 
     // Analyze original alignment quality
-    let original_metrics = analyze_sam_alignment_quality(&carrier.data);
+    let original_metrics = analyze_sam_alignment_quality(&carrier.raw_data);
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
@@ -507,7 +508,7 @@ async fn test_sam_alignment_quality_preservation() {
         .unwrap();
 
     // Analyze modified alignment quality
-    let modified_metrics = analyze_sam_alignment_quality(&carrier_mut.data);
+    let modified_metrics = analyze_sam_alignment_quality(&carrier_mut.raw_data);
 
     // Verify alignment quality metrics are preserved
     assert_eq!(original_metrics.total_reads, modified_metrics.total_reads);
@@ -549,7 +550,7 @@ async fn test_sam_alignment_quality_preservation() {
 async fn test_sam_variant_calling_compatibility() {
     // Test that SAM files remain compatible with variant calling after embedding
     let sam_data = create_realistic_sam_data();
-    let carrier = CarrierData::new(sam_data, DataFormat::SAM);
+    let carrier = CarrierData::new(DataFormat::SAM, sam_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -582,7 +583,7 @@ async fn test_sam_variant_calling_compatibility() {
     let payload = b"variant_calling_compatibility_test";
 
     // Verify original variant calling metrics
-    let original_vc_metrics = analyze_variant_calling_compatibility(&carrier.data);
+    let original_vc_metrics = analyze_variant_calling_compatibility(&carrier.raw_data);
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
@@ -592,7 +593,7 @@ async fn test_sam_variant_calling_compatibility() {
         .unwrap();
 
     // Verify post-embedding variant calling metrics
-    let modified_vc_metrics = analyze_variant_calling_compatibility(&carrier_mut.data);
+    let modified_vc_metrics = analyze_variant_calling_compatibility(&carrier_mut.raw_data);
 
     // Verify variant calling compatibility is preserved
     assert_relative_eq(

@@ -91,6 +91,7 @@ impl ObjectiveFunction for TestObjective {
 }
 
 /// Mock constraint for testing
+#[derive(Debug)]
 struct TestConstraint {
     allowed_stealth_levels: Vec<StealthLevel>,
 }
@@ -102,6 +103,14 @@ impl OptimizationConstraint for TestConstraint {
 
     fn name(&self) -> &str {
         "test_constraint"
+    }
+    
+    fn penalty(&self, params: &EmbedParams, _carrier: &CarrierData) -> f32 {
+        if self.is_satisfied(params, _carrier) {
+            0.0
+        } else {
+            100.0 // High penalty for unsatisfied constraint
+        }
     }
 }
 

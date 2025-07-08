@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use stegano::handlers::HandlerRegistry;
 use stegano::*;
+use stegano::DataHandler;
 
 #[tokio::test]
 async fn test_issue_1_genomics_handler_implemented() {
