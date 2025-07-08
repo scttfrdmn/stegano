@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use stegano::core::*;
-use stegano::ml::bayesian::*;
+use stegano::ml::bayesian::{GaussianProcess, KernelFunction};
 use stegano::ml::optimization::*;
 use stegano::ml::reinforcement::*;
 
@@ -317,44 +317,40 @@ async fn test_optimization_convergence() {
 
     // Convergence info should be populated
     if optimization_result.convergence.converged {
-        assert!(optimization_result.convergence.final_improvement < 0.001);
+        assert!(optimization_result.convergence.convergence_measure < 0.001);
     }
 }
 
 #[test]
 fn test_gaussian_process_basic_functionality() {
-    use ndarray::{Array1, Array2};
+    // Basic GP functionality test
 
-    let kernel = Box::new(RBFKernel {
+    let kernel = KernelFunction::RBF {
         length_scale: 1.0,
-        variance: 1.0,
-    });
+        signal_variance: 1.0,
+    };
 
     let mut gp = GaussianProcess::new(kernel);
 
-    // Create simple 2D training data
-    let x_train = Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]).unwrap();
+    // Create simple 2D training data - convert to format expected by GP
+    let x_train_data = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 0.0], 
+        vec![0.0, 1.0]
+    ];
+    let y_train_data = vec![0.5, 0.8, 0.6];
 
-    let y_train = Array1::from_vec(vec![0.5, 0.8, 0.6]);
-
-    // Test fitting
-    let fit_result = gp.fit(&x_train, &y_train);
-    assert!(fit_result.is_ok());
+    // Test fitting - no return value expected
+    gp.fit(&x_train_data, &y_train_data);
 
     // Test prediction
-    let x_test = Array2::from_shape_vec((2, 2), vec![0.5, 0.5, 1.0, 1.0]).unwrap();
+    let x_test_point = vec![0.5, 0.5];
 
-    let prediction_result = gp.predict(&x_test);
-    assert!(prediction_result.is_ok());
-
-    let (mean, variance) = prediction_result.unwrap();
-    assert_eq!(mean.len(), 2);
-    assert_eq!(variance.len(), 2);
-
-    // Variance should be positive
-    for &var in variance.iter() {
-        assert!(var > 0.0);
-    }
+    let (mean, variance) = gp.predict(&x_test_point);
+    
+    // Basic sanity checks on scalar prediction
+    assert!(mean.is_finite(), "Mean should be finite");
+    assert!(variance > 0.0, "Variance should be positive");
 }
 
 #[test]
@@ -575,42 +571,52 @@ fn test_objective_function_edge_cases() {
 
 #[test]
 fn test_kernel_implementations() {
-    use ndarray::Array2;
-
-    let x1 = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 1.0]).unwrap();
-    let x2 = Array2::from_shape_vec((2, 2), vec![0.5, 0.5, 1.5, 1.5]).unwrap();
+    // Test different kernel types through Gaussian Process interface
+    let training_data = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 1.0],
+        vec![2.0, 2.0]
+    ];
+    let training_targets = vec![0.0, 1.0, 2.0];
 
     // Test RBF Kernel
-    let rbf = RBFKernel {
+    let rbf_kernel = KernelFunction::RBF {
         length_scale: 1.0,
-        variance: 1.0,
+        signal_variance: 1.0,
     };
-    let rbf_result = rbf.compute(&x1, &x2);
-    assert_eq!(rbf_result.shape(), &[2, 2]);
+    let mut gp_rbf = GaussianProcess::new(rbf_kernel);
+    gp_rbf.fit(&training_data, &training_targets);
+    
+    let test_point = vec![0.5, 0.5];
+    let (mean_rbf, var_rbf) = gp_rbf.predict(&test_point);
+    assert!(var_rbf >= 0.0, "Variance should be non-negative");
 
     // Test Matern Kernel
-    let matern = MaternKernel {
+    let matern_kernel = KernelFunction::Matern32 {
         length_scale: 1.0,
-        variance: 1.0,
-        nu: 1.5,
+        signal_variance: 1.0,
     };
-    let matern_result = matern.compute(&x1, &x2);
-    assert_eq!(matern_result.shape(), &[2, 2]);
+    let mut gp_matern = GaussianProcess::new(matern_kernel);
+    gp_matern.fit(&training_data, &training_targets);
+    
+    let (mean_matern, var_matern) = gp_matern.predict(&test_point);
+    assert!(var_matern >= 0.0, "Variance should be non-negative");
 
     // Test Rational Quadratic Kernel
-    let rq = RationalQuadraticKernel {
+    let rq_kernel = KernelFunction::RationalQuadratic {
         length_scale: 1.0,
-        variance: 1.0,
+        signal_variance: 1.0,
         alpha: 1.0,
     };
-    let rq_result = rq.compute(&x1, &x2);
-    assert_eq!(rq_result.shape(), &[2, 2]);
+    let mut gp_rq = GaussianProcess::new(rq_kernel);
+    gp_rq.fit(&training_data, &training_targets);
+    
+    let (mean_rq, var_rq) = gp_rq.predict(&test_point);
+    assert!(var_rq >= 0.0, "Variance should be non-negative");
 
-    // All kernel values should be positive due to positive variance
-    for kernel_matrix in [&rbf_result, &matern_result, &rq_result] {
-        for &value in kernel_matrix.iter() {
-            assert!(value >= 0.0);
-        }
+    // All predictions should be reasonable (finite values)
+    for mean in [mean_rbf, mean_matern, mean_rq] {
+        assert!(mean.is_finite(), "Prediction mean should be finite");
     }
 }
 
@@ -627,7 +633,7 @@ async fn test_optimization_algorithm_comparison() {
             social: 2.0,
         },
         OptimizationAlgorithm::BayesianOptimization {
-            acquisition_function: optimization::AcquisitionFunction::ExpectedImprovement,
+            acquisition_function: AcquisitionFunction::ExpectedImprovement,
         },
     ];
 

@@ -76,7 +76,7 @@ fn test_issue_2_ffi_module_exposed() {
     assert!(!version_ptr.is_null());
 
     let version_str = unsafe { std::ffi::CStr::from_ptr(version_ptr) };
-    assert_eq!(version_str.to_str().unwrap(), "0.1.1");
+    assert_eq!(version_str.to_str().unwrap(), "0.2.0");
 }
 
 #[test]
@@ -231,9 +231,9 @@ fn test_issue_7_fastq_quality_score_concept() {
 }
 
 #[test]
-fn test_version_updated_to_0_1_1() {
+fn test_version_updated_to_0_2_0() {
     // Verify that version has been updated for the release
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.1.1");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.0");
 }
 
 #[test]
@@ -256,5 +256,5 @@ fn test_all_issues_integration() {
     let init_result = stegano_init();
     assert_eq!(init_result as u32, SteganoErrorCode::Success as u32);
 
-    // All systems working together indicate successful 0.1.1 release readiness
+    // All systems working together indicate successful 0.2.0 release readiness
 }
