@@ -37,11 +37,7 @@ impl GpuFoundation {
         let performance_profile = Self::measure_performance();
         let backend_info = Self::detect_backend_info();
 
-        log::info!(
-            "GPU Foundation initialized: available={}, backend={}",
-            gpu_available,
-            backend_info
-        );
+        log::info!("GPU Foundation initialized: available={gpu_available}, backend={backend_info}");
         log::info!(
             "Performance profile: {} parallel units, {:.1} GB/s bandwidth",
             performance_profile.parallel_units,
@@ -327,15 +323,14 @@ mod tests {
 
         // Check that LSBs were modified
         for i in 0..100 {
-            assert_eq!(data[i] & 0x01, 1, "LSB should be set at position {}", i);
+            assert_eq!(data[i] & 0x01, 1, "LSB should be set at position {i}");
         }
 
         // Check that positions beyond payload weren't modified
         for i in 100..1000 {
             assert_eq!(
                 data[i], 0xAA,
-                "Data beyond payload should be unchanged at position {}",
-                i
+                "Data beyond payload should be unchanged at position {i}"
             );
         }
     }
@@ -358,18 +353,10 @@ mod tests {
 
         // Check extracted bits
         for i in 0..50 {
-            assert_eq!(
-                extracted[i], 1,
-                "Extracted bit should be 1 at position {}",
-                i
-            );
+            assert_eq!(extracted[i], 1, "Extracted bit should be 1 at position {i}");
         }
         for i in 50..100 {
-            assert_eq!(
-                extracted[i], 0,
-                "Extracted bit should be 0 at position {}",
-                i
-            );
+            assert_eq!(extracted[i], 0, "Extracted bit should be 0 at position {i}");
         }
     }
 
@@ -385,7 +372,7 @@ mod tests {
         assert!(benchmark.extract_throughput_mbps > 0.0);
 
         let score = benchmark.performance_score();
-        assert!(score >= 10 && score <= 100);
+        assert!((10..=100).contains(&score));
     }
 
     #[test]

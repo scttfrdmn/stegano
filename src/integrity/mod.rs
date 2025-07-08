@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn test_integrity_checker_default() {
-        let checker = IntegrityChecker::default();
+        let checker = IntegrityChecker;
         let checksum = checker.calculate_xor_checksum(b"test");
         assert!(checker.verify_xor_checksum(b"test", checksum));
     }

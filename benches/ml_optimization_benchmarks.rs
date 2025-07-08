@@ -8,7 +8,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 use stegano::core::*;
 use stegano::ml::bayesian::*;
-use stegano::ml::optimization::*;
+use stegano::ml::optimization::{
+    AcquisitionFunction as OptAcquisitionFunction, MultiObjectiveConfig, ObjectiveFunction,
+    OptimizationAlgorithm, OptimizationConfig, OptimizationEngine, ParallelOptimizationConfig,
+    ParetoMethod,
+};
 use stegano::ml::reinforcement::*;
 use tokio::runtime::Runtime;
 
@@ -67,6 +71,7 @@ fn create_benchmark_data(size: usize) -> CarrierData {
 }
 
 /// Simple objective function for benchmarking
+#[derive(Debug)]
 struct BenchmarkObjective {
     weight: f32,
 }
@@ -236,7 +241,7 @@ fn bench_bayesian_optimization(c: &mut Criterion) {
 
                     let opt_config = OptimizationConfig {
                         algorithm: OptimizationAlgorithm::BayesianOptimization {
-                            acquisition_function: AcquisitionFunction::ExpectedImprovement,
+                            acquisition_function: OptAcquisitionFunction::ExpectedImprovement,
                         },
                         max_iterations: (config.max_iterations / 2).max(10), // Bayesian needs fewer iterations
                         population_size: (config.population_size / 3).max(5), // Smaller initial sample
@@ -338,10 +343,10 @@ fn bench_gaussian_process(c: &mut Criterion) {
                 ),
                 &(dim, samples),
                 |b, &(dim, samples)| {
-                    let kernel = Box::new(RBFKernel {
+                    let kernel = KernelFunction::RBF {
                         length_scale: 1.0,
-                        variance: 1.0,
-                    });
+                        signal_variance: 1.0,
+                    };
 
                     // Generate training data
                     let mut x_data = Vec::new();
@@ -358,10 +363,10 @@ fn bench_gaussian_process(c: &mut Criterion) {
                     let y_train = Array1::from_vec(y_data);
 
                     b.iter(|| {
-                        let mut gp = GaussianProcess::new(Box::new(RBFKernel {
+                        let mut gp = GaussianProcess::new(KernelFunction::RBF {
                             length_scale: 1.0,
-                            variance: 1.0,
-                        }));
+                            signal_variance: 1.0,
+                        });
 
                         black_box(gp.fit(&x_train, &y_train).unwrap())
                     });
@@ -379,15 +384,15 @@ fn bench_acquisition_functions(c: &mut Criterion) {
     let acquisition_functions = vec![
         (
             "expected_improvement",
-            AcquisitionFunction::ExpectedImprovement,
+            OptAcquisitionFunction::ExpectedImprovement,
         ),
         (
             "upper_confidence_bound",
-            AcquisitionFunction::UpperConfidenceBound { kappa: 2.576 },
+            OptAcquisitionFunction::UpperConfidenceBound { kappa: 2.576 },
         ),
         (
             "probability_improvement",
-            AcquisitionFunction::ProbabilityOfImprovement,
+            OptAcquisitionFunction::ProbabilityOfImprovement,
         ),
     ];
 
@@ -456,7 +461,7 @@ fn bench_reinforcement_learning(c: &mut Criterion) {
 
             let mut agent = RLAgent::new(config);
 
-            let state = StateRepresentation {
+            let state = RLState {
                 data_size: 1024,
                 data_type: DataFormat::BINARY,
                 complexity_score: 0.5,
@@ -496,7 +501,7 @@ fn bench_reinforcement_learning(c: &mut Criterion) {
             let mut agent = RLAgent::new(config);
 
             // Pre-populate some Q-values
-            let state = StateRepresentation {
+            let state = RLState {
                 data_size: 2048,
                 data_type: DataFormat::BINARY,
                 complexity_score: 0.4,
@@ -673,9 +678,9 @@ fn bench_kernel_computations(c: &mut Criterion) {
                 BenchmarkId::new(format!("rbf_{}x{}", size, dim), format!("{}x{}", size, dim)),
                 &(&x1, &x2),
                 |b, (x1, x2)| {
-                    let kernel = RBFKernel {
+                    let kernel = KernelFunction::RBF {
                         length_scale: 1.0,
-                        variance: 1.0,
+                        signal_variance: 1.0,
                     };
                     b.iter(|| black_box(kernel.compute(x1, x2)));
                 },
@@ -689,10 +694,9 @@ fn bench_kernel_computations(c: &mut Criterion) {
                 ),
                 &(&x1, &x2),
                 |b, (x1, x2)| {
-                    let kernel = MaternKernel {
+                    let kernel = KernelFunction::Matern32 {
                         length_scale: 1.0,
-                        variance: 1.0,
-                        nu: 1.5,
+                        signal_variance: 1.0,
                     };
                     b.iter(|| black_box(kernel.compute(x1, x2)));
                 },

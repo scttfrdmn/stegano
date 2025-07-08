@@ -129,11 +129,7 @@ impl SignalHandler {
             0
         };
 
-        let recommended_bits = if capacity_bits > overhead {
-            capacity_bits - overhead
-        } else {
-            0
-        };
+        let recommended_bits = capacity_bits.saturating_sub(overhead);
         let mut info = CapacityInfo::new(capacity_bits, recommended_bits);
         info.format_specific_info.insert(
             "overhead_bytes".to_string(),
@@ -141,7 +137,7 @@ impl SignalHandler {
         );
         info.format_specific_info.insert(
             "strategy".to_string(),
-            serde_json::Value::String(format!("{:?}", strategy)),
+            serde_json::Value::String(format!("{strategy:?}")),
         );
         Ok(info)
     }
@@ -697,10 +693,7 @@ mod tests {
             .collect();
 
         assert_eq!(recovered_bytes, header);
-        println!(
-            "Bit ordering test passed: {:?} -> {:?}",
-            header, recovered_bytes
-        );
+        println!("Bit ordering test passed: {header:?} -> {recovered_bytes:?}");
     }
 
     #[test]

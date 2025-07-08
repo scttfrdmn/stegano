@@ -10,15 +10,13 @@ pub async fn handle_embed(
     output: &str,
     password: Option<&str>,
 ) -> Result<()> {
-    println!("🔐 Embedding {} into {} -> {}", payload, input, output);
+    println!("🔐 Embedding {payload} into {input} -> {output}");
 
     // Read input files
-    let carrier_data = fs::read(input).map_err(|e| {
-        SteganoError::InvalidParameter(format!("Failed to read carrier file: {}", e))
-    })?;
-    let payload_data = fs::read(payload).map_err(|e| {
-        SteganoError::InvalidParameter(format!("Failed to read payload file: {}", e))
-    })?;
+    let carrier_data = fs::read(input)
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read carrier file: {e}")))?;
+    let payload_data = fs::read(payload)
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read payload file: {e}")))?;
 
     // Create carrier data structure
     let mut carrier = CarrierData {
@@ -72,9 +70,8 @@ pub async fn handle_embed(
     let result = handler.embed(&mut carrier, &payload_data, &params).await?;
 
     // Write output
-    fs::write(output, &carrier.raw_data).map_err(|e| {
-        SteganoError::InvalidParameter(format!("Failed to write output file: {}", e))
-    })?;
+    fs::write(output, &carrier.raw_data)
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to write output file: {e}")))?;
 
     println!("✅ Successfully embedded {} bytes", result.bytes_embedded);
     println!(
@@ -86,11 +83,11 @@ pub async fn handle_embed(
 }
 
 pub async fn handle_extract(input: &str, output: &str, password: Option<&str>) -> Result<()> {
-    println!("🔍 Extracting from {} -> {}", input, output);
+    println!("🔍 Extracting from {input} -> {output}");
 
     // Read input file
     let carrier_data = fs::read(input)
-        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read input file: {}", e)))?;
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read input file: {e}")))?;
 
     // Create carrier data structure
     let carrier = CarrierData {
@@ -130,9 +127,8 @@ pub async fn handle_extract(input: &str, output: &str, password: Option<&str>) -
     let extracted_data = handler.extract(&carrier, &params).await?;
 
     // Write output
-    fs::write(output, &extracted_data).map_err(|e| {
-        SteganoError::InvalidParameter(format!("Failed to write output file: {}", e))
-    })?;
+    fs::write(output, &extracted_data)
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to write output file: {e}")))?;
 
     println!("✅ Successfully extracted {} bytes", extracted_data.len());
 
@@ -140,11 +136,11 @@ pub async fn handle_extract(input: &str, output: &str, password: Option<&str>) -
 }
 
 pub async fn handle_analyze(input: &str) -> Result<()> {
-    println!("📊 Analyzing {}", input);
+    println!("📊 Analyzing {input}");
 
     // Read input file
     let carrier_data = fs::read(input)
-        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read input file: {}", e)))?;
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read input file: {e}")))?;
 
     // Create carrier data structure
     let carrier = CarrierData {
@@ -187,7 +183,7 @@ pub async fn handle_analyze(input: &str) -> Result<()> {
     if !capacity.format_specific_info.is_empty() {
         println!("  Format-specific info:");
         for (key, value) in &capacity.format_specific_info {
-            println!("    {}: {}", key, value);
+            println!("    {key}: {value}");
         }
     }
 

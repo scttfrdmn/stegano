@@ -10,11 +10,7 @@ impl CapacityEstimator {
     /// Estimate capacity for LSB embedding in binary data
     pub fn estimate_lsb_capacity(&self, carrier_size: usize) -> usize {
         // LSB embedding can use 1 bit per byte, minus header space
-        if carrier_size <= 32 {
-            0
-        } else {
-            carrier_size - 32
-        }
+        carrier_size.saturating_sub(32)
     }
 
     /// Estimate capacity for frequency domain embedding
@@ -46,7 +42,7 @@ mod tests {
 
     #[test]
     fn test_capacity_estimator_default() {
-        let estimator = CapacityEstimator::default();
+        let estimator = CapacityEstimator;
         assert_eq!(estimator.estimate_lsb_capacity(100), 68);
     }
 

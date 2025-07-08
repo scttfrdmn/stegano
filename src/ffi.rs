@@ -133,8 +133,12 @@ pub extern "C" fn stegano_init() -> SteganoErrorCode {
 ///
 /// # Returns
 /// Error code (0 = success)
+///
+/// # Safety
+/// The caller must ensure `data` points to a valid memory region of at least `data_len` bytes
+/// and `format_out` points to a valid CDataFormat that can be written to.
 #[no_mangle]
-pub extern "C" fn stegano_detect_format(
+pub unsafe extern "C" fn stegano_detect_format(
     data: *const u8,
     data_len: c_uint,
     format_out: *mut CDataFormat,
@@ -173,8 +177,12 @@ pub extern "C" fn stegano_detect_format(
 ///
 /// # Returns
 /// Error code (0 = success)
+///
+/// # Safety
+/// The caller must ensure `data` points to a valid memory region of at least `data_len` bytes
+/// and `capacity_out` points to a valid CCapacityInfo structure that can be written to.
 #[no_mangle]
-pub extern "C" fn stegano_estimate_capacity(
+pub unsafe extern "C" fn stegano_estimate_capacity(
     data: *const u8,
     data_len: c_uint,
     format: CDataFormat,
@@ -228,8 +236,15 @@ pub extern "C" fn stegano_estimate_capacity(
 ///
 /// # Returns
 /// Error code (0 = success)
+///
+/// # Safety
+/// The caller must ensure:
+/// - `carrier_data` points to a valid, mutable memory region of at least `carrier_len` bytes
+/// - `payload_data` points to a valid memory region of at least `payload_len` bytes
+/// - `password` is either null or points to a valid, null-terminated C string
+/// - `result_out` points to a valid CEmbedResult structure that can be written to
 #[no_mangle]
-pub extern "C" fn stegano_embed(
+pub unsafe extern "C" fn stegano_embed(
     carrier_data: *mut u8,
     carrier_len: c_uint,
     payload_data: *const u8,
@@ -324,8 +339,16 @@ pub extern "C" fn stegano_embed(
 ///
 /// # Returns
 /// Error code (0 = success)
+///
+/// # Safety
+/// The caller must ensure:
+/// - `carrier_data` points to a valid memory region of at least `carrier_len` bytes
+/// - `password` is either null or points to a valid, null-terminated C string
+/// - `payload_out` points to a valid location that can store a pointer to allocated memory
+/// - `payload_len_out` points to a valid c_uint that can be written to
+/// - The caller must free the allocated payload memory using `stegano_free`
 #[no_mangle]
-pub extern "C" fn stegano_extract(
+pub unsafe extern "C" fn stegano_extract(
     carrier_data: *const u8,
     carrier_len: c_uint,
     format: CDataFormat,
@@ -405,8 +428,11 @@ pub extern "C" fn stegano_extract(
 ///
 /// # Arguments
 /// * `ptr` - Pointer to memory to free
+///
+/// # Safety
+/// The caller must ensure `ptr` was allocated by a stegano function and is not null.
 #[no_mangle]
-pub extern "C" fn stegano_free(ptr: *mut c_void) {
+pub unsafe extern "C" fn stegano_free(ptr: *mut c_void) {
     if !ptr.is_null() {
         unsafe {
             libc::free(ptr);
@@ -418,7 +444,7 @@ pub extern "C" fn stegano_free(ptr: *mut c_void) {
 /// Returns: Version string (caller must NOT free)
 #[no_mangle]
 pub extern "C" fn stegano_version() -> *const c_char {
-    static VERSION: &str = "0.2.0\0";
+    static VERSION: &str = "0.2.1\0";
     VERSION.as_ptr() as *const c_char
 }
 
@@ -432,8 +458,12 @@ pub extern "C" fn stegano_version() -> *const c_char {
 ///
 /// # Returns
 /// Error code (0 = success)
+///
+/// # Safety
+/// The caller must ensure `carrier_data` points to a valid memory region of at least
+/// `carrier_len` bytes and `integrity_ok` points to a valid bool that can be written to.
 #[no_mangle]
-pub extern "C" fn stegano_verify_integrity(
+pub unsafe extern "C" fn stegano_verify_integrity(
     carrier_data: *const u8,
     carrier_len: c_uint,
     format: CDataFormat,
@@ -495,6 +525,6 @@ mod tests {
         assert!(!version_ptr.is_null());
 
         let version_str = unsafe { CStr::from_ptr(version_ptr) };
-        assert_eq!(version_str.to_str().unwrap(), "0.2.0");
+        assert_eq!(version_str.to_str().unwrap(), "0.2.1");
     }
 }

@@ -31,9 +31,7 @@ impl MetalAccelerator {
         let compile_options = CompileOptions::new();
         let library = device
             .new_library_with_source(library_source, &compile_options)
-            .map_err(|e| {
-                SteganoError::GpuError(format!("Failed to compile Metal library: {}", e))
-            })?;
+            .map_err(|e| SteganoError::GpuError(format!("Failed to compile Metal library: {e}")))?;
 
         Ok(Self {
             device,
@@ -53,26 +51,26 @@ impl MetalAccelerator {
             .library
             .get_function("lsb_embed_kernel", None)
             .map_err(|e| {
-                SteganoError::GpuError(format!("Failed to get LSB embed function: {}", e))
+                SteganoError::GpuError(format!("Failed to get LSB embed function: {e}"))
             })?;
 
         let pipeline = self
             .device
             .new_compute_pipeline_state_with_function(&function)
             .map_err(|e| {
-                SteganoError::GpuError(format!("Failed to create compute pipeline: {}", e))
+                SteganoError::GpuError(format!("Failed to create compute pipeline: {e}"))
             })?;
 
         // Create buffers
         let carrier_buffer = self.device.new_buffer_with_data(
             unsafe { mem::transmute(carrier.as_ptr()) },
-            (carrier.len() * mem::size_of::<u8>()) as u64,
+            std::mem::size_of_val(carrier) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
         let payload_buffer = self.device.new_buffer_with_data(
             unsafe { mem::transmute(payload_bits.as_ptr()) },
-            (payload_bits.len() * mem::size_of::<u8>()) as u64,
+            std::mem::size_of_val(payload_bits) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -92,7 +90,7 @@ impl MetalAccelerator {
 
         // Calculate thread configuration
         let threads_per_threadgroup = MTLSize::new(256, 1, 1);
-        let threadgroups_per_grid = MTLSize::new(((payload_bits.len() + 255) / 256) as u64, 1, 1);
+        let threadgroups_per_grid = MTLSize::new(payload_bits.len().div_ceil(256) as u64, 1, 1);
 
         encoder.dispatch_thread_groups(threadgroups_per_grid, threads_per_threadgroup);
         encoder.end_encoding();
@@ -115,17 +113,17 @@ impl MetalAccelerator {
         let function = self
             .library
             .get_function("fft_kernel", None)
-            .map_err(|e| SteganoError::GpuError(format!("Failed to get FFT function: {}", e)))?;
+            .map_err(|e| SteganoError::GpuError(format!("Failed to get FFT function: {e}")))?;
 
         let pipeline = self
             .device
             .new_compute_pipeline_state_with_function(&function)
-            .map_err(|e| SteganoError::GpuError(format!("Failed to create FFT pipeline: {}", e)))?;
+            .map_err(|e| SteganoError::GpuError(format!("Failed to create FFT pipeline: {e}")))?;
 
         // Create input buffer
         let input_buffer = self.device.new_buffer_with_data(
             unsafe { mem::transmute(signal.as_ptr()) },
-            (signal.len() * mem::size_of::<f32>()) as u64,
+            std::mem::size_of_val(signal) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -150,7 +148,7 @@ impl MetalAccelerator {
         });
 
         let threads_per_threadgroup = MTLSize::new(256, 1, 1);
-        let threadgroups_per_grid = MTLSize::new(((signal.len() + 255) / 256) as u64, 1, 1);
+        let threadgroups_per_grid = MTLSize::new(signal.len().div_ceil(256) as u64, 1, 1);
 
         encoder.dispatch_thread_groups(threadgroups_per_grid, threads_per_threadgroup);
         encoder.end_encoding();
@@ -164,8 +162,8 @@ impl MetalAccelerator {
 
         unsafe {
             for i in 0..signal.len() {
-                let real = *result_ptr.offset((i * 2) as isize);
-                let imag = *result_ptr.offset((i * 2 + 1) as isize);
+                let real = *result_ptr.add(i * 2);
+                let imag = *result_ptr.add(i * 2 + 1);
                 result.push(num_complex::Complex::new(real, imag));
             }
         }
@@ -179,14 +177,14 @@ impl MetalAccelerator {
             .library
             .get_function("reed_solomon_kernel", None)
             .map_err(|e| {
-                SteganoError::GpuError(format!("Failed to get Reed-Solomon function: {}", e))
+                SteganoError::GpuError(format!("Failed to get Reed-Solomon function: {e}"))
             })?;
 
         let pipeline = self
             .device
             .new_compute_pipeline_state_with_function(&function)
             .map_err(|e| {
-                SteganoError::GpuError(format!("Failed to create Reed-Solomon pipeline: {}", e))
+                SteganoError::GpuError(format!("Failed to create Reed-Solomon pipeline: {e}"))
             })?;
 
         let output_size = data.len() + parity_bytes;
@@ -194,7 +192,7 @@ impl MetalAccelerator {
         // Create buffers
         let input_buffer = self.device.new_buffer_with_data(
             unsafe { mem::transmute(data.as_ptr()) },
-            (data.len() * mem::size_of::<u8>()) as u64,
+            std::mem::size_of_val(data) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -223,7 +221,7 @@ impl MetalAccelerator {
         });
 
         let threads_per_threadgroup = MTLSize::new(64, 1, 1);
-        let threadgroups_per_grid = MTLSize::new(((data.len() + 63) / 64) as u64, 1, 1);
+        let threadgroups_per_grid = MTLSize::new(data.len().div_ceil(64) as u64, 1, 1);
 
         encoder.dispatch_thread_groups(threadgroups_per_grid, threads_per_threadgroup);
         encoder.end_encoding();
@@ -321,7 +319,7 @@ mod tests {
                     );
                 }
                 Err(e) => {
-                    println!("⚠️  Metal device creation failed: {}", e);
+                    println!("⚠️  Metal device creation failed: {e}");
                     println!("This is expected if Metal compute shaders can't be compiled");
                     // Don't fail the test - this is acceptable for now
                 }

@@ -303,7 +303,6 @@ jobs:
           })
 
 # Workflow completion notification
-jobs:
   notify:
     name: Notification
     runs-on: ubuntu-latest

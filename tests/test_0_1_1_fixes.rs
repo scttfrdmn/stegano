@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 use stegano::handlers::HandlerRegistry;
-use stegano::*;
 use stegano::DataHandler;
+use stegano::*;
 
 #[tokio::test]
 async fn test_issue_1_genomics_handler_implemented() {
@@ -76,7 +76,7 @@ fn test_issue_2_ffi_module_exposed() {
     assert!(!version_ptr.is_null());
 
     let version_str = unsafe { std::ffi::CStr::from_ptr(version_ptr) };
-    assert_eq!(version_str.to_str().unwrap(), "0.2.0");
+    assert_eq!(version_str.to_str().unwrap(), "0.2.1");
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn test_issue_7_fastq_quality_score_concept() {
     );
 
     // Test that FASTQ files can be processed (this uses basic embedding for now)
-    let mut carrier = CarrierData {
+    let carrier = CarrierData {
         format: DataFormat::FASTQ,
         raw_data:
             b"@seq1 test with longer header for embedding\nATCGATCGATCGATCG\n+\nIIIIIIIIIIIIIIII\n"
@@ -231,9 +231,9 @@ fn test_issue_7_fastq_quality_score_concept() {
 }
 
 #[test]
-fn test_version_updated_to_0_2_0() {
+fn test_version_updated_to_0_2_1() {
     // Verify that version has been updated for the release
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.0");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.1");
 }
 
 #[test]
@@ -243,9 +243,9 @@ fn test_all_issues_integration() {
 
     // Test that we can get handlers for all major formats (Issue #4 fix)
     let genomics_handler = registry.get_handler(&DataFormat::FASTA).unwrap();
-    let imagery_handler = registry.get_handler(&DataFormat::PNG).unwrap();
-    let signals_handler = registry.get_handler(&DataFormat::WAV).unwrap();
-    let generic_handler = registry.get_handler(&DataFormat::BINARY).unwrap();
+    let _imagery_handler = registry.get_handler(&DataFormat::PNG).unwrap();
+    let _signals_handler = registry.get_handler(&DataFormat::WAV).unwrap();
+    let _generic_handler = registry.get_handler(&DataFormat::BINARY).unwrap();
 
     // Test that genomics handler is functional (Issue #1 fix)
     let fasta_data = b">test\nATCG\n";
@@ -256,5 +256,5 @@ fn test_all_issues_integration() {
     let init_result = stegano_init();
     assert_eq!(init_result as u32, SteganoErrorCode::Success as u32);
 
-    // All systems working together indicate successful 0.2.0 release readiness
+    // All systems working together indicate successful 0.2.1 release readiness
 }

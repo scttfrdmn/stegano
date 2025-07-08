@@ -74,7 +74,7 @@ impl HealthChecker {
                 tokio::select! {
                     _ = interval.tick() => {
                         if let Err(e) = Self::perform_health_check(&status).await {
-                            log::error!("Health check failed: {}", e);
+                            log::error!("Health check failed: {e}");
                         }
                     }
                     _ = shutdown_rx.recv() => {
@@ -85,7 +85,7 @@ impl HealthChecker {
             }
         });
 
-        log::info!("Health checker started with interval: {:?}", check_interval);
+        log::info!("Health checker started with interval: {check_interval:?}");
         Ok(())
     }
 
@@ -342,6 +342,12 @@ impl HealthChecker {
         }
 
         true
+    }
+}
+
+impl Default for HealthStatus {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -93,7 +93,7 @@ impl MonitoringSystem {
         let logger = Arc::new(logging::StructuredLogger::new()?);
         let telemetry = Arc::new(std::sync::Mutex::new(telemetry::TelemetryCollector::new()?));
 
-        log::info!("Monitoring system initialized with config: {:?}", config);
+        log::info!("Monitoring system initialized with config: {config:?}");
 
         Ok(Self {
             health_checker,
@@ -201,7 +201,7 @@ impl MonitoringSystem {
 
     /// Update alert thresholds
     pub fn update_thresholds(&mut self, thresholds: AlertThresholds) {
-        log::info!("Updated alert thresholds: {:?}", thresholds);
+        log::info!("Updated alert thresholds: {thresholds:?}");
         self.config.alert_thresholds = thresholds;
     }
 
@@ -419,7 +419,7 @@ mod tests {
         monitoring.record_metric("latency", 50.0, Some(&[("unit", "milliseconds")]));
 
         let summary = monitoring.metrics_summary();
-        assert!(summary.custom_metrics.len() > 0);
+        assert!(!summary.custom_metrics.is_empty());
     }
 
     #[test]

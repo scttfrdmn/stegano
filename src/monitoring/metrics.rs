@@ -116,10 +116,7 @@ impl MetricsCollector {
             }
         });
 
-        log::info!(
-            "Metrics collector started with interval: {:?}",
-            collection_interval
-        );
+        log::info!("Metrics collector started with interval: {collection_interval:?}");
         Ok(())
     }
 
@@ -159,23 +156,23 @@ impl MetricsCollector {
         metrics.operations.push_back(metric);
 
         // Update counters
-        let total_key = format!("operations.{}.total", operation);
+        let total_key = format!("operations.{operation}.total");
         *metrics.counters.entry(total_key).or_insert(0) += 1;
 
         if success {
-            let success_key = format!("operations.{}.success", operation);
+            let success_key = format!("operations.{operation}.success");
             *metrics.counters.entry(success_key).or_insert(0) += 1;
         } else {
-            let error_key = format!("operations.{}.error", operation);
+            let error_key = format!("operations.{operation}.error");
             *metrics.counters.entry(error_key).or_insert(0) += 1;
         }
 
         // Update histograms
-        let duration_key = format!("operations.{}.duration_ms", operation);
+        let duration_key = format!("operations.{operation}.duration_ms");
         metrics
             .histograms
             .entry(duration_key)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(duration.as_millis() as f64);
     }
 
@@ -198,7 +195,7 @@ impl MetricsCollector {
         metrics
             .custom_metrics
             .entry(name.to_string())
-            .or_insert_with(VecDeque::new)
+            .or_default()
             .push_back(metric);
 
         // Update gauge

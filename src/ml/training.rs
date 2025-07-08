@@ -308,7 +308,7 @@ impl TrainingPipeline {
             // Save best model
             if val_loss < self.metrics_tracker.best_validation_score {
                 self.metrics_tracker.best_validation_score = val_loss;
-                session.best_model_state = Some(format!("epoch_{}", epoch));
+                session.best_model_state = Some(format!("epoch_{epoch}"));
                 self.metrics_tracker.epochs_without_improvement = 0;
             } else {
                 self.metrics_tracker.epochs_without_improvement += 1;
@@ -458,6 +458,12 @@ impl TrainingPipeline {
     }
 }
 
+impl Default for DataManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DataManager {
     /// Create new data manager
     pub fn new() -> Self {
@@ -536,6 +542,12 @@ impl DataManager {
     }
 }
 
+impl Default for MetricsTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsTracker {
     /// Create new metrics tracker
     pub fn new() -> Self {
@@ -562,7 +574,7 @@ impl MetricsTracker {
     pub fn add_custom_metric(&mut self, name: String, value: f32) {
         self.custom_metrics
             .entry(name)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(value);
     }
 

@@ -61,6 +61,12 @@ pub struct FeatureNormalization {
     _feature_names: Vec<String>,
 }
 
+impl Default for FeatureNormalization {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FeatureNormalization {
     /// Create new empty feature normalization
     pub fn new() -> Self {
@@ -250,7 +256,7 @@ impl NeuralNetworkModel {
         input.extend(&features.complexity_measures);
 
         // Add format-specific features
-        for (_, value) in &features.format_specific {
+        for value in features.format_specific.values() {
             input.push(*value);
         }
 
@@ -270,7 +276,7 @@ impl NeuralNetworkModel {
     /// Convert output vector to embedding parameters
     fn output_to_params(&self, output: &[f32]) -> EmbedParams {
         // Simple mapping for demonstration
-        let error_correction = if output.get(0).unwrap_or(&0.0) > &0.5 {
+        let error_correction = if output.first().unwrap_or(&0.0) > &0.5 {
             ECLevel::High
         } else {
             ECLevel::Low

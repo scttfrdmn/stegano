@@ -1,6 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
-use stegano::*;
 
 fn benchmark_embedding_strategies(c: &mut Criterion) {
     let mut group = c.benchmark_group("embedding_strategies");

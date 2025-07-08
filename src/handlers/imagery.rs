@@ -136,11 +136,7 @@ impl ImageryHandler {
             0
         };
 
-        let recommended_bits = if capacity_bits > overhead {
-            capacity_bits - overhead
-        } else {
-            0
-        };
+        let recommended_bits = capacity_bits.saturating_sub(overhead);
         let mut info = CapacityInfo::new(capacity_bits as usize, recommended_bits as usize);
         info.format_specific_info.insert(
             "overhead_bytes".to_string(),
@@ -148,7 +144,7 @@ impl ImageryHandler {
         );
         info.format_specific_info.insert(
             "strategy".to_string(),
-            serde_json::Value::String(format!("{:?}", strategy)),
+            serde_json::Value::String(format!("{strategy:?}")),
         );
         Ok(info)
     }

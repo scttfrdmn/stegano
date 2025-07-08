@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
     let registry = handlers::HandlerRegistry::new();
     let handler = registry
         .get_handler(&DataFormat::BINARY)
-        .ok_or_else(|| SteganoError::UnsupportedFormat(DataFormat::BINARY))?;
+        .ok_or(SteganoError::UnsupportedFormat(DataFormat::BINARY))?;
 
     let capacity = handler.estimate_capacity(&carrier)?;
     println!("\n📊 Capacity Analysis:");

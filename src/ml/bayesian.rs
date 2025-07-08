@@ -310,11 +310,7 @@ impl BayesianOptimizer {
                     .map(|obs| obs.objective_value)
                     .fold(f32::NEG_INFINITY, f32::max);
 
-                log::info!(
-                    "Bayesian Optimization Iteration {}: Best = {:.4}",
-                    iteration,
-                    best_value
-                );
+                log::info!("Bayesian Optimization Iteration {iteration}: Best = {best_value:.4}");
             }
         }
 
@@ -468,7 +464,7 @@ impl BayesianOptimizer {
 
     /// Convert vector to embedding parameters
     fn vector_to_embed_params(&self, vector: &[f32]) -> EmbedParams {
-        let ec_level = match vector.get(0).copied().unwrap_or(0.5) {
+        let ec_level = match vector.first().copied().unwrap_or(0.5) {
             x if x < 0.125 => ECLevel::None,
             x if x < 0.375 => ECLevel::Low,
             x if x < 0.625 => ECLevel::Medium,
@@ -577,11 +573,11 @@ impl BayesianOptimizer {
     /// Error function approximation
     fn erf(&self, x: f32) -> f32 {
         // Abramowitz and Stegun approximation
-        let a1 = 0.254829592;
-        let a2 = -0.284496736;
-        let a3 = 1.421413741;
-        let a4 = -1.453152027;
-        let a5 = 1.061405429;
+        let a1 = 0.254_829_6;
+        let a2 = -0.284_496_72;
+        let a3 = 1.421_413_8;
+        let a4 = -1.453_152_1;
+        let a5 = 1.061_405_4;
         let p = 0.3275911;
 
         let sign = if x < 0.0 { -1.0 } else { 1.0 };

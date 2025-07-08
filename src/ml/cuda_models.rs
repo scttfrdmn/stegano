@@ -295,7 +295,7 @@ impl CudaNeuralNetwork {
         input.extend(&features.complexity_measures);
 
         // Add format-specific features
-        for (_, value) in &features.format_specific {
+        for value in features.format_specific.values() {
             input.push(*value);
         }
 
@@ -340,7 +340,7 @@ impl MLModel for CudaNeuralNetwork {
         let _input = self.features_to_input_vector(features)?;
 
         // Simple forward pass (placeholder)
-        let output = vec![0.5, 0.3, 0.8]; // Would use actual GPU forward pass
+        let output = [0.5, 0.3, 0.8]; // Would use actual GPU forward pass
 
         Ok(EmbedParams {
             encryption_key: vec![],

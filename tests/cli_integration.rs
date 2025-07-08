@@ -6,7 +6,7 @@ use tempfile::TempDir;
 #[test]
 fn test_cli_help() {
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "stegano", "--", "--help"])
+        .args(["run", "--bin", "stegano", "--", "--help"])
         .output()
         .expect("Failed to execute command");
 
@@ -38,7 +38,7 @@ fn test_cli_embed_extract_roundtrip() {
 
     // Test embed command
     let embed_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -65,7 +65,7 @@ fn test_cli_embed_extract_roundtrip() {
 
     // Test extract command
     let extract_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -112,7 +112,7 @@ fn test_cli_embed_extract_with_password() {
 
     // Test embed with password
     let embed_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -138,7 +138,7 @@ fn test_cli_embed_extract_with_password() {
 
     // Test extract with password
     let extract_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -176,7 +176,7 @@ fn test_cli_analyze_command() {
 
     // Test analyze command
     let analyze_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -218,7 +218,7 @@ fn test_cli_extract_with_wrong_password_fails() {
 
     // Embed with one password
     let embed_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -240,7 +240,7 @@ fn test_cli_extract_with_wrong_password_fails() {
 
     // Try to extract with wrong password (should fail)
     let extract_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -282,7 +282,7 @@ fn test_cli_insufficient_capacity() {
 
     // Test embed command (should fail due to insufficient capacity)
     let embed_output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "stegano",
@@ -325,7 +325,7 @@ fn test_cli_different_file_formats() {
 
         // Test analyze command for format detection
         let analyze_output = Command::new("cargo")
-            .args(&[
+            .args([
                 "run",
                 "--bin",
                 "stegano",

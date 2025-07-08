@@ -293,7 +293,7 @@ CGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTA
 +seq005
 FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
 
-    let mut fastq_data = sample_fastq.as_bytes().to_vec();
+    let fastq_data = sample_fastq.as_bytes().to_vec();
 
     // Create phantom-science metadata for FASTQ
     let phantom_metadata = serde_json::json!({
@@ -316,7 +316,7 @@ FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
     let payload = phantom_metadata.to_string().into_bytes();
 
     println!("📊 Phantom-Science FASTQ Metadata:");
-    println!("{}\n", phantom_metadata.to_string());
+    println!("{}\n", phantom_metadata);
 
     // Test different quality score embedding strategies
     let strategies = vec![
@@ -335,7 +335,7 @@ FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
     ];
 
     for (strategy_name, handler) in strategies {
-        println!("🔬 Testing Strategy: {}", strategy_name);
+        println!("🔬 Testing Strategy: {strategy_name}");
 
         let mut test_data = fastq_data.clone();
 
@@ -371,7 +371,7 @@ FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
             let embedded_bytes = handler
                 .embed_in_quality_scores(&mut test_data, &payload)
                 .await?;
-            println!("   ✅ Embedded: {} bytes", embedded_bytes);
+            println!("   ✅ Embedded: {embedded_bytes} bytes");
 
             // Extract data
             let expected_bits = payload.len() * 8;
@@ -401,8 +401,8 @@ FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
                     positions_changed as f64 / original_qualities.len() as f64 * 100.0;
 
                 println!("   Quality preservation:");
-                println!("     Average quality change: {:.3}", avg_quality_change);
-                println!("     Positions changed: {:.1}%", change_percentage);
+                println!("     Average quality change: {avg_quality_change:.3}");
+                println!("     Positions changed: {change_percentage:.1}%");
             }
         } else {
             println!("   ❌ Insufficient capacity for payload");
@@ -416,7 +416,7 @@ FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
     let original_str = String::from_utf8_lossy(&fastq_data);
     let record_count = original_str.lines().count() / 4;
 
-    println!("   FASTQ records: {}", record_count);
+    println!("   FASTQ records: {record_count}");
     println!(
         "   Format structure preserved: {}",
         validate_fastq_structure(&fastq_data)
@@ -429,8 +429,8 @@ FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
     let max_quality = qualities.iter().max().unwrap_or(&0);
 
     println!("   Quality score statistics:");
-    println!("     Average: {:.1}", avg_quality);
-    println!("     Range: Q{} - Q{}", min_quality, max_quality);
+    println!("     Average: {avg_quality:.1}");
+    println!("     Range: Q{min_quality} - Q{max_quality}");
 
     println!("\n🎯 FASTQ quality score steganography test completed!");
 

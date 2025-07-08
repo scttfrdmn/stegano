@@ -504,16 +504,12 @@ impl RLAgent {
 
             // Log progress
             if episode % 100 == 0 {
-                log::info!(
-                    "RL Training Episode {}: Average Reward = {:.4}",
-                    episode,
-                    average_reward
-                );
+                log::info!("RL Training Episode {episode}: Average Reward = {average_reward:.4}");
             }
 
             // Check convergence
             if self.check_convergence(&episode_rewards) {
-                log::info!("RL Agent converged after {} episodes", episode);
+                log::info!("RL Agent converged after {episode} episodes");
                 break;
             }
         }
@@ -984,7 +980,7 @@ impl RLAgent {
         RLState {
             format: formats[random::<usize>() % formats.len()].clone(),
             size_category: sizes[random::<usize>() % sizes.len()].clone(),
-            stealth_level: stealth_levels[random::<usize>() % stealth_levels.len()].clone(),
+            stealth_level: stealth_levels[random::<usize>() % stealth_levels.len()],
             performance_priority: priorities[random::<usize>() % priorities.len()].clone(),
             security_level: security_levels[random::<usize>() % security_levels.len()].clone(),
             resource_constraints: constraints[random::<usize>() % constraints.len()].clone(),
@@ -1081,7 +1077,7 @@ impl RLAgent {
         RLState {
             format: context.data_format.clone(),
             size_category: self.size_to_category(context.data_size),
-            stealth_level: context.stealth_level.clone(),
+            stealth_level: context.stealth_level,
             performance_priority: context.performance_priority.clone(),
             security_level: context.security_level.clone(),
             resource_constraints: context.resource_constraints.clone(),
@@ -1281,6 +1277,12 @@ impl ExperienceBuffer {
     }
 }
 
+impl Default for LearningStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LearningStats {
     /// Create new learning stats
     pub fn new() -> Self {
@@ -1431,7 +1433,7 @@ mod tests {
 
         let input = vec![0.5; 24];
         let output = network.forward(&input);
-        assert!(output >= 0.0 && output <= 1.0); // Sigmoid output
+        assert!((0.0..=1.0).contains(&output)); // Sigmoid output
     }
 
     #[tokio::test]

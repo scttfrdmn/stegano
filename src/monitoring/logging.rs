@@ -223,7 +223,7 @@ impl StructuredLogger {
         for writer in &self.writers {
             if let Ok(mut writer) = writer.lock() {
                 if let Err(e) = writer.write_log(&entry, self.config.format) {
-                    eprintln!("Failed to write log entry: {}", e);
+                    eprintln!("Failed to write log entry: {e}");
                 }
             }
         }
@@ -234,7 +234,7 @@ impl StructuredLogger {
         let mut result = HashMap::new();
 
         for (key, value) in fields {
-            let value_str = format!("{}", value);
+            let value_str = format!("{value}");
             let truncated = if value_str.len() > self.config.max_field_length {
                 format!("{}...", &value_str[..self.config.max_field_length])
             } else {
@@ -253,7 +253,7 @@ impl StructuredLogger {
             if let Ok(mut writer) = writer.lock() {
                 writer
                     .flush()
-                    .map_err(|e| crate::core::SteganoError::IoError(e))?;
+                    .map_err(crate::core::SteganoError::IoError)?;
             }
         }
         Ok(())
@@ -308,9 +308,9 @@ impl LogWriter for ConsoleWriter {
         };
 
         if self.use_stderr {
-            writeln!(io::stderr(), "{}", output)?;
+            writeln!(io::stderr(), "{output}")?;
         } else {
-            writeln!(io::stdout(), "{}", output)?;
+            writeln!(io::stdout(), "{output}")?;
         }
 
         Ok(())
@@ -367,9 +367,9 @@ impl ConsoleWriter {
 
         for (key, value) in &entry.fields {
             if let Value::String(s) = value {
-                parts.push(format!("{}=\"{}\"", key, s));
+                parts.push(format!("{key}=\"{s}\""));
             } else {
-                parts.push(format!("{}={}", key, value));
+                parts.push(format!("{key}={value}"));
             }
         }
 
@@ -410,7 +410,7 @@ impl LogWriter for FileWriter {
             LogFormat::Compact => console_writer.format_compact(entry),
         };
 
-        writeln!(self.file, "{}", output)?;
+        writeln!(self.file, "{output}")?;
         Ok(())
     }
 
@@ -450,7 +450,7 @@ mod tests {
                 LogFormat::Compact => console_writer.format_compact(entry),
             };
 
-            writeln!(self.buffer, "{}", output)?;
+            writeln!(self.buffer, "{output}")?;
             Ok(())
         }
 

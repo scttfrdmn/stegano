@@ -259,6 +259,12 @@ mod dicom_tags {
     pub const PIXEL_REPRESENTATION: (u16, u16) = (0x0028, 0x0103);
 }
 
+impl Default for DicomHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DicomHandler {
     pub fn new() -> Self {
         Self
@@ -319,7 +325,7 @@ impl DicomHandler {
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to parse DICOM element at offset {}: {}", offset, e);
+                    log::warn!("Failed to parse DICOM element at offset {offset}: {e}");
                     break;
                 }
             }
@@ -978,7 +984,7 @@ impl DicomHandler {
         let mut format_info = HashMap::new();
         format_info.insert(
             "method".to_string(),
-            serde_json::Value::String(format!("{:?}", strategy)),
+            serde_json::Value::String(format!("{strategy:?}")),
         );
         format_info.insert(
             "estimated_capacity_bytes".to_string(),

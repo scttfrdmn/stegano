@@ -806,6 +806,12 @@ impl AnalysisEngine {
     }
 }
 
+impl Default for DistributionAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DistributionAnalyzer {
     pub fn new() -> Self {
         Self {

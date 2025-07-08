@@ -237,7 +237,7 @@ async fn test_vcf_population_genetics_integrity() {
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
-    let result = handler
+    let _result = handler
         .embed(&mut carrier_mut, payload, &params)
         .await
         .unwrap();
@@ -316,7 +316,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
-    let result = handler
+    let _result = handler
         .embed(&mut carrier_mut, payload, &params)
         .await
         .unwrap();
@@ -417,7 +417,7 @@ async fn test_dicom_medical_compliance() {
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
-    let result = handler
+    let _result = handler
         .embed(&mut carrier_mut, payload, &params)
         .await
         .unwrap();
@@ -502,7 +502,7 @@ async fn test_sam_alignment_quality_preservation() {
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
-    let result = handler
+    let _result = handler
         .embed(&mut carrier_mut, payload, &params)
         .await
         .unwrap();
@@ -587,7 +587,7 @@ async fn test_sam_variant_calling_compatibility() {
 
     // Perform embedding
     let mut carrier_mut = carrier.clone();
-    let result = handler
+    let _result = handler
         .embed(&mut carrier_mut, payload, &params)
         .await
         .unwrap();

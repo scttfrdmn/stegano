@@ -95,7 +95,7 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
     let registry = handlers::HandlerRegistry::new();
     let handler = registry
         .get_handler(&DataFormat::BINARY) // Using generic for demo
-        .ok_or_else(|| SteganoError::UnsupportedFormat(DataFormat::BINARY))?;
+        .ok_or(SteganoError::UnsupportedFormat(DataFormat::BINARY))?;
 
     // Analyze capacity for genomics data
     let capacity = handler.estimate_capacity(&carrier)?;
@@ -143,10 +143,7 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
     // Verify the FASTA structure integrity
     let modified_fasta = String::from_utf8_lossy(&carrier.raw_data);
     let sequence_count = modified_fasta.matches('>').count();
-    println!(
-        "   FASTA structure preserved: {} sequences detected",
-        sequence_count
-    );
+    println!("   FASTA structure preserved: {sequence_count} sequences detected");
 
     // Extract and verify the hidden research data
     println!("\n🔍 Data Extraction:");

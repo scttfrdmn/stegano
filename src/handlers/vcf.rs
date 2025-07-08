@@ -96,6 +96,12 @@ const STEGANO_INFO_PREFIX: &str = "STEG";
 const MAX_QUAL_PRECISION: u32 = 3; // Maximum decimal places for quality scores
 const CUSTOM_ID_PREFIX: &str = "var";
 
+impl Default for VcfHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VcfHandler {
     pub fn new() -> Self {
         Self
@@ -132,7 +138,7 @@ impl VcfHandler {
                 match self.parse_variant_line(line, &column_header) {
                     Ok(variant) => variants.push(variant),
                     Err(e) => {
-                        log::warn!("Failed to parse variant line '{}': {}", line, e);
+                        log::warn!("Failed to parse variant line '{line}': {e}");
                     }
                 }
             }
@@ -284,7 +290,7 @@ impl VcfHandler {
         // Embed chunks in INFO fields
         for (i, chunk) in chunks.iter().enumerate() {
             if i < vcf.variants.len() && !chunk.is_empty() {
-                let info_key = format!("{}_{:04}", STEGANO_INFO_PREFIX, i);
+                let info_key = format!("{STEGANO_INFO_PREFIX}_{i:04}");
                 vcf.variants[i].info.insert(info_key, chunk.to_string());
                 variants_modified += 1;
                 info_fields_added += 1;
@@ -309,7 +315,7 @@ impl VcfHandler {
         for variant in &vcf.variants {
             for i in 0..10000 {
                 // Reasonable limit
-                let info_key = format!("{}_{:04}", STEGANO_INFO_PREFIX, i);
+                let info_key = format!("{STEGANO_INFO_PREFIX}_{i:04}");
                 if let Some(chunk) = variant.info.get(&info_key) {
                     hex_chunks.push((i, chunk.clone()));
                 }
@@ -403,7 +409,7 @@ impl VcfHandler {
                 for decimal_pos in 1..=3 {
                     if bit_index < payload_bits.len() {
                         let bit = payload_bits[bit_index];
-                        decimal_part += (bit as f32) * 10.0_f32.powi(-(decimal_pos as i32));
+                        decimal_part += (bit as f32) * 10.0_f32.powi(-decimal_pos);
                         bit_index += 1;
                     }
                 }
@@ -436,7 +442,7 @@ impl VcfHandler {
 
                 // Extract up to 3 bits from decimal places
                 for decimal_pos in 1..=3 {
-                    let place_value = 10.0_f32.powi(-(decimal_pos as i32));
+                    let place_value = 10.0_f32.powi(-decimal_pos);
                     let digit = ((decimal_part / place_value) % 10.0).round() as u8;
                     extracted_bits.push(digit & 1);
                 }
@@ -449,7 +455,7 @@ impl VcfHandler {
             if chunk.len() == 8 {
                 let mut byte = 0u8;
                 for (i, &bit) in chunk.iter().enumerate() {
-                    byte |= (bit << i) as u8;
+                    byte |= bit << i;
                 }
                 payload.push(byte);
             }
@@ -499,10 +505,10 @@ impl VcfHandler {
                 // Update FORMAT field
                 if let Some(ref mut format) = variant.format {
                     if !format.contains(steg_format_field) {
-                        format.push_str(&format!(":{}", steg_format_field));
+                        format.push_str(&format!(":{steg_format_field}"));
                     }
                 } else {
-                    variant.format = Some(format!("GT:{}", steg_format_field));
+                    variant.format = Some(format!("GT:{steg_format_field}"));
                 }
 
                 // Add steganographic data to each sample
@@ -594,7 +600,7 @@ impl VcfHandler {
 
                 // Create new variant ID with embedded data
                 let new_id = if variant.id == "." {
-                    format!("{}_{:04}_{}", CUSTOM_ID_PREFIX, i, chunk)
+                    format!("{CUSTOM_ID_PREFIX}_{i:04}_{chunk}")
                 } else {
                     format!("{}_{}", variant.id, chunk)
                 };
@@ -693,7 +699,7 @@ impl VcfHandler {
         let mut format_info = HashMap::new();
         format_info.insert(
             "method".to_string(),
-            serde_json::Value::String(format!("{:?}", strategy)),
+            serde_json::Value::String(format!("{strategy:?}")),
         );
         format_info.insert(
             "variants".to_string(),
@@ -758,7 +764,7 @@ impl VcfHandler {
 
         // Quality field
         if let Some(qual) = variant.qual {
-            fields.push(format!("{:.3}", qual));
+            fields.push(format!("{qual:.3}"));
         } else {
             fields.push(".".to_string());
         }
@@ -777,7 +783,7 @@ impl VcfHandler {
                     if v.is_empty() {
                         k.clone()
                     } else {
-                        format!("{}={}", k, v)
+                        format!("{k}={v}")
                     }
                 })
                 .collect::<Vec<_>>()

@@ -223,6 +223,12 @@ const STEGANO_TAG_PREFIX: &str = "ZS"; // Custom tag prefix for steganographic d
 #[allow(dead_code)]
 const MAX_OPTIONAL_FIELD_SIZE: usize = 255;
 
+impl Default for SamBamHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SamBamHandler {
     pub fn new() -> Self {
         Self
@@ -621,7 +627,7 @@ impl SamBamHandler {
         }
 
         // Read sequence (4-bit encoded)
-        let seq_bytes = ((l_seq + 1) / 2) as usize;
+        let seq_bytes = l_seq.div_ceil(2) as usize;
         let seq = if *offset + seq_bytes <= data.len() {
             data[*offset..*offset + seq_bytes].to_vec()
         } else {
@@ -703,7 +709,7 @@ impl SamBamHandler {
         // Add steganographic optional fields
         for (i, chunk) in chunks.iter().enumerate() {
             if i < sam.alignments.len() && !chunk.is_empty() {
-                let field_tag = format!("{}{:02}", STEGANO_TAG_PREFIX, i);
+                let field_tag = format!("{STEGANO_TAG_PREFIX}{i:02}");
                 let optional_field = SamOptionalField {
                     tag: field_tag,
                     field_type: 'Z', // String type
@@ -821,7 +827,7 @@ impl SamBamHandler {
                     let ascii_val = c as u8;
 
                     // Ensure quality score is in valid range (33-126)
-                    if ascii_val >= 33 && ascii_val <= 126 {
+                    if (33..=126).contains(&ascii_val) {
                         // Modify LSB
                         let new_val = (ascii_val & 0xFE) | payload_bits[bit_index];
                         modified_qual.push(new_val as char);
@@ -868,7 +874,7 @@ impl SamBamHandler {
                 }
 
                 let ascii_val = c as u8;
-                if ascii_val >= 33 && ascii_val <= 126 {
+                if (33..=126).contains(&ascii_val) {
                     extracted_bits.push(ascii_val & 1);
                 }
             }
@@ -903,7 +909,7 @@ impl SamBamHandler {
         let comment_line = SamHeaderLine {
             header_type: "CO".to_string(),
             tags: HashMap::new(),
-            raw_line: format!("@CO\tSTEGANO_DATA:{}", hex_payload),
+            raw_line: format!("@CO\tSTEGANO_DATA:{hex_payload}"),
         };
 
         sam.header_lines.push(comment_line);
@@ -992,7 +998,7 @@ impl SamBamHandler {
         let mut format_info = HashMap::new();
         format_info.insert(
             "method".to_string(),
-            serde_json::Value::String(format!("{:?}", strategy)),
+            serde_json::Value::String(format!("{strategy:?}")),
         );
         format_info.insert(
             "alignment_records".to_string(),
@@ -1075,11 +1081,10 @@ impl SamBamHandler {
                     // Basic validation
                     for alignment in &sam.alignments {
                         // Check sequence and quality lengths match
-                        if alignment.seq != "*" && alignment.qual != "*" {
-                            if alignment.seq.len() != alignment.qual.len() {
+                        if alignment.seq != "*" && alignment.qual != "*"
+                            && alignment.seq.len() != alignment.qual.len() {
                                 return Ok(false);
                             }
-                        }
 
                         // Validate sequence characters
                         for c in alignment.seq.chars() {

@@ -187,6 +187,12 @@ impl Default for MLConfig {
     }
 }
 
+impl Default for MLOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MLOptimizer {
     /// Create a new ML optimizer with default configuration
     pub fn new() -> Self {
@@ -305,7 +311,7 @@ impl MLOptimizer {
         for example in &self.training_data {
             format_data
                 .entry(example.carrier_features.format.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(example);
         }
 

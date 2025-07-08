@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_integrity_system_default() {
-        let system = IntegritySystem::default();
+        let system = IntegritySystem;
         let correction_codes = system.generate_error_correction(b"test", 2);
         assert!(!correction_codes.is_empty());
     }
@@ -105,7 +105,7 @@ mod tests {
         assert!(!correction_codes.is_empty());
 
         // Should generate codes for each chunk
-        let expected_chunks = (data.len() + 3) / 4; // ceiling division
+        let expected_chunks = data.len().div_ceil(4); // ceiling division
         assert_eq!(correction_codes.len(), expected_chunks);
     }
 

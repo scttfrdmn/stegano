@@ -7,6 +7,12 @@ use std::time::Instant;
 
 pub struct GenericHandler;
 
+impl Default for GenericHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GenericHandler {
     pub fn new() -> Self {
         Self
@@ -164,7 +170,7 @@ impl DataHandler for GenericHandler {
         let data_size = carrier.raw_data.len();
 
         // Reserve 32 bits for payload length header
-        let available_bits = if data_size > 32 { data_size - 32 } else { 0 };
+        let available_bits = data_size.saturating_sub(32);
         let available_bytes = available_bits / 8;
 
         // LSB embedding uses 1 bit per carrier byte

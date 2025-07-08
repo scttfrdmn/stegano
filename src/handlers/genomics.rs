@@ -46,6 +46,12 @@ const TYPICAL_HIGH_QUALITY_MIN: u8 = 64; // High quality range start
 #[allow(dead_code)]
 const TYPICAL_HIGH_QUALITY_MAX: u8 = 105; // High quality range end
 
+impl Default for GenomicsHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GenomicsHandler {
     pub fn new() -> Self {
         Self
@@ -62,7 +68,7 @@ impl GenomicsHandler {
                 let insertion_point = header_pos + newline_pos;
 
                 // Insert payload as a comment in the header
-                let comment = format!(" | embedded_data:{}", payload_hex);
+                let comment = format!(" | embedded_data:{payload_hex}");
                 data_str.insert_str(insertion_point, &comment);
 
                 // Update the original data by replacing it
@@ -218,7 +224,7 @@ impl GenomicsHandler {
         );
         format_info.insert(
             "strategy".to_string(),
-            serde_json::Value::String(format!("{:?}", strategy)),
+            serde_json::Value::String(format!("{strategy:?}")),
         );
         format_info.insert(
             "records".to_string(),
@@ -300,7 +306,7 @@ impl GenomicsHandler {
                 // Check if we have more bits to embed
                 if bit_index < payload_bits.len() {
                     // Validate quality score range
-                    if ascii_val < MIN_QUALITY_ASCII || ascii_val > MAX_QUALITY_ASCII {
+                    if !(MIN_QUALITY_ASCII..=MAX_QUALITY_ASCII).contains(&ascii_val) {
                         new_quality.push(c);
                         continue;
                     }
@@ -316,12 +322,12 @@ impl GenomicsHandler {
                     // Embed the payload bits
                     for i in 0..bits_to_embed {
                         if bit_index + i < payload_bits.len() {
-                            modified_val |= (payload_bits[bit_index + i] << i) as u8;
+                            modified_val |= payload_bits[bit_index + i] << i;
                         }
                     }
 
                     // Ensure the modified quality score is still valid
-                    if modified_val >= MIN_QUALITY_ASCII && modified_val <= MAX_QUALITY_ASCII {
+                    if (MIN_QUALITY_ASCII..=MAX_QUALITY_ASCII).contains(&modified_val) {
                         new_quality.push(modified_val as char);
                         quality_chars_modified += 1;
                         bit_index += bits_to_embed;
@@ -386,7 +392,7 @@ impl GenomicsHandler {
                 let ascii_val = c as u8;
 
                 // Validate quality score range
-                if ascii_val < MIN_QUALITY_ASCII || ascii_val > MAX_QUALITY_ASCII {
+                if !(MIN_QUALITY_ASCII..=MAX_QUALITY_ASCII).contains(&ascii_val) {
                     continue;
                 }
 
@@ -404,7 +410,7 @@ impl GenomicsHandler {
             if chunk.len() == 8 {
                 let mut byte = 0u8;
                 for (i, &bit) in chunk.iter().enumerate() {
-                    byte |= (bit << i) as u8;
+                    byte |= bit << i;
                 }
                 full_payload.push(byte);
             }
@@ -450,7 +456,7 @@ impl GenomicsHandler {
             // Check quality score range
             for c in record.quality.chars() {
                 let ascii_val = c as u8;
-                if ascii_val < MIN_QUALITY_ASCII || ascii_val > MAX_QUALITY_ASCII {
+                if !(MIN_QUALITY_ASCII..=MAX_QUALITY_ASCII).contains(&ascii_val) {
                     return Ok(false);
                 }
             }

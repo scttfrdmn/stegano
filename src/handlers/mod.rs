@@ -39,6 +39,12 @@ pub struct HandlerRegistry {
     handlers: Vec<Box<dyn DataHandler>>,
 }
 
+impl Default for HandlerRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HandlerRegistry {
     pub fn new() -> Self {
         Self {

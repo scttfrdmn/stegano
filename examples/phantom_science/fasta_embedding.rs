@@ -44,7 +44,7 @@ impl FastaPhantomIntegration {
                     if chunk_size > 0 {
                         let chunk =
                             &payload_hex[embedded_bytes * 2..embedded_bytes * 2 + chunk_size];
-                        let comment = format!(" |ps_data:{}", chunk);
+                        let comment = format!(" |ps_data:{chunk}");
                         data_str.insert_str(insertion_point, &comment);
                         embedded_bytes += chunk_size / 2;
                     }
@@ -105,7 +105,7 @@ impl FastaPhantomIntegration {
         }
 
         hex::decode(&combined_hex)
-            .map_err(|e| SteganoError::IntegrityError(format!("Hex decode error: {}", e)))
+            .map_err(|e| SteganoError::IntegrityError(format!("Hex decode error: {e}")))
     }
 
     /// Estimate capacity for phantom-science FASTA embedding
@@ -207,7 +207,7 @@ GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG";
     let payload_bytes = phantom_payload.to_string().into_bytes();
 
     println!("📊 Phantom-Science Payload:");
-    println!("{}\n", phantom_payload.to_string());
+    println!("{}\n", phantom_payload);
 
     // Analyze capacity
     println!("📈 Analyzing FASTA capacity...");
@@ -243,7 +243,7 @@ GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG";
     ];
 
     for (strategy_name, preserve_biology) in strategies {
-        println!("🔬 Testing: {}", strategy_name);
+        println!("🔬 Testing: {strategy_name}");
 
         let mut test_data = carrier_data.clone();
 
@@ -255,7 +255,7 @@ GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG";
         )
         .await?;
 
-        println!("   Embedded: {} bytes", embedded_bytes);
+        println!("   Embedded: {embedded_bytes} bytes");
 
         // Extract and verify
         let extracted = FastaPhantomIntegration::extract_from_headers(&test_data)?;
@@ -291,8 +291,8 @@ GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG";
         .filter(|c| matches!(c, 'A' | 'T' | 'C' | 'G' | 'a' | 't' | 'c' | 'g'))
         .count();
 
-    println!("   Sequence headers preserved: {}", sequence_count);
-    println!("   Nucleotide characters: {}", nucleotide_chars);
+    println!("   Sequence headers preserved: {sequence_count}");
+    println!("   Nucleotide characters: {nucleotide_chars}");
     println!(
         "   FASTA format valid: {}",
         modified_str.starts_with('>') && modified_str.contains('\n')

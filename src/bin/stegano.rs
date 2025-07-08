@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 stegano::cli::commands::handle_embed(&input, &payload, &output, password.as_deref())
                     .await
             {
-                eprintln!("❌ Embedding failed: {}", e);
+                eprintln!("❌ Embedding failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -30,13 +30,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(e) =
                 stegano::cli::commands::handle_extract(&input, &output, password.as_deref()).await
             {
-                eprintln!("❌ Extraction failed: {}", e);
+                eprintln!("❌ Extraction failed: {e}");
                 std::process::exit(1);
             }
         }
         Commands::Analyze { input } => {
             if let Err(e) = stegano::cli::commands::handle_analyze(&input).await {
-                eprintln!("❌ Analysis failed: {}", e);
+                eprintln!("❌ Analysis failed: {e}");
                 std::process::exit(1);
             }
         }

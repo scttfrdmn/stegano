@@ -93,6 +93,12 @@ pub struct StrategyAgent {
     _previous_action: Option<String>,
 }
 
+impl Default for AdaptiveStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdaptiveStrategy {
     /// Create new adaptive strategy engine
     pub fn new() -> Self {
@@ -158,7 +164,7 @@ impl AdaptiveStrategy {
         // Add to history
         self.strategy_history
             .entry(features.format.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(performance);
 
         // Update optimal strategy if this one performs better
@@ -179,7 +185,7 @@ impl AdaptiveStrategy {
                 let key = self.strategy_key(&perf.params);
                 strategy_groups
                     .entry(key)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(perf);
             }
 
@@ -379,7 +385,7 @@ impl StrategyAgent {
 
         self.q_table
             .entry(state.to_string())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(action.to_string(), new_q);
     }
 

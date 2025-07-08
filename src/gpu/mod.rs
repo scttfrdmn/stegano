@@ -212,7 +212,7 @@ mod tests {
 
         assert!(chunk_size > 0);
         assert!(chunk_size <= 1024 * 1024); // Reasonable upper bound
-        println!("Optimal chunk size: {} bytes", chunk_size);
+        println!("Optimal chunk size: {chunk_size} bytes");
     }
 
     #[test]

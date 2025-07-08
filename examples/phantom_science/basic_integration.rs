@@ -10,7 +10,7 @@ use stegano::*;
 
 /// Phantom-science integration metadata structure
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
-struct PhantomScienceMetadata {
+pub struct PhantomScienceMetadata {
     pub sample_id: String,
     pub processing_timestamp: u64,
     pub chain_of_custody: Vec<String>,
@@ -45,14 +45,13 @@ impl PhantomScienceMetadata {
     }
 
     pub fn to_json(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|e| {
-            SteganoError::InvalidParameter(format!("JSON serialization failed: {}", e))
-        })
+        serde_json::to_vec(self)
+            .map_err(|e| SteganoError::InvalidParameter(format!("JSON serialization failed: {e}")))
     }
 
     pub fn from_json(data: &[u8]) -> Result<Self> {
         serde_json::from_slice(data).map_err(|e| {
-            SteganoError::InvalidParameter(format!("JSON deserialization failed: {}", e))
+            SteganoError::InvalidParameter(format!("JSON deserialization failed: {e}"))
         })
     }
 }
@@ -223,7 +222,7 @@ CGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTA";
     metadata.set_lab_notes("High quality sample, good coverage across all regions");
 
     println!("📊 Original Metadata:");
-    println!("{:#?}\n", metadata);
+    println!("{metadata:#?}\n");
 
     // Analyze capacity
     println!("📈 Analyzing capacity...");
@@ -264,7 +263,7 @@ CGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTA";
         .await?;
 
     println!("📊 Extracted Metadata:");
-    println!("{:#?}\n", extracted_metadata);
+    println!("{extracted_metadata:#?}\n");
 
     // Verify roundtrip
     println!("✅ Verification:");

@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     println!("🎵 Audio Signal Data:");
     println!("   Format: {:?}", carrier.format);
     println!("   Sample rate: {} Hz", carrier.sampling_rate.unwrap());
-    println!("   Duration: {} seconds", duration);
+    println!("   Duration: {duration} seconds");
     println!("   Size: {} bytes", carrier.raw_data.len());
 
     // Note: This is a placeholder - full signal steganography would require

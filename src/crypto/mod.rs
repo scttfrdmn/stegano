@@ -60,7 +60,7 @@ impl CryptoLayer {
         let encrypted_data = self
             .cipher
             .encrypt(nonce, plaintext)
-            .map_err(|e| SteganoError::EncryptionError(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| SteganoError::EncryptionError(format!("Encryption failed: {e}")))?;
 
         // Generate hash for integrity
         let mut hasher = Hasher::new();
@@ -94,7 +94,7 @@ impl CryptoLayer {
         let plaintext = self
             .cipher
             .decrypt(nonce, secure_payload.encrypted_data.as_ref())
-            .map_err(|e| SteganoError::EncryptionError(format!("Decryption failed: {}", e)))?;
+            .map_err(|e| SteganoError::EncryptionError(format!("Decryption failed: {e}")))?;
 
         Ok(plaintext)
     }

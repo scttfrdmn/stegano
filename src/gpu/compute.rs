@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn test_compute_engine_default() {
-        let engine = ComputeEngine::default();
+        let engine = ComputeEngine;
         let performance = engine.estimate_performance();
         assert!(performance.memory_bandwidth_gbps > 0.0);
     }
@@ -72,11 +72,11 @@ mod tests {
         // On macOS with Metal, should be available
         #[cfg(all(target_os = "macos", feature = "metal"))]
         {
-            println!("Metal availability: {}", available);
+            println!("Metal availability: {available}");
         }
 
         // Availability is platform-dependent, just ensure it returns a boolean
-        assert!(available == true || available == false);
+        assert!(available || !available);
     }
 
     #[test]
