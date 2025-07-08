@@ -81,7 +81,7 @@ pub trait StatisticalAnalyzer: std::fmt::Debug + Send + Sync {
 #[derive(Debug)]
 pub struct DistributionAnalyzer {
     /// Distribution type to test for
-    distribution_tests: Vec<DistributionTest>,
+    _distribution_tests: Vec<DistributionTest>,
 }
 
 /// Distribution test types
@@ -97,7 +97,7 @@ pub enum DistributionTest {
 #[derive(Debug)]
 pub struct CorrelationAnalyzer {
     /// Correlation method
-    method: CorrelationMethod,
+    _method: CorrelationMethod,
 }
 
 /// Correlation analysis methods
@@ -257,7 +257,7 @@ pub enum DetectionCategory {
 #[derive(Debug)]
 pub struct ChiSquareDetector {
     /// Significance level
-    alpha: f32,
+    _alpha: f32,
 }
 
 /// Sample Pairs (SP) analysis
@@ -280,7 +280,7 @@ pub struct HistogramDetector;
 #[derive(Debug)]
 pub struct MLDetector {
     /// Trained classifier model
-    model_path: String,
+    _model_path: String,
 }
 
 /// Detection score result
@@ -809,7 +809,7 @@ impl AnalysisEngine {
 impl DistributionAnalyzer {
     pub fn new() -> Self {
         Self {
-            distribution_tests: vec![
+            _distribution_tests: vec![
                 DistributionTest::Normality,
                 DistributionTest::Exponential,
                 DistributionTest::Uniform,
@@ -862,7 +862,7 @@ impl StatisticalAnalyzer for DistributionAnalyzer {
 
 impl CorrelationAnalyzer {
     pub fn new(method: CorrelationMethod) -> Self {
-        Self { method }
+        Self { _method: method }
     }
 }
 
@@ -966,7 +966,7 @@ impl StatisticalAnalyzer for OutlierAnalyzer {
 
 impl ChiSquareDetector {
     pub fn new(alpha: f32) -> Self {
-        Self { alpha }
+        Self { _alpha: alpha }
     }
 }
 

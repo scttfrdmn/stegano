@@ -217,8 +217,10 @@ pub struct SamBamEmbedResult {
 
 /// Constants for SAM/BAM steganography
 const BAM_MAGIC: [u8; 4] = [b'B', b'A', b'M', 1];
+#[allow(dead_code)]
 const SAM_HEADER_PREFIX: u8 = b'@';
 const STEGANO_TAG_PREFIX: &str = "ZS"; // Custom tag prefix for steganographic data
+#[allow(dead_code)]
 const MAX_OPTIONAL_FIELD_SIZE: usize = 255;
 
 impl SamBamHandler {

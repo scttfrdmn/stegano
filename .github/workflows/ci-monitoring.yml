@@ -65,7 +65,7 @@ jobs:
             --format markdown
             
       - name: Upload status report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ci-status-report-${{ github.run_number }}
           path: |
@@ -262,7 +262,7 @@ jobs:
             --output usage-dashboard.html
             
       - name: Upload usage dashboard
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: usage-dashboard-${{ github.run_number }}
           path: usage-dashboard.html

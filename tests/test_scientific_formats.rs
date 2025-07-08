@@ -73,7 +73,7 @@ r005	147	chr1	25	30	10M	=	7	-25	GCCTAAGCTA	IIIIIIIIII	AS:i:20	MD:Z:10
 #[tokio::test]
 async fn test_vcf_info_fields_embedding() {
     let vcf_data = create_test_vcf_data();
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
+    let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -136,7 +136,7 @@ async fn test_vcf_info_fields_embedding() {
 #[tokio::test]
 async fn test_vcf_quality_precision_embedding() {
     let vcf_data = create_test_vcf_data();
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
+    let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -187,7 +187,7 @@ async fn test_vcf_quality_precision_embedding() {
 #[tokio::test]
 async fn test_vcf_format_fields_embedding() {
     let vcf_data = create_test_vcf_data();
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
+    let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -800,7 +800,7 @@ fn test_scientific_format_error_handling() {
 async fn test_large_payload_handling() {
     // Test handling of payloads that exceed capacity
     let vcf_data = create_test_vcf_data();
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
+    let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
     let handler = VcfHandler::new();
 
     // Create a very large payload

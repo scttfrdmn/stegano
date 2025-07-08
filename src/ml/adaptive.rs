@@ -65,7 +65,7 @@ pub struct StrategyBandit {
     pull_counts: Vec<u32>,
 
     /// Confidence bounds for each arm
-    confidence_bounds: Vec<f32>,
+    _confidence_bounds: Vec<f32>,
 
     /// Total number of pulls
     total_pulls: u32,
@@ -90,7 +90,7 @@ pub struct StrategyAgent {
     current_state: Option<String>,
 
     /// Previous action taken
-    previous_action: Option<String>,
+    _previous_action: Option<String>,
 }
 
 impl AdaptiveStrategy {
@@ -279,7 +279,7 @@ impl StrategyBandit {
             arms: strategies,
             rewards: vec![Vec::new(); num_arms],
             pull_counts: vec![0; num_arms],
-            confidence_bounds: vec![0.0; num_arms],
+            _confidence_bounds: vec![0.0; num_arms],
             total_pulls: 0,
         }
     }
@@ -353,7 +353,7 @@ impl StrategyAgent {
             gamma: gamma.clamp(0.0, 1.0),
             epsilon: epsilon.clamp(0.0, 1.0),
             current_state: None,
-            previous_action: None,
+            _previous_action: None,
         }
     }
 

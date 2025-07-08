@@ -20,7 +20,7 @@ pub struct BayesianOptimizer {
     observations: Vec<Observation>,
 
     /// Optimization bounds for each parameter
-    parameter_bounds: ParameterBounds,
+    _parameter_bounds: ParameterBounds,
 
     /// Configuration for Bayesian optimization
     config: BayesianConfig,
@@ -241,7 +241,7 @@ impl BayesianOptimizer {
             }),
             acquisition_config: AcquisitionConfig::default(),
             observations: Vec::new(),
-            parameter_bounds: bounds,
+            _parameter_bounds: bounds,
             config,
         }
     }

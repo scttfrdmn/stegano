@@ -11,7 +11,7 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct OptimizationEngine {
     /// Optimization configuration
-    config: OptimizationConfig,
+    pub config: OptimizationConfig,
 
     /// Objective function evaluator
     objective_evaluator: ObjectiveEvaluator,
@@ -207,13 +207,13 @@ pub struct SpeedObjective {
 /// Detection resistance objective
 #[derive(Debug)]
 pub struct StealthObjective {
-    weight: f32,
+    _weight: f32,
 }
 
 /// Quality preservation objective
 #[derive(Debug)]
 pub struct QualityObjective {
-    weight: f32,
+    _weight: f32,
 }
 
 /// Combined objective value
@@ -247,19 +247,19 @@ pub trait OptimizationConstraint: std::fmt::Debug + Send + Sync {
 /// Memory usage constraint
 #[derive(Debug)]
 pub struct MemoryConstraint {
-    max_memory_mb: usize,
+    _max_memory_mb: usize,
 }
 
 /// Time constraint
 #[derive(Debug)]
 pub struct TimeConstraint {
-    max_time_ms: u64,
+    _max_time_ms: u64,
 }
 
 /// Quality constraint
 #[derive(Debug)]
 pub struct QualityConstraint {
-    min_quality: f32,
+    _min_quality: f32,
 }
 
 /// Single optimization step record
@@ -519,12 +519,6 @@ impl OptimizationEngine {
                 );
             }
 
-            // Check for premature convergence
-            if diversity < 0.01 {
-                log::warn!("Population diversity too low, introducing mutations");
-                population = self.introduce_diversity(&population);
-            }
-
             // Advanced genetic operators
             population = self.advanced_genetic_operators(
                 &evaluated_population,
@@ -533,6 +527,12 @@ impl OptimizationEngine {
                 iteration,
                 stagnation_counter,
             );
+
+            // Check for premature convergence and apply diversity enhancement
+            if diversity < 0.01 {
+                log::warn!("Population diversity too low, introducing mutations");
+                population = self.introduce_diversity(&population);
+            }
 
             // Adaptive parameter adjustment
             let _adaptive_mutation_rate =
@@ -590,7 +590,7 @@ impl OptimizationEngine {
         &mut self,
         carrier: &CarrierData,
         payload: &[u8],
-        mut inertia: f32,
+        _inertia: f32,
         cognitive: f32,
         social: f32,
     ) -> Result<OptimizationResult> {
@@ -626,7 +626,7 @@ impl OptimizationEngine {
 
         for iteration in 0..max_iterations {
             // Adaptive inertia weight (linearly decreasing)
-            inertia = 0.9 - (0.5 * iteration as f32 / max_iterations as f32);
+            let inertia = 0.9 - (0.5 * iteration as f32 / max_iterations as f32);
 
             // Adaptive cognitive and social parameters
             let adaptive_cognitive =
@@ -830,7 +830,7 @@ impl OptimizationEngine {
         let max_iterations = self.config.max_iterations;
 
         // Initialize population
-        let mut population = self.initialize_population(population_size);
+        let population = self.initialize_population(population_size);
         let mut evaluated_population: Vec<(EmbedParams, ObjectiveValue)> = Vec::new();
 
         // Evaluate initial population
@@ -842,7 +842,7 @@ impl OptimizationEngine {
             evaluated_population.push((individual.clone(), objective));
         }
 
-        let mut pareto_fronts: Vec<Vec<(EmbedParams, ObjectiveValue)>> = Vec::new();
+        let mut pareto_fronts: Vec<Vec<(EmbedParams, ObjectiveValue)>>;
 
         for iteration in 0..max_iterations {
             // Calculate Pareto fronts using fast non-dominated sorting
@@ -896,12 +896,6 @@ impl OptimizationEngine {
             // Environmental selection for next generation
             evaluated_population =
                 self.environmental_selection(&evaluated_population, population_size);
-
-            // Update population
-            population = evaluated_population
-                .iter()
-                .map(|(params, _)| params.clone())
-                .collect();
 
             // Check convergence
             if self.check_multi_objective_convergence(iteration, &pareto_fronts) {
@@ -1613,6 +1607,7 @@ impl OptimizationEngine {
     }
 
     /// Check convergence criteria
+    #[allow(dead_code)]
     fn check_convergence(&self, iteration: usize, _best_objective: f32) -> bool {
         iteration >= self.config.max_iterations
     }

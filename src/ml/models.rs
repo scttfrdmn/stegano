@@ -14,7 +14,7 @@ pub struct NeuralNetworkModel {
     layers: Vec<NetworkLayer>,
 
     /// Learning rate for training
-    learning_rate: f32,
+    _learning_rate: f32,
 
     /// Training history
     training_history: Vec<TrainingExample>,
@@ -58,7 +58,7 @@ pub struct FeatureNormalization {
     std_devs: Vec<f32>,
 
     /// Feature names for reference
-    feature_names: Vec<String>,
+    _feature_names: Vec<String>,
 }
 
 impl FeatureNormalization {
@@ -67,7 +67,7 @@ impl FeatureNormalization {
         Self {
             means: Vec::new(),
             std_devs: Vec::new(),
-            feature_names: Vec::new(),
+            _feature_names: Vec::new(),
         }
     }
 }
@@ -92,73 +92,73 @@ pub struct DecisionTreeModel {
 #[derive(Debug, Clone)]
 pub struct TreeNode {
     /// Feature index for split (if internal node)
-    feature_index: Option<usize>,
+    _feature_index: Option<usize>,
 
     /// Threshold value for split
-    threshold: Option<f32>,
+    _threshold: Option<f32>,
 
     /// Left child (feature <= threshold)
-    left: Option<Box<TreeNode>>,
+    _left: Option<Box<TreeNode>>,
 
     /// Right child (feature > threshold)
-    right: Option<Box<TreeNode>>,
+    _right: Option<Box<TreeNode>>,
 
     /// Predicted parameters (if leaf node)
     prediction: Option<EmbedParams>,
 
     /// Confidence in prediction
-    confidence: f32,
+    _confidence: f32,
 
     /// Number of training samples at this node
-    sample_count: usize,
+    _sample_count: usize,
 }
 
 /// Random forest model combining multiple decision trees
 #[derive(Debug)]
 pub struct RandomForestModel {
     /// Collection of decision trees
-    trees: Vec<DecisionTreeModel>,
+    _trees: Vec<DecisionTreeModel>,
 
     /// Number of trees in forest
-    num_trees: usize,
+    _num_trees: usize,
 
     /// Fraction of features to consider for each tree
-    feature_fraction: f32,
+    _feature_fraction: f32,
 
     /// Random seed for reproducibility
-    random_seed: u64,
+    _random_seed: u64,
 }
 
 /// Linear regression model for performance prediction
 #[derive(Debug)]
 pub struct LinearRegressionModel {
     /// Regression coefficients
-    coefficients: Vec<f32>,
+    _coefficients: Vec<f32>,
 
     /// Intercept term
-    intercept: f32,
+    _intercept: f32,
 
     /// Feature normalization
-    normalization: FeatureNormalization,
+    _normalization: FeatureNormalization,
 
     /// R-squared score
-    r_squared: f32,
+    _r_squared: f32,
 }
 
 /// K-means clustering for carrier similarity analysis
 #[derive(Debug)]
 pub struct ClusteringModel {
     /// Cluster centroids
-    centroids: Vec<Vec<f32>>,
+    _centroids: Vec<Vec<f32>>,
 
     /// Number of clusters
-    num_clusters: usize,
+    _num_clusters: usize,
 
     /// Optimal strategies for each cluster
-    cluster_strategies: HashMap<usize, EmbedParams>,
+    _cluster_strategies: HashMap<usize, EmbedParams>,
 
     /// Cluster performance metrics
-    cluster_performance: HashMap<usize, PerformanceMetrics>,
+    _cluster_performance: HashMap<usize, PerformanceMetrics>,
 }
 
 impl NeuralNetworkModel {
@@ -194,7 +194,7 @@ impl NeuralNetworkModel {
 
         Self {
             layers,
-            learning_rate,
+            _learning_rate: learning_rate,
             training_history: Vec::new(),
             performance: ModelPerformance {
                 capacity_mse: f32::INFINITY,
@@ -474,13 +474,13 @@ impl DecisionTreeModel {
             let right_child = self.build_tree(&right_examples, depth + 1).map(Box::new);
 
             Some(TreeNode {
-                feature_index: Some(feature_idx),
-                threshold: Some(threshold),
-                left: left_child,
-                right: right_child,
+                _feature_index: Some(feature_idx),
+                _threshold: Some(threshold),
+                _left: left_child,
+                _right: right_child,
                 prediction: None,
-                confidence: 0.0,
-                sample_count: examples.len(),
+                _confidence: 0.0,
+                _sample_count: examples.len(),
             })
         } else {
             Some(self.create_leaf_node(examples))
@@ -503,17 +503,17 @@ impl DecisionTreeModel {
         };
 
         TreeNode {
-            feature_index: None,
-            threshold: None,
-            left: None,
-            right: None,
+            _feature_index: None,
+            _threshold: None,
+            _left: None,
+            _right: None,
             prediction: Some(prediction),
-            confidence: if examples.is_empty() {
+            _confidence: if examples.is_empty() {
                 0.0
             } else {
                 1.0 / examples.len() as f32
             },
-            sample_count: examples.len(),
+            _sample_count: examples.len(),
         }
     }
 
@@ -619,7 +619,7 @@ mod tests {
     fn test_neural_network_creation() {
         let model = NeuralNetworkModel::new(&[10, 5, 3], 0.01);
         assert_eq!(model.layers.len(), 2);
-        assert_eq!(model.learning_rate, 0.01);
+        assert_eq!(model._learning_rate, 0.01);
     }
 
     #[test]

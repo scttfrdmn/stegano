@@ -70,7 +70,7 @@ pub struct ConsoleWriter {
 #[derive(Debug)]
 pub struct FileWriter {
     file: std::fs::File,
-    path: std::path::PathBuf,
+    _path: std::path::PathBuf,
 }
 
 impl Default for LoggingConfig {
@@ -397,7 +397,7 @@ impl FileWriter {
             .append(true)
             .open(&path)?;
 
-        Ok(Self { file, path })
+        Ok(Self { file, _path: path })
     }
 }
 

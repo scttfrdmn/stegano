@@ -133,7 +133,7 @@ pub struct NoiseAugmentation {
 /// Feature scaling augmentation
 #[derive(Debug)]
 pub struct ScalingAugmentation {
-    scale_range: (f32, f32),
+    _scale_range: (f32, f32),
 }
 
 /// Metrics tracking during training
@@ -189,7 +189,7 @@ pub struct HoldOutValidator {
 /// Bootstrap validation
 #[derive(Debug)]
 pub struct BootstrapValidator {
-    num_samples: usize,
+    _num_samples: usize,
 }
 
 /// Validation result
@@ -218,7 +218,7 @@ pub struct TrainingSession {
     current_epoch: usize,
 
     /// Training start time
-    start_time: std::time::Instant,
+    _start_time: std::time::Instant,
 
     /// Current learning rate
     current_learning_rate: f32,
@@ -276,7 +276,7 @@ impl TrainingPipeline {
 
         let mut session = TrainingSession {
             current_epoch: 0,
-            start_time: std::time::Instant::now(),
+            _start_time: std::time::Instant::now(),
             current_learning_rate: self.get_initial_learning_rate(),
             best_model_state: None,
             should_stop: false,

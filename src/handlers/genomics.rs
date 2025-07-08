@@ -41,7 +41,9 @@ pub struct QualityEmbedResult {
 /// Constants for quality score steganography
 const MIN_QUALITY_ASCII: u8 = 33; // '!'
 const MAX_QUALITY_ASCII: u8 = 126; // '~'
+#[allow(dead_code)]
 const TYPICAL_HIGH_QUALITY_MIN: u8 = 64; // High quality range start
+#[allow(dead_code)]
 const TYPICAL_HIGH_QUALITY_MAX: u8 = 105; // High quality range end
 
 impl GenomicsHandler {

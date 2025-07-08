@@ -19,8 +19,8 @@ pub struct CudaNeuralNetwork {
     layer_sizes: Vec<usize>,
 
     /// GPU memory handles for weights and biases
-    weight_handles: Vec<u64>,
-    bias_handles: Vec<u64>,
+    _weight_handles: Vec<u64>,
+    _bias_handles: Vec<u64>,
 
     /// Learning rate for training
     learning_rate: f32,
@@ -32,7 +32,7 @@ pub struct CudaNeuralNetwork {
     performance_metrics: CudaModelMetrics,
 
     /// Feature normalization parameters
-    normalization: FeatureNormalization,
+    _normalization: FeatureNormalization,
 }
 
 /// CUDA training configuration
@@ -90,16 +90,16 @@ pub struct CudaOptimizer {
     // cuda_backend: Arc<CudaBackend>, // TODO: Enable when CUDA backend is available
 
     /// Optimization algorithm type
-    algorithm: CudaOptimizationAlgorithm,
+    _algorithm: CudaOptimizationAlgorithm,
 
     /// Population or swarm data on GPU
-    population_handle: Option<u64>,
+    _population_handle: Option<u64>,
 
     /// Fitness values on GPU
-    fitness_handle: Option<u64>,
+    _fitness_handle: Option<u64>,
 
     /// Algorithm-specific parameters
-    algorithm_params: HashMap<String, f32>,
+    _algorithm_params: HashMap<String, f32>,
 }
 
 /// CUDA optimization algorithms
@@ -147,13 +147,13 @@ pub struct CudaFeatureExtractor {
     // cuda_backend: Arc<CudaBackend>, // TODO: Enable when CUDA backend is available
 
     /// FFT plan for frequency analysis
-    fft_plan_handle: Option<u64>,
+    _fft_plan_handle: Option<u64>,
 
     /// Wavelet transform parameters
-    wavelet_config: WaveletConfig,
+    _wavelet_config: WaveletConfig,
 
     /// Statistical kernel parameters
-    stats_config: StatisticsConfig,
+    _stats_config: StatisticsConfig,
 }
 
 /// Wavelet transform configuration
@@ -226,8 +226,8 @@ impl CudaNeuralNetwork {
         // Placeholder implementation - will be completed when CUDA backend is available
         Ok(Self {
             layer_sizes,
-            weight_handles: Vec::new(),
-            bias_handles: Vec::new(),
+            _weight_handles: Vec::new(),
+            _bias_handles: Vec::new(),
             learning_rate,
             training_config: CudaTrainingConfig::default(),
             performance_metrics: CudaModelMetrics {
@@ -238,7 +238,7 @@ impl CudaNeuralNetwork {
                 gpu_utilization: Vec::new(),
                 speedup_factor: 1.0,
             },
-            normalization: FeatureNormalization::new(),
+            _normalization: FeatureNormalization::new(),
         })
     }
 
@@ -263,6 +263,7 @@ impl CudaNeuralNetwork {
     }
 
     /// Prepare training data for GPU processing
+    #[allow(dead_code)]
     fn prepare_training_data(&self, examples: &[TrainingExample]) -> Result<(Vec<f32>, Vec<f32>)> {
         let input_size = self.layer_sizes[0];
         let output_size = self.layer_sizes.last().unwrap();
@@ -308,6 +309,7 @@ impl CudaNeuralNetwork {
     }
 
     /// Convert embedding parameters to target vector
+    #[allow(dead_code)]
     fn params_to_target_vector(&self, params: &EmbedParams) -> Result<Vec<f32>> {
         let mut target = vec![
             if matches!(params.error_correction_level, ECLevel::High) {
@@ -411,13 +413,13 @@ impl CudaFeatureExtractor {
     /// Create new CUDA feature extractor (placeholder)
     pub async fn new() -> Result<Self> {
         Ok(Self {
-            fft_plan_handle: None,
-            wavelet_config: WaveletConfig {
+            _fft_plan_handle: None,
+            _wavelet_config: WaveletConfig {
                 wavelet_type: WaveletType::Daubechies4,
                 decomposition_levels: 4,
                 window_size: 256,
             },
-            stats_config: StatisticsConfig {
+            _stats_config: StatisticsConfig {
                 compute_moments: true,
                 entropy_variants: vec![EntropyType::Shannon, EntropyType::Renyi],
                 texture_analysis: true,

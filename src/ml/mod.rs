@@ -23,7 +23,7 @@ pub struct MLOptimizer {
     models: HashMap<DataFormat, Box<dyn MLModel>>,
     config: MLConfig,
     training_data: Vec<TrainingExample>,
-    performance_cache: HashMap<String, PerformanceMetrics>,
+    _performance_cache: HashMap<String, PerformanceMetrics>,
 }
 
 /// Configuration for ML optimization
@@ -194,7 +194,7 @@ impl MLOptimizer {
             models: HashMap::new(),
             config: MLConfig::default(),
             training_data: Vec::new(),
-            performance_cache: HashMap::new(),
+            _performance_cache: HashMap::new(),
         }
     }
 
@@ -204,7 +204,7 @@ impl MLOptimizer {
             models: HashMap::new(),
             config,
             training_data: Vec::new(),
-            performance_cache: HashMap::new(),
+            _performance_cache: HashMap::new(),
         }
     }
 

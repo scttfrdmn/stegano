@@ -212,7 +212,9 @@ pub struct DicomEmbedResult {
 /// DICOM tag constants
 const DICOM_PREAMBLE_LENGTH: usize = 128;
 const DICOM_PREFIX: &str = "DICM";
+#[allow(dead_code)]
 const PRIVATE_GROUP_START: u16 = 0x0009; // Private groups start from 0x0009
+#[allow(dead_code)]
 const PRIVATE_GROUP_END: u16 = 0xFFFE; // Before sequence delimiters
 const PIXEL_DATA_TAG: (u16, u16) = (0x7FE0, 0x0010);
 
@@ -226,13 +228,20 @@ mod dicom_tags {
     pub const IMPLEMENTATION_CLASS_UID: (u16, u16) = (0x0002, 0x0012);
     pub const IMPLEMENTATION_VERSION_NAME: (u16, u16) = (0x0002, 0x0013);
 
+    #[allow(dead_code)]
     pub const SPECIFIC_CHARACTER_SET: (u16, u16) = (0x0008, 0x0005);
+    #[allow(dead_code)]
     pub const IMAGE_TYPE: (u16, u16) = (0x0008, 0x0008);
+    #[allow(dead_code)]
     pub const SOP_CLASS_UID: (u16, u16) = (0x0008, 0x0016);
+    #[allow(dead_code)]
     pub const SOP_INSTANCE_UID: (u16, u16) = (0x0008, 0x0018);
     pub const STUDY_DATE: (u16, u16) = (0x0008, 0x0020);
+    #[allow(dead_code)]
     pub const SERIES_DATE: (u16, u16) = (0x0008, 0x0021);
+    #[allow(dead_code)]
     pub const ACQUISITION_DATE: (u16, u16) = (0x0008, 0x0022);
+    #[allow(dead_code)]
     pub const CONTENT_DATE: (u16, u16) = (0x0008, 0x0023);
 
     pub const PATIENT_NAME: (u16, u16) = (0x0010, 0x0010);

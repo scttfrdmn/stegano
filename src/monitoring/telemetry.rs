@@ -483,7 +483,7 @@ impl TraceContext {
 
         SpanContext {
             span_id,
-            trace_id: self.trace_id.clone(),
+            _trace_id: self.trace_id.clone(),
             span,
         }
     }
@@ -506,7 +506,7 @@ impl TraceContext {
 /// Context for tracking a span within a trace
 pub struct SpanContext {
     span_id: String,
-    trace_id: String,
+    _trace_id: String,
     span: Span,
 }
 

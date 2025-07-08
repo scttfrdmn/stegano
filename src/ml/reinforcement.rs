@@ -18,7 +18,7 @@ pub struct RLAgent {
     policy_network: PolicyNetwork,
 
     /// Agent configuration
-    config: RLConfig,
+    pub config: RLConfig,
 
     /// Learning statistics
     stats: LearningStats,
@@ -40,7 +40,7 @@ pub struct QTable {
     visit_counts: HashMap<StateAction, usize>,
 
     /// State space discretization
-    state_discretization: StateDiscretization,
+    _state_discretization: StateDiscretization,
 }
 
 /// Policy network for continuous action selection
@@ -53,7 +53,7 @@ pub struct PolicyNetwork {
     biases: Vec<Vec<f32>>,
 
     /// Layer dimensions
-    layer_dims: Vec<usize>,
+    _layer_dims: Vec<usize>,
 
     /// Activation functions per layer
     activations: Vec<ActivationFunction>,
@@ -345,7 +345,7 @@ pub struct ExperienceBuffer {
     position: usize,
 
     /// Buffer configuration
-    config: ReplayConfig,
+    _config: ReplayConfig,
 }
 
 /// RL training result
@@ -426,7 +426,7 @@ impl RLAgent {
         let q_table = QTable {
             values: HashMap::new(),
             visit_counts: HashMap::new(),
-            state_discretization,
+            _state_discretization: state_discretization,
         };
 
         let policy_network = PolicyNetwork::new(&config.network_config);
@@ -1189,7 +1189,7 @@ impl PolicyNetwork {
         Self {
             weights,
             biases,
-            layer_dims,
+            _layer_dims: layer_dims,
             activations,
         }
     }
@@ -1249,7 +1249,7 @@ impl ExperienceBuffer {
             experiences: Vec::with_capacity(config.buffer_size),
             max_size: config.buffer_size,
             position: 0,
-            config,
+            _config: config,
         }
     }
 
@@ -1427,7 +1427,7 @@ mod tests {
         };
 
         let network = PolicyNetwork::new(&config);
-        assert_eq!(network.layer_dims, vec![24, 64, 32, 1]);
+        assert_eq!(network._layer_dims, vec![24, 64, 32, 1]);
 
         let input = vec![0.5; 24];
         let output = network.forward(&input);

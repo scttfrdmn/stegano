@@ -127,7 +127,7 @@ r008	147	chr2	400	45	100M	=	100	-390	TTTTTTTTTTCGATCGATCGATCGATCGATCGATCGATCGATC
 async fn test_vcf_allele_frequency_preservation() {
     // Test that allele frequencies remain biologically valid after embedding
     let vcf_data = create_realistic_vcf_data();
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
+    let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
 
     let params = EmbedParams {
         format_specific: {
@@ -156,7 +156,7 @@ async fn test_vcf_allele_frequency_preservation() {
     let payload = b"allele_frequency_preservation_test_data";
 
     // Extract original allele frequencies
-    let original_afs = extract_allele_frequencies(&carrier.data);
+    let original_afs = extract_allele_frequencies(&carrier.raw_data);
     assert!(
         !original_afs.is_empty(),
         "Should extract allele frequencies from VCF"
@@ -203,7 +203,7 @@ async fn test_vcf_allele_frequency_preservation() {
 async fn test_vcf_population_genetics_integrity() {
     // Test preservation of population genetics parameters
     let vcf_data = create_realistic_vcf_data();
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
+    let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
 
     let params = EmbedParams {
         format_specific: {
