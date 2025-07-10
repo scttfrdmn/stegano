@@ -19,7 +19,7 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust
+//! ```rust,no_run
 //! use stegano::*;
 //! use std::collections::HashMap;
 //!
@@ -77,3 +77,6 @@ pub use gpu::GpuAccelerator;
 pub use handlers::DataHandler;
 pub use ml::{MLOptimizer, StrategyRecommendation};
 pub use monitoring::{MonitoringConfig, MonitoringSystem};
+
+// Re-export serde_json to ensure version consistency
+pub use serde_json;

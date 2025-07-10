@@ -31,10 +31,12 @@
 //! ### Creating Carrier Data
 //! ```rust
 //! use stegano::core::*;
+//! use stegano::serde_json::json;
 //!
-//! let data = std::fs::read("sample.png").unwrap();
+//! // Create test data instead of reading file
+//! let data = vec![0u8; 1024];
 //! let mut carrier = CarrierData::new(DataFormat::PNG, data);
-//! carrier.add_metadata("width".to_string(), serde_json::Value::Number(800.into()));
+//! carrier.add_metadata("width".to_string(), json!(800));
 //! ```
 //!
 //! ### Configuring Embedding Parameters
@@ -42,9 +44,11 @@
 //! use stegano::core::*;
 //!
 //! let params = EmbedParams::new(b"secure_key".to_vec())
-//!     .with_error_correction(ECLevel::High)
 //!     .with_stealth_level(StealthLevel::Medium)
 //!     .with_gpu();
+//!
+//! // Or with error correction
+//! let params = EmbedParams::with_error_correction(b"secure_key".to_vec(), ECLevel::High);
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -198,14 +202,15 @@ impl DataFormat {
 /// ```rust
 /// use stegano::core::*;
 /// use std::collections::HashMap;
+/// use stegano::serde_json::json;
 ///
-/// // Create carrier from file data
-/// let data = std::fs::read("sample.png").unwrap();
+/// // Create carrier from test data
+/// let data = vec![0u8; 1024];
 /// let mut carrier = CarrierData::new(DataFormat::PNG, data);
 ///
 /// // Add metadata
-/// carrier.add_metadata("width".to_string(), serde_json::Value::Number(800.into()));
-/// carrier.add_metadata("height".to_string(), serde_json::Value::Number(600.into()));
+/// carrier.add_metadata("width".to_string(), json!(800));
+/// carrier.add_metadata("height".to_string(), json!(600));
 ///
 /// // Set dimensions for image data
 /// carrier.dimensions = Some(Dimensions::new_2d(800, 600));
@@ -321,13 +326,15 @@ impl Dimensions {
 ///
 /// // Advanced configuration with GPU and high stealth
 /// let params = EmbedParams::new(b"my_key".to_vec())
-///     .with_error_correction(ECLevel::High)
 ///     .with_stealth_level(StealthLevel::Maximum)
 ///     .with_gpu();
 ///
-/// // Format-specific parameters
+/// // With error correction
+/// let params = EmbedParams::with_error_correction(b"my_key".to_vec(), ECLevel::High);
+///
+/// // Manual construction with format-specific parameters
 /// let mut format_params = HashMap::new();
-/// format_params.insert("strategy".to_string(), serde_json::Value::String("conservative".to_string()));
+/// format_params.insert("strategy".to_string(), stegano::serde_json::json!("conservative"));
 /// let params = EmbedParams {
 ///     encryption_key: b"key".to_vec(),
 ///     error_correction_level: ECLevel::Medium,
