@@ -63,13 +63,13 @@ impl MetalAccelerator {
 
         // Create buffers
         let carrier_buffer = self.device.new_buffer_with_data(
-            unsafe { mem::transmute(carrier.as_ptr()) },
+            unsafe { mem::transmute::<*const u8, *const libc::c_void>(carrier.as_ptr()) },
             std::mem::size_of_val(carrier) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
         let payload_buffer = self.device.new_buffer_with_data(
-            unsafe { mem::transmute(payload_bits.as_ptr()) },
+            unsafe { mem::transmute::<*const u8, *const libc::c_void>(payload_bits.as_ptr()) },
             std::mem::size_of_val(payload_bits) as u64,
             MTLResourceOptions::StorageModeShared,
         );
