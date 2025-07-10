@@ -1,7 +1,7 @@
 [package]
 name = "stegano"
 version = "0.2.2"
-edition = "2021"
+edition = "2025"
 authors = ["Scott Friedman <scott@friedman.dev>"]
 description = "High-performance scientific data steganography system"
 license-file = "LICENSE"
