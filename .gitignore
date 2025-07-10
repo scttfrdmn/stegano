@@ -62,6 +62,10 @@ criterion/
 /data/test_samples/*.large
 /data/benchmarks/*.bin
 
+# Release artifacts
+*.tar.gz
+*.zip
+
 # Build artifacts
 /docs/book/
 /docs/target/
