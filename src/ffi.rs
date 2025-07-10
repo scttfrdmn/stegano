@@ -444,7 +444,7 @@ pub unsafe extern "C" fn stegano_free(ptr: *mut c_void) {
 /// Returns: Version string (caller must NOT free)
 #[no_mangle]
 pub extern "C" fn stegano_version() -> *const c_char {
-    static VERSION: &str = "0.2.1\0";
+    static VERSION: &str = "0.2.2\0";
     VERSION.as_ptr() as *const c_char
 }
 
