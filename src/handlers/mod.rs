@@ -9,6 +9,7 @@ pub mod signals;
 pub mod vcf;
 
 use crate::core::*;
+use crate::validation::{StatisticalValidationSuite, ValidationReport};
 use async_trait::async_trait;
 
 #[async_trait]

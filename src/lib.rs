@@ -21,7 +21,6 @@
 //!
 //! ```rust,no_run
 //! use stegano::*;
-//! use std::collections::HashMap;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
@@ -31,17 +30,20 @@
 //!         std::fs::read("data.bin")?
 //!     );
 //!
-//!     // Setup embedding parameters
+//!     // Setup embedding parameters with validation
 //!     let params = EmbedParams::new(b"secure_password".to_vec())
-//!         .with_stealth_level(StealthLevel::High);
+//!         .with_stealth_level(StealthLevel::High)
+//!         .with_validation();
 //!
-//!     // Get appropriate handler and embed data
-//!     let registry = handlers::HandlerRegistry::new();
-//!     let handler = registry.get_handler(&carrier.format).unwrap();
-//!     
+//!     // Create embedder and embed data with integrated validation
+//!     let embedder = SteganoEmbedder::new();
 //!     let payload = b"Secret research data";
-//!     let result = handler.embed(&mut carrier, payload, &params).await?;
+//!     let result = embedder.embed(&mut carrier, payload, &params).await?;
+//!     
 //!     println!("Embedded {} bytes", result.bytes_embedded);
+//!     if let Some(report) = result.validation_report {
+//!         println!("Validation score: {}/10", report.overall_score());
+//!     }
 //!
 //!     Ok(())
 //! }
@@ -59,6 +61,7 @@ pub mod capacity;
 pub mod cli;
 pub mod core;
 pub mod crypto;
+pub mod embedding;
 pub mod error_correction;
 pub mod ffi;
 pub mod gpu;
@@ -66,17 +69,20 @@ pub mod handlers;
 pub mod integrity;
 pub mod ml;
 pub mod monitoring;
+pub mod validation;
 
 pub use core::*;
 
 // Re-export main API types
 pub use capacity::CapacityEstimator;
 pub use crypto::{CryptoLayer, SecurePayload};
+pub use embedding::SteganoEmbedder;
 pub use error_correction::IntegritySystem;
 pub use gpu::GpuAccelerator;
 pub use handlers::DataHandler;
 pub use ml::{MLOptimizer, StrategyRecommendation};
 pub use monitoring::{MonitoringConfig, MonitoringSystem};
+pub use validation::{StatisticalValidationSuite, ValidationReport};
 
 // Re-export serde_json to ensure version consistency
 pub use serde_json;

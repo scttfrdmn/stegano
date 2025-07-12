@@ -3,10 +3,8 @@ name: CI/CD Flow Monitoring
 on:
   # Monitor CI/CD status periodically
   schedule:
-    # Every 30 minutes during work hours (9 AM - 6 PM UTC, Mon-Fri)
-    - cron: '*/30 9-18 * * 1-5'
-    # Every 2 hours during off-hours and weekends
-    - cron: '0 */2 * * *'
+    # Daily at 9 AM UTC, Monday-Friday only
+    - cron: '0 9 * * 1-5'
   
   # Also run on workflow completion
   workflow_run:
@@ -74,7 +72,7 @@ jobs:
           retention-days: 30
           
       - name: Send Slack notification
-        if: env.SLACK_WEBHOOK_URL && (steps.check-status.outputs.has_issues == 'true' || github.event.inputs.notification_level == 'all')
+        if: env.SLACK_WEBHOOK_URL && steps.check-status.outputs.has_issues == 'true'
         uses: 8398a7/action-slack@v3
         with:
           status: custom
@@ -115,7 +113,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           
       - name: Send Discord notification
-        if: env.DISCORD_WEBHOOK_URL && (steps.check-status.outputs.has_issues == 'true' || github.event.inputs.notification_level == 'all')
+        if: env.DISCORD_WEBHOOK_URL && steps.check-status.outputs.has_issues == 'true'
         run: |
           python3 scripts/send-discord-notification.py \
             --webhook "${{ secrets.DISCORD_WEBHOOK_URL }}" \

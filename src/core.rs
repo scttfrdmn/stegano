@@ -304,7 +304,7 @@ impl Dimensions {
 /// Parameters controlling the steganographic embedding process.
 ///
 /// `EmbedParams` provides comprehensive configuration for embedding operations,
-/// including security, performance, and format-specific options.
+/// including security, performance, validation, and format-specific options.
 ///
 /// # Security Configuration
 /// * `encryption_key` - Encryption key for payload protection
@@ -313,6 +313,7 @@ impl Dimensions {
 ///
 /// # Performance Configuration  
 /// * `use_gpu` - Enable GPU acceleration when available
+/// * `enable_validation` - Enable statistical validation analysis
 /// * `format_specific` - Format-specific embedding parameters
 ///
 /// # Examples
@@ -353,6 +354,8 @@ pub struct EmbedParams {
     pub stealth_level: StealthLevel,
     /// Enable GPU acceleration
     pub use_gpu: bool,
+    /// Enable statistical validation analysis
+    pub enable_validation: bool,
     /// Format-specific embedding parameters
     pub format_specific: HashMap<String, serde_json::Value>,
 }
@@ -365,6 +368,7 @@ impl EmbedParams {
             error_correction_level: ECLevel::Medium,
             stealth_level: StealthLevel::High,
             use_gpu: false,
+            enable_validation: false,
             format_specific: HashMap::new(),
         }
     }
@@ -376,6 +380,7 @@ impl EmbedParams {
             error_correction_level: ec_level,
             stealth_level: StealthLevel::High,
             use_gpu: false,
+            enable_validation: false,
             format_specific: HashMap::new(),
         }
     }
@@ -389,6 +394,12 @@ impl EmbedParams {
     /// Set stealth level
     pub fn with_stealth_level(mut self, level: StealthLevel) -> Self {
         self.stealth_level = level;
+        self
+    }
+
+    /// Enable statistical validation
+    pub fn with_validation(mut self) -> Self {
+        self.enable_validation = true;
         self
     }
 }
@@ -497,6 +508,7 @@ pub struct EmbedResult {
     pub bytes_embedded: usize,
     pub carrier_modified: bool,
     pub performance_stats: PerformanceStats,
+    pub validation_report: Option<crate::validation::ValidationReport>,
 }
 
 impl EmbedResult {
@@ -507,6 +519,22 @@ impl EmbedResult {
             bytes_embedded,
             carrier_modified: true,
             performance_stats: stats,
+            validation_report: None,
+        }
+    }
+
+    /// Create successful embedding result with validation report
+    pub fn success_with_validation(
+        bytes_embedded: usize,
+        stats: PerformanceStats,
+        validation: crate::validation::ValidationReport,
+    ) -> Self {
+        Self {
+            success: true,
+            bytes_embedded,
+            carrier_modified: true,
+            performance_stats: stats,
+            validation_report: Some(validation),
         }
     }
 
@@ -517,6 +545,7 @@ impl EmbedResult {
             bytes_embedded: 0,
             carrier_modified: false,
             performance_stats: stats,
+            validation_report: None,
         }
     }
 }
@@ -720,12 +749,16 @@ mod tests {
         assert_eq!(params.error_correction_level, ECLevel::Medium);
         assert_eq!(params.stealth_level, StealthLevel::High);
         assert!(!params.use_gpu);
+        assert!(!params.enable_validation);
 
         let gpu_params = EmbedParams::new(key.clone()).with_gpu();
         assert!(gpu_params.use_gpu);
 
-        let low_stealth = EmbedParams::new(key).with_stealth_level(StealthLevel::Low);
+        let low_stealth = EmbedParams::new(key.clone()).with_stealth_level(StealthLevel::Low);
         assert_eq!(low_stealth.stealth_level, StealthLevel::Low);
+
+        let validation_params = EmbedParams::new(key).with_validation();
+        assert!(validation_params.enable_validation);
     }
 
     #[test]
