@@ -267,6 +267,7 @@ impl MLOptimizer {
                     stealth_level: StealthLevel::Medium,
                     use_gpu: false,
                     format_specific: HashMap::new(),
+                    enable_validation: false,
                 },
                 predicted_performance: PerformanceMetrics {
                     capacity_efficiency: 0.5,

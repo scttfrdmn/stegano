@@ -296,6 +296,7 @@ impl NeuralNetworkModel {
             stealth_level,
             use_gpu,
             format_specific: HashMap::new(),
+            enable_validation: false,
         }
     }
 
@@ -505,6 +506,7 @@ impl DecisionTreeModel {
                 stealth_level: StealthLevel::Low,
                 use_gpu: false,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             }
         };
 
@@ -556,6 +558,7 @@ impl MLModel for DecisionTreeModel {
                     stealth_level: StealthLevel::Low,
                     use_gpu: false,
                     format_specific: HashMap::new(),
+                    enable_validation: false,
                 })
             }
         } else {

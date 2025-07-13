@@ -1202,6 +1202,7 @@ impl OptimizationEngine {
             } else {
                 parent2.format_specific.clone()
             },
+            enable_validation: false,
         }
     }
 
@@ -1302,6 +1303,7 @@ impl OptimizationEngine {
             },
             use_gpu: random::<bool>(),
             format_specific: HashMap::new(),
+            enable_validation: false,
         }
     }
 
@@ -1322,6 +1324,7 @@ impl OptimizationEngine {
                         },
                         use_gpu,
                         format_specific: HashMap::new(),
+                        enable_validation: false,
                     });
                 }
             }
@@ -1403,6 +1406,7 @@ impl OptimizationEngine {
                 stealth_level: StealthLevel::Maximum,
                 use_gpu: false,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
             // High performance strategy
             EmbedParams {
@@ -1411,6 +1415,7 @@ impl OptimizationEngine {
                 stealth_level: StealthLevel::Low,
                 use_gpu: true,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
             // Balanced strategy
             EmbedParams {
@@ -1419,6 +1424,7 @@ impl OptimizationEngine {
                 stealth_level: StealthLevel::Medium,
                 use_gpu: false,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
         ];
 
@@ -1465,6 +1471,7 @@ impl OptimizationEngine {
             } else {
                 parent2.format_specific.clone()
             },
+            enable_validation: false,
         }
     }
 
@@ -1691,6 +1698,7 @@ impl OptimizationEngine {
                 use_gpu: rand::random(),
                 encryption_key: Vec::new(),
                 format_specific: HashMap::new(),
+                enable_validation: false,
             };
             swarm.push(params);
         }
@@ -1856,6 +1864,7 @@ impl OptimizationEngine {
                 use_gpu: rand::random(),
                 encryption_key: Vec::new(),
                 format_specific: HashMap::new(),
+                enable_validation: false,
             };
 
             velocities[i] = ParticleVelocity {
@@ -1918,6 +1927,7 @@ impl OptimizationEngine {
             },
             use_gpu: vec.get(2).unwrap_or(&0.0) > &0.5,
             format_specific: HashMap::new(),
+            enable_validation: false,
         }
     }
 }

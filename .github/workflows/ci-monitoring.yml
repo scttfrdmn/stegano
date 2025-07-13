@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Setup Python for monitoring scripts
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           
@@ -198,9 +198,7 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+        uses: dtolnay/rust-toolchain@stable
           
       - name: Check for security advisories
         run: |

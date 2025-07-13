@@ -439,6 +439,7 @@ impl BayesianOptimizer {
             },
             use_gpu: random::<bool>(),
             format_specific: HashMap::new(),
+            enable_validation: false,
         }
     }
 
@@ -487,6 +488,7 @@ impl BayesianOptimizer {
             stealth_level,
             use_gpu,
             format_specific: HashMap::new(),
+            enable_validation: false,
         }
     }
 

@@ -356,6 +356,7 @@ impl MLModel for CudaNeuralNetwork {
             },
             use_gpu: output[2] > 0.5,
             format_specific: HashMap::new(),
+            enable_validation: false,
         })
     }
 

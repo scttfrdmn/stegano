@@ -24,6 +24,15 @@ pub enum Commands {
         /// Encryption password
         #[arg(long)]
         password: Option<String>,
+        /// Enable statistical validation analysis
+        #[arg(long)]
+        validate: bool,
+        /// Enable GPU acceleration
+        #[arg(long)]
+        gpu: bool,
+        /// Stealth level (maximum, high, medium, low)
+        #[arg(long, default_value = "high")]
+        stealth: String,
     },
     /// Extract secret data from carrier file
     Extract {
@@ -36,12 +45,18 @@ pub enum Commands {
         /// Decryption password
         #[arg(long)]
         password: Option<String>,
+        /// Enable GPU acceleration
+        #[arg(long)]
+        gpu: bool,
     },
     /// Analyze carrier capacity
     Analyze {
         /// Input carrier file
         #[arg(short, long)]
         input: String,
+        /// Run statistical validation analysis
+        #[arg(long)]
+        validate: bool,
     },
 }
 

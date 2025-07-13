@@ -1213,6 +1213,7 @@ impl DataHandler for SamBamHandler {
                         gpu_acceleration_used: false,
                         memory_usage_bytes: carrier.raw_data.len() + payload.len(),
                     },
+                    validation_report: None,
                 })
             }
             DataFormat::BAM => {

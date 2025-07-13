@@ -1,10 +1,10 @@
 [package]
 name = "stegano"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
-authors = ["Scott Friedman <scott@friedman.dev>"]
+authors = ["Scott Friedman <scttfrdmn@gmail.com>"]
 description = "High-performance scientific data steganography system"
-license-file = "LICENSE"
+license = "MIT"
 repository = "https://github.com/scttfrdmn/stegano"
 
 [lib]

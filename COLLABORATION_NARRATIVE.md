@@ -412,7 +412,7 @@ The scientific data protection market is evolving rapidly, and early movers will
 **Contact Information**:  
 Scott Friedman  
 Founder & Chief Technology Officer  
-Email: scott@friedman.dev  
+Email: scttfrdmn@gmail.com  
 GitHub: https://github.com/scttfrdmn/stegano  
 
 **Partnership Inquiries**: Available for strategic discussions, technical demonstrations, and partnership negotiations. All conversations protected by mutual NDA.

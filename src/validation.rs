@@ -1246,6 +1246,26 @@ impl StatisticalValidationSuite {
         // Placeholder for domain-specific validation
         Ok(DomainResults::default())
     }
+
+    /// Access to classical statistical tests
+    pub fn classical_tests(&self) -> &ClassicalStatisticalTests {
+        &self.classical_tests
+    }
+
+    /// Access to advanced steganalysis
+    pub fn advanced_steganalysis(&self) -> &AdvancedSteganalysis {
+        &self.steganalysis
+    }
+
+    /// Access to performance analysis
+    pub fn performance_analysis(&self) -> &PerformanceAnalysis {
+        &self.performance_analysis
+    }
+
+    /// Access to domain-specific validation
+    pub fn domain_specific(&self) -> &DomainSpecificValidation {
+        &self.domain_validation
+    }
 }
 
 /// Comprehensive validation report
@@ -1257,6 +1277,8 @@ pub struct ValidationReport {
     pub domain_results: DomainResults,
     pub overall_score: f64,
     pub recommendations: Vec<String>,
+    pub test_results: std::collections::HashMap<String, serde_json::Value>,
+    pub is_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1289,7 +1311,7 @@ pub struct DomainResults {
 }
 
 impl ValidationReport {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             classical_results: ClassicalTestResults {
                 ks_test: KSTestResult {
@@ -1335,7 +1357,25 @@ impl ValidationReport {
             domain_results: DomainResults::default(),
             overall_score: 0.0,
             recommendations: vec![],
+            test_results: std::collections::HashMap::new(),
+            is_complete: false,
         }
+    }
+
+    pub fn add_test_result(&mut self, name: String, value: serde_json::Value) {
+        self.test_results.insert(name, value);
+    }
+
+    pub fn finalize(&mut self) {
+        self.is_complete = true;
+    }
+
+    pub fn overall_score(&self) -> u8 {
+        self.overall_score as u8
+    }
+
+    pub fn test_results(&self) -> &std::collections::HashMap<String, serde_json::Value> {
+        &self.test_results
     }
 }
 

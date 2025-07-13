@@ -288,6 +288,7 @@ pub unsafe extern "C" fn stegano_embed(
         stealth_level: StealthLevel::Low,
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     let registry = HandlerRegistry::new();
@@ -389,6 +390,7 @@ pub unsafe extern "C" fn stegano_extract(
         stealth_level: StealthLevel::Low,
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     let registry = HandlerRegistry::new();
