@@ -136,7 +136,7 @@ jobs:
           SMTP_ENABLED: ${{ secrets.SMTP_ENABLED }}
           
       - name: Update status badge
-        if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
         run: |
           python3 scripts/update-status-badge.py \
             --status-file ci-status.json \

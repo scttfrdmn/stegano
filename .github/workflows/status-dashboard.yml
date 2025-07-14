@@ -74,8 +74,8 @@ jobs:
               <h2>Quick Links</h2>
               <ul>
                   <li><a href="https://github.com/scttfrdmn/stegano">GitHub Repository</a></li>
-                  <li><a href="https://github.com/scttfrdmn/stegano/blob/master/CHANGELOG.md">Changelog</a></li>
-                  <li><a href="https://github.com/scttfrdmn/stegano/blob/master/SECURITY.md">Security Policy</a></li>
+                  <li><a href="https://github.com/scttfrdmn/stegano/blob/main/CHANGELOG.md">Changelog</a></li>
+                  <li><a href="https://github.com/scttfrdmn/stegano/blob/main/SECURITY.md">Security Policy</a></li>
                   <li><a href="https://github.com/scttfrdmn/stegano/actions">CI/CD Status</a></li>
               </ul>
           </body>

@@ -143,7 +143,7 @@ This directory contains the comprehensive enterprise compliance framework for St
 **Program Owner**: Chief Information Security Officer  
 **Project Contact**: scttfrdmn@gmail.com  
 **Repository**: https://github.com/scttfrdmn/stegano  
-**Documentation**: https://github.com/scttfrdmn/stegano/tree/master/compliance  
+**Documentation**: https://github.com/scttfrdmn/stegano/tree/main/compliance  
 
 ## 🔗 Related Documentation
 
