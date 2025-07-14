@@ -196,7 +196,7 @@ cargo tarpaulin --coveralls <TOKEN>
 
 **Coverage Badge Integration:**
 ```markdown
-[![Coverage Status](https://coveralls.io/repos/github/username/stegano/badge.svg?branch=master)](https://coveralls.io/github/username/stegano?branch=master)
+[![Coverage Status](https://coveralls.io/repos/github/username/stegano/badge.svg?branch=main)](https://coveralls.io/github/username/stegano?branch=main)
 ```
 
 ### Performance Monitoring

@@ -255,7 +255,7 @@
 
 ### 📋 **Development Environment Status**
 - **Working Directory**: `/Users/scttfrdmn/src/stegano`
-- **Git Branch**: `master`
+- **Git Branch**: `main`
 - **Git Status**: Clean (all changes committed and pushed)
 - **Latest Commit**: `768339f` (enterprise compliance framework)
 - **Documentation**: Comprehensive compliance framework in `/compliance/`

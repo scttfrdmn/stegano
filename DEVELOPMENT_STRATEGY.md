@@ -9,7 +9,7 @@ This document outlines the comprehensive development strategy for stegano 0.2.0,
 ### **Primary Branch Structure**
 
 ```
-master (production-ready)
+main (production-ready)
 ├── develop (integration branch)
 ├── release/0.2.0 (release preparation)
 ├── feature/gpu-acceleration (Phase 1)

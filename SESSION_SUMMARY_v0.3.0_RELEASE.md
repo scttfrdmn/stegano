@@ -121,7 +121,7 @@
 
 ### **Project State**
 - **Working Directory**: `/Users/scttfrdmn/src/stegano`
-- **Git Branch**: `master`
+- **Git Branch**: `main`
 - **Git Status**: Clean (all changes committed and pushed)
 - **Latest Commit**: `879386c` (roadmap update)
 - **Latest Tag**: `v0.3.0`
@@ -182,10 +182,10 @@
 
 - **GitHub Repository**: https://github.com/scttfrdmn/stegano
 - **v0.3.0 Release**: https://github.com/scttfrdmn/stegano/releases/tag/v0.3.0
-- **Security Policy**: https://github.com/scttfrdmn/stegano/blob/master/SECURITY.md
-- **Development Guidelines**: https://github.com/scttfrdmn/stegano/blob/master/DEVELOPMENT_GUIDELINES.md
-- **Full Changelog**: https://github.com/scttfrdmn/stegano/blob/master/CHANGELOG.md
-- **Project Roadmap**: https://github.com/scttfrdmn/stegano/blob/master/ROADMAP.md
+- **Security Policy**: https://github.com/scttfrdmn/stegano/blob/main/SECURITY.md
+- **Development Guidelines**: https://github.com/scttfrdmn/stegano/blob/main/DEVELOPMENT_GUIDELINES.md
+- **Full Changelog**: https://github.com/scttfrdmn/stegano/blob/main/CHANGELOG.md
+- **Project Roadmap**: https://github.com/scttfrdmn/stegano/blob/main/ROADMAP.md
 
 ## 📋 **Session Wrap-Up Checklist**
 

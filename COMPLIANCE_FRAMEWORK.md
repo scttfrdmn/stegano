@@ -450,7 +450,7 @@ Federal Information Processing Standard (FIPS) 140-2 compliance for cryptographi
 
 **Compliance Team Lead**: scttfrdmn@gmail.com  
 **Project Repository**: https://github.com/scttfrdmn/stegano  
-**Documentation**: https://github.com/scttfrdmn/stegano/blob/master/COMPLIANCE_FRAMEWORK.md
+**Documentation**: https://github.com/scttfrdmn/stegano/blob/main/COMPLIANCE_FRAMEWORK.md
 
 ---
 

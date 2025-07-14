@@ -7,7 +7,7 @@ A comprehensive development strategy has been designed and implemented for stega
 ## 🎯 **Key Deliverables Implemented**
 
 ### 1. **[DEVELOPMENT_STRATEGY.md](DEVELOPMENT_STRATEGY.md)** - Comprehensive Strategy Document
-- **Complete branching model** with master, develop, feature, release, and hotfix branches
+- **Complete branching model** with main, develop, feature, release, and hotfix branches
 - **Parallel development workflows** for 4 simultaneous implementation phases
 - **Team coordination guidelines** with clear roles and responsibilities
 - **Quality gates and integration checkpoints** for each development phase
@@ -54,7 +54,7 @@ A comprehensive development strategy has been designed and implemented for stega
 
 ### **Branch Hierarchy**
 ```
-master (production-ready)
+main (production-ready)
 ├── develop (integration)
 ├── release/0.2.0 (release prep)
 ├── feature/gpu-* (Phase 1: Core Infrastructure)
