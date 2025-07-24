@@ -25,7 +25,7 @@ jobs:
         components: rustfmt, clippy
         
     - name: Cache Rust dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -47,7 +47,7 @@ jobs:
         pip install pre-commit yamllint markdownlint-cli detect-secrets ggshield
         
     - name: Cache pre-commit
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pre-commit
         key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -59,7 +59,7 @@ jobs:
         
     - name: Upload pre-commit results
       if: failure()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: pre-commit-failures
         path: |

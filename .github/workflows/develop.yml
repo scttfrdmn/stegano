@@ -35,7 +35,7 @@ jobs:
           override: true
           
       - name: Cache cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -120,7 +120,7 @@ jobs:
           override: true
           
       - name: Cache cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -143,7 +143,7 @@ jobs:
           python3 scripts/analyze_performance.py benchmark_results.json || echo "Performance analysis script not available"
           
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: develop-benchmarks-${{ github.sha }}
           path: |
@@ -211,7 +211,7 @@ jobs:
           override: true
           
       - name: Cache cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -464,7 +464,7 @@ jobs:
           cat integration_report.md
           
       - name: Upload integration report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: integration-report-${{ github.sha }}
           path: integration_report.md
