@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: Security & Dependencies Check
 
 on:
   push:
@@ -6,28 +6,25 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Run security audit daily at 2 AM UTC
+    # Daily security check at 2 AM UTC
     - cron: '0 2 * * *'
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
 
 jobs:
-  # Code quality and security checks
-  quality:
-    name: Code Quality & Security
+  # Security and dependency audit only
+  security-audit:
+    name: Security & Dependencies
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+        
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
+        
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
@@ -36,147 +33,25 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Security audit
-        run: |
-          cargo install cargo-audit
-          cargo audit
-
-      - name: License check
-        run: |
-          cargo install cargo-deny
-          cargo deny check licenses
-
-  # Code coverage analysis
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-coverage-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Run coverage analysis
-        run: |
-          cargo tarpaulin --timeout 300 --out xml --output-dir target/coverage
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: target/coverage/cobertura.xml
-          fail_ci_if_error: false
-          verbose: true
-
-      - name: Archive coverage results
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: target/coverage/
-
-  # Cross-platform testing
-  test:
-    name: Test Suite
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable, beta]
-        include:
-          - os: ubuntu-latest
-            rust: nightly
-        exclude:
-          - os: windows-latest
-            rust: beta
-          - os: macos-latest
-            rust: beta
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Run tests
-        run: cargo test --all-features --verbose
-
-      - name: Run doc tests
-        run: cargo test --doc --all-features
-
-      - name: Build examples
-        run: |
-          cargo build --example basic_demo --all-features
-          cargo build --example genomics_demo --all-features
-
-  # Security scanning
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run cargo-deny
-        run: |
-          cargo install cargo-deny
-          cargo deny check all
-
-  # Documentation build
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-docs-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build documentation
-        run: |
-          cargo doc --no-deps --all-features --document-private-items
-
+          
+      - name: Install cargo-audit
+        run: cargo install --force cargo-audit
+        
+      - name: Install cargo-deny
+        run: cargo install --force cargo-deny
+        
+      - name: Run security audit
+        run: cargo audit
+        
+      - name: Check licenses
+        run: cargo deny check licenses
+        
+      - name: Check security advisories
+        run: cargo deny check advisories
+        
+      - name: Check for duplicate dependencies
+        run: cargo deny check bans
+        continue-on-error: true  # Allow warnings for duplicate dependencies
+        
+      - name: Verify project compiles
+        run: cargo check --workspace

@@ -1,10 +1,10 @@
 name: CI/CD Flow Monitoring
 
 on:
-  # Monitor CI/CD status periodically
+  # Monitor CI/CD status weekly to reduce costs
   schedule:
-    # Daily at 9 AM UTC, Monday-Friday only
-    - cron: '0 9 * * 1-5'
+    # Weekly on Monday at 9 AM UTC only
+    - cron: '0 9 * * 1'
   
   # Also run on workflow completion
   workflow_run:
