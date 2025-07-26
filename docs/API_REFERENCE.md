@@ -28,6 +28,7 @@ pub struct EmbedParams {
     pub error_correction_level: ECLevel,
     pub stealth_level: StealthLevel,
     pub use_gpu: bool,
+    pub enable_validation: bool,
     pub format_specific: HashMap<String, String>,
 }
 ```
@@ -327,6 +328,7 @@ async fn main() -> Result<()> {
         error_correction_level: ECLevel::Medium,
         stealth_level: StealthLevel::Low,
         use_gpu: false,
+        enable_validation: false,
         format_specific: HashMap::new(),
     };
     

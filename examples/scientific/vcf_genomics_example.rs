@@ -66,6 +66,7 @@ async fn basic_vcf_embedding_example() -> Result<()> {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"genomics_key_2024".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let handler = VcfHandler::new();
@@ -116,6 +117,7 @@ async fn quality_score_embedding_example() -> Result<()> {
         error_correction_level: ECLevel::High,
         encryption_key: b"high_coverage_study_2024".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let handler = VcfHandler::new();
@@ -169,6 +171,7 @@ async fn format_field_embedding_example() -> Result<()> {
         error_correction_level: ECLevel::Low,
         encryption_key: b"multi_sample_cohort_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let handler = VcfHandler::new();
@@ -335,6 +338,7 @@ async fn privacy_preserving_example() -> Result<()> {
         error_correction_level: ECLevel::High,
         encryption_key: derive_research_key("clinical_trial_2024", "genomics_privacy"),
         use_gpu: false, // Disable for compliance
+        enable_validation: false,
     };
     
     let handler = VcfHandler::new();

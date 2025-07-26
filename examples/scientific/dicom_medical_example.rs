@@ -67,6 +67,7 @@ async fn private_elements_example() -> Result<()> {
         error_correction_level: ECLevel::High,
         encryption_key: derive_medical_key("patient_metadata_2024", "mri_research"),
         use_gpu: false, // Disabled for medical compliance
+        enable_validation: false,
     };
     
     let handler = DicomHandler::new();
@@ -124,6 +125,7 @@ async fn medical_pixel_lsb_example() -> Result<()> {
         error_correction_level: ECLevel::Medium,
         encryption_key: derive_medical_key("ct_scan_analysis", "diagnostic_data"),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let handler = DicomHandler::new();
@@ -185,6 +187,7 @@ async fn metadata_fields_example() -> Result<()> {
         error_correction_level: ECLevel::Low,
         encryption_key: derive_medical_key("ultrasound_device", "calibration_logs"),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let handler = DicomHandler::new();
@@ -496,6 +499,7 @@ async fn test_modality_embedding(carrier: &CarrierData, handler: &DicomHandler, 
         error_correction_level: ECLevel::Medium,
         encryption_key: b"modality_test_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let mut carrier_mut = carrier.clone();
@@ -609,6 +613,7 @@ impl HIPAACompliantConfig {
                 vec![] 
             },
             use_gpu: false, // Disable for compliance determinism
+            enable_validation: false,
         }
     }
 }
@@ -650,6 +655,7 @@ impl ClinicalTrialConfig {
             error_correction_level: ECLevel::Maximum, // Highest for trials
             encryption_key: b"phase_3_clinical_trial_2024".to_vec(),
             use_gpu: false, // Deterministic results required
+            enable_validation: false,
         }
     }
 }

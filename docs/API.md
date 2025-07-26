@@ -75,6 +75,7 @@ pub struct EmbedParams {
     pub error_correction_level: ECLevel,                     // Error correction level
     pub stealth_level: StealthLevel,                         // Steganographic stealth
     pub use_gpu: bool,                                       // Enable GPU acceleration
+    pub enable_validation: bool,                             // Enable statistical validation
     pub format_specific: HashMap<String, serde_json::Value>, // Format-specific options
 }
 ```
@@ -335,6 +336,7 @@ async fn main() -> Result<()> {
         error_correction_level: ECLevel::Medium,
         stealth_level: StealthLevel::High,
         use_gpu: false,
+        enable_validation: false,
         format_specific: HashMap::new(),
     };
 

@@ -68,6 +68,7 @@ async fn optional_fields_example() -> Result<()> {
         error_correction_level: ECLevel::Medium,
         encryption_key: derive_bioinformatics_key("alignment_metadata", "sample_origin"),
         use_gpu: true, // Can use GPU for bioinformatics
+        enable_validation: false,
     };
     
     let handler = SamBamHandler;
@@ -122,6 +123,7 @@ async fn quality_scores_example() -> Result<()> {
         error_correction_level: ECLevel::Low,
         encryption_key: derive_bioinformatics_key("quality_analysis", "coverage_metrics"),
         use_gpu: true,
+        enable_validation: false,
     };
     
     let handler = SamBamHandler;
@@ -177,6 +179,7 @@ async fn comment_lines_example() -> Result<()> {
         error_correction_level: ECLevel::High,
         encryption_key: derive_bioinformatics_key("pipeline_logs", "processing_metadata"),
         use_gpu: false, // Simple text processing
+        enable_validation: false,
     };
     
     let handler = SamBamHandler;
@@ -275,6 +278,7 @@ async fn variant_calling_integration_example() -> Result<()> {
         error_correction_level: ECLevel::High, // High for variant calling accuracy
         encryption_key: derive_bioinformatics_key("variant_calling", "gatk_haplotypecaller"),
         use_gpu: true,
+        enable_validation: false,
     };
     
     let handler = SamBamHandler;
@@ -491,6 +495,7 @@ async fn test_sample_embedding(carrier: &CarrierData, handler: &SamBamHandler, s
         error_correction_level: ECLevel::Medium,
         encryption_key: b"sample_test_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let mut carrier_mut = carrier.clone();

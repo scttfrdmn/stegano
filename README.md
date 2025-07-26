@@ -161,6 +161,7 @@ async fn main() -> Result<()> {
         error_correction_level: ECLevel::High,
         stealth_level: StealthLevel::High,
         use_gpu: false,
+        enable_validation: false,
         format_specific: HashMap::new(),
     };
 
@@ -290,6 +291,7 @@ async fn main() -> Result<()> {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"genomics_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
     
     let handler = VcfHandler::new();
@@ -495,6 +497,7 @@ pub struct EmbedParams {
     pub error_correction_level: ECLevel,
     pub stealth_level: StealthLevel,
     pub use_gpu: bool,
+    pub enable_validation: bool,
     pub format_specific: HashMap<String, serde_json::Value>,
 }
 ```
