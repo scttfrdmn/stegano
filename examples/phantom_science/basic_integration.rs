@@ -98,6 +98,7 @@ impl PhantomScienceIntegration {
             stealth_level: StealthLevel::Low,
             use_gpu: false,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
 
         // Get appropriate handler
@@ -140,6 +141,7 @@ impl PhantomScienceIntegration {
             stealth_level: StealthLevel::Low,
             use_gpu: false,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
 
         // Get appropriate handler

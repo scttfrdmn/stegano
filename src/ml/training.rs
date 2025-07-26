@@ -572,10 +572,7 @@ impl MetricsTracker {
 
     /// Add custom metric
     pub fn add_custom_metric(&mut self, name: String, value: f32) {
-        self.custom_metrics
-            .entry(name)
-            .or_default()
-            .push(value);
+        self.custom_metrics.entry(name).or_default().push(value);
     }
 
     /// Get training summary
@@ -735,6 +732,7 @@ mod tests {
                     stealth_level: StealthLevel::Low,
                     use_gpu: false,
                     format_specific: HashMap::new(),
+                    enable_validation: false,
                 },
                 performance: PerformanceMetrics {
                     capacity_efficiency: 0.5,
@@ -796,6 +794,7 @@ mod tests {
                 stealth_level: StealthLevel::Low,
                 use_gpu: false,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
             performance: PerformanceMetrics {
                 capacity_efficiency: 0.5,

@@ -17,9 +17,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             gpu,
             stealth,
         } => {
-            if let Err(e) =
-                stegano::cli::commands::handle_embed(&input, &payload, &output, password.as_deref(), validate, gpu, &stealth)
-                    .await
+            if let Err(e) = stegano::cli::commands::handle_embed(
+                &input,
+                &payload,
+                &output,
+                password.as_deref(),
+                validate,
+                gpu,
+                &stealth,
+            )
+            .await
             {
                 eprintln!("❌ Embedding failed: {e}");
                 std::process::exit(1);
@@ -32,7 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             gpu,
         } => {
             if let Err(e) =
-                stegano::cli::commands::handle_extract(&input, &output, password.as_deref(), gpu).await
+                stegano::cli::commands::handle_extract(&input, &output, password.as_deref(), gpu)
+                    .await
             {
                 eprintln!("❌ Extraction failed: {e}");
                 std::process::exit(1);

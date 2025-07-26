@@ -51,6 +51,7 @@ async fn main() -> Result<()> {
         stealth_level: StealthLevel::Medium,
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     // Get handler and estimate capacity

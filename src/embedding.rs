@@ -66,11 +66,7 @@ impl SteganoEmbedder {
     }
 
     /// Extract payload from carrier
-    pub async fn extract(
-        &self,
-        carrier: &CarrierData,
-        params: &EmbedParams,
-    ) -> Result<Vec<u8>> {
+    pub async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
         let handler = self
             .handler_registry
             .get_handler(&carrier.format)
@@ -98,8 +94,11 @@ impl SteganoEmbedder {
             )
             .map_err(|e| SteganoError::IntegrityError(e.to_string()))?;
 
-        report.add_test_result("chi_square_test".to_string(), serde_json::to_value(chi_square_result)
-            .map_err(|e| SteganoError::SerializationError(e))?);
+        report.add_test_result(
+            "chi_square_test".to_string(),
+            serde_json::to_value(chi_square_result)
+                .map_err(|e| SteganoError::SerializationError(e))?,
+        );
 
         // KS test for distribution comparison
         let ks_result = self
@@ -111,8 +110,10 @@ impl SteganoEmbedder {
             )
             .map_err(|e| SteganoError::IntegrityError(e.to_string()))?;
 
-        report.add_test_result("ks_test".to_string(), serde_json::to_value(ks_result)
-            .map_err(|e| SteganoError::SerializationError(e))?);
+        report.add_test_result(
+            "ks_test".to_string(),
+            serde_json::to_value(ks_result).map_err(|e| SteganoError::SerializationError(e))?,
+        );
 
         // Format-specific validation
         match format {
@@ -123,9 +124,11 @@ impl SteganoEmbedder {
                     .advanced_steganalysis()
                     .pixel_pair_analysis(modified_data, 256, 256)
                 {
-                    report.add_test_result("pixel_pair_analysis".to_string(), 
+                    report.add_test_result(
+                        "pixel_pair_analysis".to_string(),
                         serde_json::to_value(pixel_analysis)
-                            .map_err(|e| SteganoError::SerializationError(e))?);
+                            .map_err(|e| SteganoError::SerializationError(e))?,
+                    );
                 }
             }
             DataFormat::WAV | DataFormat::BinarySignal => {
@@ -141,17 +144,20 @@ impl SteganoEmbedder {
         if original_data.len() > 1000 && modified_data.len() > 1000 {
             let binary_labels = self.create_binary_labels(original_data, modified_data);
             let true_labels: Vec<bool> = binary_labels.iter().map(|(_, label)| *label).collect();
-            let predicted_scores: Vec<f64> = binary_labels.iter().map(|(score, _)| *score).collect();
-            
+            let predicted_scores: Vec<f64> =
+                binary_labels.iter().map(|(score, _)| *score).collect();
+
             let roc_analysis = self
                 .validation_suite
                 .performance_analysis()
                 .roc_analysis(&true_labels, &predicted_scores)
                 .map_err(|e| SteganoError::IntegrityError(e.to_string()))?;
 
-            report.add_test_result("roc_analysis".to_string(),
+            report.add_test_result(
+                "roc_analysis".to_string(),
                 serde_json::to_value(roc_analysis)
-                    .map_err(|e| SteganoError::SerializationError(e))?);
+                    .map_err(|e| SteganoError::SerializationError(e))?,
+            );
         }
 
         report.finalize();
@@ -220,23 +226,26 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_with_validation() {
         let embedder = SteganoEmbedder::new();
-        
+
         // Create test carrier
         let test_data = vec![0u8; 1024];
         let mut carrier = CarrierData::new(DataFormat::BINARY, test_data);
-        
+
         // Setup parameters with validation enabled
         let params = EmbedParams::new(b"test_key".to_vec()).with_validation();
-        
+
         // Test payload
         let payload = b"Test secret data";
-        
+
         // Embed with validation
-        let result = embedder.embed(&mut carrier, payload, &params).await.unwrap();
-        
+        let result = embedder
+            .embed(&mut carrier, payload, &params)
+            .await
+            .unwrap();
+
         assert!(result.success);
         assert!(result.validation_report.is_some());
-        
+
         // Validate that report contains expected tests
         let report = result.validation_report.unwrap();
         assert!(report.test_results().contains_key("chi_square_test"));
@@ -246,16 +255,19 @@ mod tests {
     #[tokio::test]
     async fn test_embedding_without_validation() {
         let embedder = SteganoEmbedder::new();
-        
+
         let test_data = vec![0u8; 1024];
         let mut carrier = CarrierData::new(DataFormat::BINARY, test_data);
-        
+
         // Parameters without validation
         let params = EmbedParams::new(b"test_key".to_vec());
         let payload = b"Test secret data";
-        
-        let result = embedder.embed(&mut carrier, payload, &params).await.unwrap();
-        
+
+        let result = embedder
+            .embed(&mut carrier, payload, &params)
+            .await
+            .unwrap();
+
         assert!(result.success);
         assert!(result.validation_report.is_none());
     }
@@ -264,7 +276,7 @@ mod tests {
     fn test_capacity_estimation() {
         let embedder = SteganoEmbedder::new();
         let carrier = CarrierData::new(DataFormat::BINARY, vec![0u8; 1024]);
-        
+
         let capacity = embedder.estimate_capacity(&carrier).unwrap();
         assert!(capacity.total_bits > 0);
         assert!(capacity.recommended_bits <= capacity.total_bits);

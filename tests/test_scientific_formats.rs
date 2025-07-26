@@ -107,6 +107,7 @@ async fn test_vcf_info_fields_embedding() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"test_vcf_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = VcfHandler::new();
@@ -171,6 +172,7 @@ async fn test_vcf_quality_precision_embedding() {
         error_correction_level: ECLevel::High,
         encryption_key: b"vcf_quality_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = VcfHandler::new();
@@ -228,6 +230,7 @@ async fn test_vcf_format_fields_embedding() {
         error_correction_level: ECLevel::Low,
         encryption_key: b"vcf_format_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = VcfHandler::new();
@@ -277,6 +280,7 @@ async fn test_dicom_private_elements_embedding() {
         error_correction_level: ECLevel::High,
         encryption_key: b"dicom_private_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = DicomHandler::new();
@@ -351,6 +355,7 @@ async fn test_dicom_pixel_lsb_embedding() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"dicom_pixel_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = DicomHandler::new();
@@ -418,6 +423,7 @@ async fn test_dicom_unused_metadata_embedding() {
         error_correction_level: ECLevel::Low,
         encryption_key: b"dicom_metadata_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = DicomHandler::new();
@@ -494,6 +500,7 @@ async fn test_sam_optional_fields_embedding() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"sam_optional_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = SamBamHandler::new();
@@ -555,6 +562,7 @@ async fn test_sam_quality_scores_embedding() {
         error_correction_level: ECLevel::Low,
         encryption_key: b"sam_quality_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = SamBamHandler::new();
@@ -601,6 +609,7 @@ async fn test_sam_comment_lines_embedding() {
         error_correction_level: ECLevel::High,
         encryption_key: b"sam_comment_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = SamBamHandler::new();
@@ -740,6 +749,7 @@ async fn test_cross_format_embedding_extraction() {
                 .as_bytes()
                 .to_vec(),
             use_gpu: false,
+            enable_validation: false,
         };
 
         let (embed_result, extract_result) = match format_type {
@@ -869,6 +879,7 @@ async fn test_large_payload_handling() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"large_payload_key".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let mut carrier_mut = carrier;

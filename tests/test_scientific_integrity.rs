@@ -151,6 +151,7 @@ async fn test_vcf_allele_frequency_preservation() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"allele_freq_test".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = VcfHandler::new();
@@ -227,6 +228,7 @@ async fn test_vcf_population_genetics_integrity() {
         error_correction_level: ECLevel::High,
         encryption_key: b"population_genetics_test".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = VcfHandler::new();
@@ -306,6 +308,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"diagnostic_quality_test".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = DicomHandler::new();
@@ -317,10 +320,13 @@ async fn test_dicom_diagnostic_quality_preservation() {
     // Perform embedding
     let mut carrier_mut = carrier.clone();
     let embed_result = handler.embed(&mut carrier_mut, payload, &params).await;
-    
+
     // If embedding fails due to DICOM parsing issues, that's acceptable for test data
     if embed_result.is_err() {
-        println!("Embedding failed (acceptable for test DICOM data): {:?}", embed_result.err());
+        println!(
+            "Embedding failed (acceptable for test DICOM data): {:?}",
+            embed_result.err()
+        );
         return; // Skip the rest of the test
     }
 
@@ -328,7 +334,12 @@ async fn test_dicom_diagnostic_quality_preservation() {
     let modified_metrics = analyze_dicom_image_quality(&carrier_mut.raw_data);
 
     // Verify diagnostic quality is preserved (more lenient for test data)
-    if (original_metrics.mean_intensity - modified_metrics.mean_intensity).abs() / original_metrics.mean_intensity.max(modified_metrics.mean_intensity) > 0.1 {
+    if (original_metrics.mean_intensity - modified_metrics.mean_intensity).abs()
+        / original_metrics
+            .mean_intensity
+            .max(modified_metrics.mean_intensity)
+        > 0.1
+    {
         println!("Large intensity change detected - acceptable for test metadata embedding");
         return; // Skip strict checks for test data
     }
@@ -405,6 +416,7 @@ async fn test_dicom_medical_compliance() {
         error_correction_level: ECLevel::High,
         encryption_key: b"medical_compliance_test".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = DicomHandler::new();
@@ -420,10 +432,13 @@ async fn test_dicom_medical_compliance() {
     // Perform embedding
     let mut carrier_mut = carrier.clone();
     let embed_result = handler.embed(&mut carrier_mut, payload, &params).await;
-    
+
     // If embedding fails due to DICOM parsing issues, that's acceptable for test data
     if embed_result.is_err() {
-        println!("Embedding failed (acceptable for test DICOM data): {:?}", embed_result.err());
+        println!(
+            "Embedding failed (acceptable for test DICOM data): {:?}",
+            embed_result.err()
+        );
         return; // Skip the rest of the test
     }
 
@@ -465,9 +480,12 @@ async fn test_dicom_medical_compliance() {
         Ok(extracted) => {
             assert_eq!(extracted, payload);
             println!("✅ Successfully embedded and extracted payload");
-        },
+        }
         Err(e) => {
-            println!("Extraction failed (acceptable for test DICOM data): {:?}", e);
+            println!(
+                "Extraction failed (acceptable for test DICOM data): {:?}",
+                e
+            );
         }
     }
 }
@@ -503,6 +521,7 @@ async fn test_sam_alignment_quality_preservation() {
         error_correction_level: ECLevel::Medium,
         encryption_key: b"alignment_quality_test".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = SamBamHandler::new();
@@ -588,6 +607,7 @@ async fn test_sam_variant_calling_compatibility() {
         error_correction_level: ECLevel::Low,
         encryption_key: b"variant_calling_test".to_vec(),
         use_gpu: false,
+        enable_validation: false,
     };
 
     let handler = SamBamHandler::new();
@@ -782,7 +802,8 @@ fn analyze_dicom_image_quality(dicom_data: &[u8]) -> DicomImageQualityMetrics {
     for chunk in pixel_data.chunks_exact(2) {
         if chunk.len() == 2 {
             let intensity = u16::from_le_bytes([chunk[0], chunk[1]]) as f64;
-            if intensity > 0.0 && intensity < 65535.0 { // Filter out unrealistic values
+            if intensity > 0.0 && intensity < 65535.0 {
+                // Filter out unrealistic values
                 intensities.push(intensity);
             }
         }
@@ -895,11 +916,11 @@ fn verify_dicom_compliance(dicom_data: &[u8]) -> DicomComplianceReport {
 
     // Check for DICOM format
     let has_dicm_header = dicom_data.len() > 132 && &dicom_data[128..132] == b"DICM";
-    
+
     // For test data, be more lenient - just check for key identifiers
-    let is_valid = has_dicm_header && 
-                   (!sop_class_uid.is_empty() || content.contains("SOP_CLASS_UID")) &&
-                   (!modality.is_empty() || content.contains("MODALITY"));
+    let is_valid = has_dicm_header
+        && (!sop_class_uid.is_empty() || content.contains("SOP_CLASS_UID"))
+        && (!modality.is_empty() || content.contains("MODALITY"));
 
     // Create hash of patient ID for comparison
     let patient_id_hash = format!("{:x}", patient_id.len()); // Simplified hash

@@ -32,6 +32,7 @@ async fn test_basic_steganography_roundtrip() {
         stealth_level: StealthLevel::Medium,
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     // Get handler

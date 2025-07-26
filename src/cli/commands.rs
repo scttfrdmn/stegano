@@ -40,10 +40,11 @@ pub async fn handle_embed(
     };
 
     // Setup parameters
-    let key = password.map(|p| p.as_bytes().to_vec()).unwrap_or_else(|| b"default_key".to_vec());
-    let mut params = EmbedParams::new(key)
-        .with_stealth_level(stealth_level);
-    
+    let key = password
+        .map(|p| p.as_bytes().to_vec())
+        .unwrap_or_else(|| b"default_key".to_vec());
+    let mut params = EmbedParams::new(key).with_stealth_level(stealth_level);
+
     if gpu {
         params = params.with_gpu();
     }
@@ -78,17 +79,20 @@ pub async fn handle_embed(
         "📈 Performance: {:.2}ms",
         result.performance_stats.total_time_ms()
     );
-    
+
     // Display validation results if enabled
     if let Some(validation_report) = result.validation_report {
         println!("\n🔬 Statistical Validation Results:");
         println!("   Overall Score: {}/10", validation_report.overall_score());
-        println!("   Tests Completed: {}", validation_report.test_results().len());
-        
-        for (test_name, _) in validation_report.test_results() {
-            println!("   ✓ {}", test_name);
+        println!(
+            "   Tests Completed: {}",
+            validation_report.test_results().len()
+        );
+
+        for test_name in validation_report.test_results().keys() {
+            println!("   ✓ {test_name}");
         }
-        
+
         if validation_report.overall_score() >= 8 {
             println!("   🎉 Excellent validation score - embedding is statistically robust!");
         } else if validation_report.overall_score() >= 6 {
@@ -101,7 +105,12 @@ pub async fn handle_embed(
     Ok(())
 }
 
-pub async fn handle_extract(input: &str, output: &str, password: Option<&str>, gpu: bool) -> Result<()> {
+pub async fn handle_extract(
+    input: &str,
+    output: &str,
+    password: Option<&str>,
+    gpu: bool,
+) -> Result<()> {
     println!("🔍 Extracting from {input} -> {output}");
 
     // Read input file
@@ -118,9 +127,11 @@ pub async fn handle_extract(input: &str, output: &str, password: Option<&str>, g
     };
 
     // Setup parameters
-    let key = password.map(|p| p.as_bytes().to_vec()).unwrap_or_else(|| b"default_key".to_vec());
+    let key = password
+        .map(|p| p.as_bytes().to_vec())
+        .unwrap_or_else(|| b"default_key".to_vec());
     let mut params = EmbedParams::new(key);
-    
+
     if gpu {
         params = params.with_gpu();
     }
@@ -176,37 +187,49 @@ pub async fn handle_analyze(input: &str, validate: bool) -> Result<()> {
         "  Contains hidden data: {}",
         if has_hidden_data { "Yes" } else { "No" }
     );
-    
+
     // Run statistical validation if requested
     if validate {
         println!("\n🔬 Running Statistical Validation Analysis...");
-        
+
         // For validation analysis, we need original and modified data
         // For analysis mode, we'll run basic statistical tests on the current data
         use crate::validation::StatisticalValidationSuite;
         let validation_suite = StatisticalValidationSuite::new();
-        
+
         // Convert bytes to frequencies for analysis
         let mut frequencies = vec![0.0; 256];
         for &byte in &carrier.raw_data {
             frequencies[byte as usize] += 1.0;
         }
-        
+
         // Run basic statistical tests
-        if let Ok(chi_square_result) = validation_suite.classical_tests()
-            .chi_square_test(&frequencies, &vec![carrier.raw_data.len() as f64 / 256.0; 256]) {
-            println!("  Chi-square test p-value: {:.6}", chi_square_result.p_value);
-            println!("  Chi-square significant: {}", chi_square_result.is_significant);
+        if let Ok(chi_square_result) = validation_suite.classical_tests().chi_square_test(
+            &frequencies,
+            &vec![carrier.raw_data.len() as f64 / 256.0; 256],
+        ) {
+            println!(
+                "  Chi-square test p-value: {:.6}",
+                chi_square_result.p_value
+            );
+            println!(
+                "  Chi-square significant: {}",
+                chi_square_result.is_significant
+            );
         }
-        
+
         // Runs test for randomness (convert to bool sequence by checking if above median)
         let median = 127.5; // median for byte values 0-255
-        let bool_sequence: Vec<bool> = carrier.raw_data.iter().map(|&b| b as f64 > median).collect();
+        let bool_sequence: Vec<bool> = carrier
+            .raw_data
+            .iter()
+            .map(|&b| b as f64 > median)
+            .collect();
         if let Ok(runs_result) = validation_suite.classical_tests().runs_test(&bool_sequence) {
             println!("  Runs test p-value: {:.6}", runs_result.p_value);
             println!("  Randomness test passed: {}", runs_result.is_random);
         }
-        
+
         println!("  ✅ Statistical validation analysis complete");
     }
 

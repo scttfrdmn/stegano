@@ -183,10 +183,7 @@ impl AdaptiveStrategy {
 
             for perf in history {
                 let key = self.strategy_key(&perf.params);
-                strategy_groups
-                    .entry(key)
-                    .or_default()
-                    .push(perf);
+                strategy_groups.entry(key).or_default().push(perf);
             }
 
             // Calculate average performance for each strategy
@@ -450,6 +447,7 @@ mod tests {
                 stealth_level: StealthLevel::Low,
                 use_gpu: false,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
             EmbedParams {
                 encryption_key: vec![],
@@ -457,6 +455,7 @@ mod tests {
                 stealth_level: StealthLevel::High,
                 use_gpu: true,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
         ];
 
@@ -496,6 +495,7 @@ mod tests {
                 stealth_level: StealthLevel::Low,
                 use_gpu: false,
                 format_specific: HashMap::new(),
+                enable_validation: false,
             },
             metrics: PerformanceMetrics {
                 capacity_efficiency: 0.8,

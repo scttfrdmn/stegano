@@ -251,9 +251,7 @@ impl StructuredLogger {
     pub fn flush(&self) -> crate::core::Result<()> {
         for writer in &self.writers {
             if let Ok(mut writer) = writer.lock() {
-                writer
-                    .flush()
-                    .map_err(crate::core::SteganoError::IoError)?;
+                writer.flush().map_err(crate::core::SteganoError::IoError)?;
             }
         }
         Ok(())

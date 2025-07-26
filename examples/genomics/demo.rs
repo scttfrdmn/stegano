@@ -88,6 +88,7 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
             );
             specific
         },
+        enable_validation: false,
     };
 
     // Note: For this demo, we'll use the generic handler since genomics-specific

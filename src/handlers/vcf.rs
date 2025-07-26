@@ -1075,6 +1075,7 @@ mod tests {
             stealth_level: StealthLevel::Low,
             use_gpu: false,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),
@@ -1114,6 +1115,7 @@ mod tests {
             stealth_level: StealthLevel::Low,
             use_gpu: false,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),

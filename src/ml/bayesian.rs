@@ -802,6 +802,7 @@ mod tests {
             stealth_level: StealthLevel::Medium,
             use_gpu: true,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
 
         let vector = optimizer.embed_params_to_vector(&params);

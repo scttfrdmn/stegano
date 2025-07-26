@@ -1356,6 +1356,7 @@ mod tests {
             error_correction_level: ECLevel::None,
             stealth_level: StealthLevel::Low,
             use_gpu: false,
+            enable_validation: false,
             format_specific: HashMap::new(),
         };
         params.format_specific.insert(

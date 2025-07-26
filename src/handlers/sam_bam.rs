@@ -1081,10 +1081,12 @@ impl SamBamHandler {
                     // Basic validation
                     for alignment in &sam.alignments {
                         // Check sequence and quality lengths match
-                        if alignment.seq != "*" && alignment.qual != "*"
-                            && alignment.seq.len() != alignment.qual.len() {
-                                return Ok(false);
-                            }
+                        if alignment.seq != "*"
+                            && alignment.qual != "*"
+                            && alignment.seq.len() != alignment.qual.len()
+                        {
+                            return Ok(false);
+                        }
 
                         // Validate sequence characters
                         for c in alignment.seq.chars() {
@@ -1353,6 +1355,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             stealth_level: StealthLevel::Low,
             use_gpu: false,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1392,6 +1395,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             stealth_level: StealthLevel::Low,
             use_gpu: false,
             format_specific: HashMap::new(),
+            enable_validation: false,
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),

@@ -552,6 +552,7 @@ fn test_objective_function_edge_cases() {
         encryption_key: vec![],
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     let carrier = create_test_carrier(1);

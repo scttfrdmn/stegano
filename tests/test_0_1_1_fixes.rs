@@ -48,6 +48,7 @@ async fn test_issue_1_genomics_handler_implemented() {
         stealth_level: StealthLevel::Low,
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -173,6 +174,7 @@ async fn test_issue_5_phantom_science_integration_examples() {
         stealth_level: StealthLevel::Low,
         use_gpu: false,
         format_specific: HashMap::new(),
+        enable_validation: false,
     };
 
     // Embed phantom-science metadata

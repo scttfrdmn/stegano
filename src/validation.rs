@@ -113,7 +113,7 @@ impl ClassicalStatisticalTests {
         let df = observed.len() - 1;
         let p_value = self.chi_square_p_value(chi_square, df);
         let critical_value = self.chi_square_critical_value(df, self.confidence_level);
-        
+
         // Calculate effect size (Cramér's V for goodness of fit)
         let n: f64 = observed.iter().sum();
         let effect_size = (chi_square / (n * (observed.len() - 1) as f64)).sqrt();
@@ -129,7 +129,11 @@ impl ClassicalStatisticalTests {
     }
 
     /// Two-sample Kolmogorov-Smirnov test for distribution comparison
-    pub fn kolmogorov_smirnov_test(&self, sample1: &[f64], sample2: &[f64]) -> Result<KSTestResult> {
+    pub fn kolmogorov_smirnov_test(
+        &self,
+        sample1: &[f64],
+        sample2: &[f64],
+    ) -> Result<KSTestResult> {
         if sample1.is_empty() || sample2.is_empty() {
             return Err(SteganoError::InvalidParameter(
                 "Samples cannot be empty".to_string(),
@@ -152,27 +156,40 @@ impl ClassicalStatisticalTests {
 
         // Merge and compare CDFs
         while i1 < sorted1.len() || i2 < sorted2.len() {
-            let x1 = if i1 < sorted1.len() { sorted1[i1] } else { f64::INFINITY };
-            let x2 = if i2 < sorted2.len() { sorted2[i2] } else { f64::INFINITY };
+            let x1 = if i1 < sorted1.len() {
+                sorted1[i1]
+            } else {
+                f64::INFINITY
+            };
+            let x2 = if i2 < sorted2.len() {
+                sorted2[i2]
+            } else {
+                f64::INFINITY
+            };
 
             let x = x1.min(x2);
-            
+
             // Count values <= x in each sample
             let cdf1 = sorted1.iter().take_while(|&&val| val <= x).count() as f64 / n1;
             let cdf2 = sorted2.iter().take_while(|&&val| val <= x).count() as f64 / n2;
-            
+
             let diff = (cdf1 - cdf2).abs();
             if diff > max_diff {
                 max_diff = diff;
                 max_diff_location = if x1 <= x2 { i1 } else { i2 + sorted1.len() };
             }
 
-            if x1 <= x2 { i1 += 1; }
-            if x2 <= x1 { i2 += 1; }
+            if x1 <= x2 {
+                i1 += 1;
+            }
+            if x2 <= x1 {
+                i2 += 1;
+            }
         }
 
         // Calculate critical value and p-value
-        let critical_value = self.ks_critical_value(n1 as usize, n2 as usize, self.confidence_level);
+        let critical_value =
+            self.ks_critical_value(n1 as usize, n2 as usize, self.confidence_level);
         let p_value = self.ks_p_value(max_diff, n1 as usize, n2 as usize);
 
         Ok(KSTestResult {
@@ -248,23 +265,19 @@ impl ClassicalStatisticalTests {
 
         let n = data.len() as f64;
         let mean = sorted_data.iter().sum::<f64>() / n;
-        let variance = sorted_data.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / (n - 1.0);
+        let variance = sorted_data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
         let std_dev = variance.sqrt();
 
         // Standardize data
-        let standardized: Vec<f64> = sorted_data.iter()
-            .map(|x| (x - mean) / std_dev)
-            .collect();
+        let standardized: Vec<f64> = sorted_data.iter().map(|x| (x - mean) / std_dev).collect();
 
         // Calculate Anderson-Darling statistic
         let mut ad_stat = 0.0;
         for (i, &x) in standardized.iter().enumerate() {
             let phi = self.standard_normal_cdf(x);
             let i_f64 = (i + 1) as f64;
-            let _n_minus_i = (n - i_f64 + 1.0) as f64;
-            
+            let _n_minus_i = n - i_f64 + 1.0;
+
             if phi > 0.0 && phi < 1.0 {
                 ad_stat += (2.0 * i_f64 - 1.0) * (phi.ln() + (1.0 - phi).ln()) / n;
             }
@@ -272,7 +285,7 @@ impl ClassicalStatisticalTests {
         ad_stat = -n - ad_stat;
 
         // Adjust for sample size
-        ad_stat *= 1.0 + 4.0/n - 25.0/(n*n);
+        ad_stat *= 1.0 + 4.0 / n - 25.0 / (n * n);
 
         // Critical values for different significance levels
         let critical_values = vec![0.576, 0.656, 0.787, 0.918, 1.092];
@@ -291,7 +304,11 @@ impl ClassicalStatisticalTests {
     }
 
     /// Autocorrelation analysis for temporal dependencies
-    pub fn autocorrelation_analysis(&self, data: &[f64], max_lag: usize) -> Result<AutocorrelationResult> {
+    pub fn autocorrelation_analysis(
+        &self,
+        data: &[f64],
+        max_lag: usize,
+    ) -> Result<AutocorrelationResult> {
         if data.len() < max_lag * 2 {
             return Err(SteganoError::InvalidParameter(
                 "Data length must be at least twice the maximum lag".to_string(),
@@ -300,11 +317,9 @@ impl ClassicalStatisticalTests {
 
         let n = data.len();
         let mean = data.iter().sum::<f64>() / n as f64;
-        
+
         // Calculate variance
-        let variance = data.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / n as f64;
+        let variance = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
 
         if variance == 0.0 {
             return Err(SteganoError::InvalidParameter(
@@ -319,12 +334,12 @@ impl ClassicalStatisticalTests {
         for lag in 0..=max_lag {
             let mut covariance = 0.0;
             let valid_pairs = n - lag;
-            
+
             for i in 0..valid_pairs {
                 covariance += (data[i] - mean) * (data[i + lag] - mean);
             }
             covariance /= valid_pairs as f64;
-            
+
             let correlation = covariance / variance;
             correlations.push(correlation);
 
@@ -367,10 +382,34 @@ impl ClassicalStatisticalTests {
         // For production, use a proper statistical library
         let alpha = 1.0 - confidence;
         match df {
-            1 => if alpha <= 0.05 { 3.84 } else { 2.71 },
-            2 => if alpha <= 0.05 { 5.99 } else { 4.61 },
-            3 => if alpha <= 0.05 { 7.81 } else { 6.25 },
-            4 => if alpha <= 0.05 { 9.49 } else { 7.78 },
+            1 => {
+                if alpha <= 0.05 {
+                    3.84
+                } else {
+                    2.71
+                }
+            }
+            2 => {
+                if alpha <= 0.05 {
+                    5.99
+                } else {
+                    4.61
+                }
+            }
+            3 => {
+                if alpha <= 0.05 {
+                    7.81
+                } else {
+                    6.25
+                }
+            }
+            4 => {
+                if alpha <= 0.05 {
+                    9.49
+                } else {
+                    7.78
+                }
+            }
             _ => {
                 // Wilson-Hilferty approximation
                 let h = 2.0 / (9.0 * df as f64);
@@ -382,17 +421,21 @@ impl ClassicalStatisticalTests {
 
     fn ks_critical_value(&self, n1: usize, n2: usize, confidence: f64) -> f64 {
         let alpha = 1.0 - confidence;
-        let c_alpha = if alpha <= 0.01 { 1.63 } 
-                     else if alpha <= 0.05 { 1.36 } 
-                     else { 1.22 };
-        
+        let c_alpha = if alpha <= 0.01 {
+            1.63
+        } else if alpha <= 0.05 {
+            1.36
+        } else {
+            1.22
+        };
+
         c_alpha * ((n1 + n2) as f64 / (n1 * n2) as f64).sqrt()
     }
 
     fn ks_p_value(&self, d_statistic: f64, n1: usize, n2: usize) -> f64 {
         let n_eff = ((n1 * n2) as f64 / (n1 + n2) as f64).sqrt();
         let z = d_statistic * n_eff;
-        
+
         // Kolmogorov distribution approximation (clamped to valid range)
         let p = 2.0 * (-2.0 * z * z).exp();
         p.max(0.0).min(1.0)
@@ -400,21 +443,27 @@ impl ClassicalStatisticalTests {
 
     fn anderson_darling_p_value(&self, ad_stat: f64) -> f64 {
         // Approximate p-value calculation for Anderson-Darling test
-        if ad_stat < 0.2 { 1.0 - (-1.2337 * ad_stat).exp() * (2.00012 + 0.247105 * ad_stat + 0.0649821 * ad_stat.powi(2)) }
-        else if ad_stat < 0.34 { 1.0 - (-0.9177 * ad_stat).exp() * (1.92294 + 0.293361 * ad_stat) }
-        else if ad_stat < 0.6 { (-0.731 * ad_stat + 0.08861).exp() }
-        else { (-1.386294 * ad_stat + 0.277746).exp() }
+        if ad_stat < 0.2 {
+            1.0 - (-1.2337 * ad_stat).exp()
+                * (2.00012 + 0.247105 * ad_stat + 0.0649821 * ad_stat.powi(2))
+        } else if ad_stat < 0.34 {
+            1.0 - (-0.9177 * ad_stat).exp() * (1.92294 + 0.293361 * ad_stat)
+        } else if ad_stat < 0.6 {
+            (-0.731 * ad_stat + 0.08861).exp()
+        } else {
+            (-1.386294 * ad_stat + 0.277746).exp()
+        }
     }
 
     fn ljung_box_statistic(&self, autocorrelations: &[f64], n: usize) -> f64 {
         let n_f64 = n as f64;
         let mut statistic = 0.0;
-        
+
         for (k, &rho) in autocorrelations.iter().enumerate() {
             let lag = k + 1;
             statistic += rho.powi(2) / (n_f64 - lag as f64);
         }
-        
+
         n_f64 * (n_f64 + 2.0) * statistic
     }
 
@@ -481,11 +530,18 @@ pub struct AudioSteganalysisResult {
 
 impl AdvancedSteganalysis {
     pub fn new(detection_threshold: f64) -> Self {
-        Self { detection_threshold }
+        Self {
+            detection_threshold,
+        }
     }
 
     /// Comprehensive pixel pair analysis for LSB embedding detection
-    pub fn pixel_pair_analysis(&self, image: &[u8], width: usize, _height: usize) -> Result<PixelPairAnalysisResult> {
+    pub fn pixel_pair_analysis(
+        &self,
+        image: &[u8],
+        width: usize,
+        _height: usize,
+    ) -> Result<PixelPairAnalysisResult> {
         if image.is_empty() || width == 0 {
             return Err(SteganoError::InvalidParameter(
                 "Invalid image parameters".to_string(),
@@ -502,20 +558,20 @@ impl AdvancedSteganalysis {
                 if row_start + i + 1 < image.len() {
                     let pixel1 = image[row_start + i];
                     let pixel2 = image[row_start + i + 1];
-                    
+
                     adjacent_pairs += 1;
-                    
+
                     // Check for LSB manipulation patterns
                     let lsb1 = pixel1 & 1;
                     let lsb2 = pixel2 & 1;
-                    
+
                     // Statistical analysis of LSB relationships
                     let expected_correlation = 0.5; // Random expectation
                     let observed_correlation = if lsb1 == lsb2 { 1.0 } else { 0.0 };
-                    
+
                     let diff = observed_correlation - expected_correlation;
                     chi_square += diff * diff / expected_correlation;
-                    
+
                     // Detect unnatural LSB patterns
                     if (pixel1 ^ pixel2) & 1 == 0 && (pixel1 >> 1) != (pixel2 >> 1) {
                         affected_pairs += 1;
@@ -538,7 +594,8 @@ impl AdvancedSteganalysis {
             1.0
         };
 
-        let lsb_embedding_detected = embedding_probability > self.detection_threshold || p_value < 0.05;
+        let lsb_embedding_detected =
+            embedding_probability > self.detection_threshold || p_value < 0.05;
         let confidence = 1.0 - p_value;
 
         Ok(PixelPairAnalysisResult {
@@ -562,23 +619,22 @@ impl AdvancedSteganalysis {
         // Simple Haar wavelet transform for demonstration
         let float_data: Vec<f64> = data.iter().map(|&x| x as f64).collect();
         let (low_freq, high_freq) = self.haar_wavelet_transform(&float_data)?;
-        
+
         // Analyze energy distribution
         let total_energy: f64 = float_data.iter().map(|x| x * x).sum();
         let low_energy: f64 = low_freq.iter().map(|x| x * x).sum();
         let high_energy: f64 = high_freq.iter().map(|x| x * x).sum();
-        
-        let energy_distribution = vec![
-            low_energy / total_energy,
-            high_energy / total_energy,
-        ];
+
+        let energy_distribution = vec![low_energy / total_energy, high_energy / total_energy];
 
         // Detect anomalies in high-frequency components
         let high_freq_mean = high_freq.iter().sum::<f64>() / high_freq.len() as f64;
-        let high_freq_variance = high_freq.iter()
+        let high_freq_variance = high_freq
+            .iter()
             .map(|x| (x - high_freq_mean).powi(2))
-            .sum::<f64>() / high_freq.len() as f64;
-        
+            .sum::<f64>()
+            / high_freq.len() as f64;
+
         // Anomaly score based on unexpected high-frequency energy
         let expected_high_freq_ratio = 0.3; // Expected ratio for natural data
         let observed_high_freq_ratio = high_energy / total_energy;
@@ -606,7 +662,11 @@ impl AdvancedSteganalysis {
     }
 
     /// Comprehensive audio steganalysis
-    pub fn audio_steganalysis(&self, audio_data: &[f32], sample_rate: f32) -> Result<AudioSteganalysisResult> {
+    pub fn audio_steganalysis(
+        &self,
+        audio_data: &[f32],
+        sample_rate: f32,
+    ) -> Result<AudioSteganalysisResult> {
         if audio_data.len() < sample_rate as usize {
             return Err(SteganoError::InvalidParameter(
                 "Audio data too short for analysis".to_string(),
@@ -615,19 +675,20 @@ impl AdvancedSteganalysis {
 
         // Spectral analysis
         let spectral_score = self.spectral_anomaly_analysis(audio_data)?;
-        
+
         // Phase coherence analysis
         let phase_coherence_score = self.phase_coherence_analysis(audio_data)?;
-        
+
         // Cepstral analysis
         let cepstral_score = self.cepstral_analysis(audio_data)?;
-        
+
         // Harmonic distortion analysis
         let harmonic_distortion = self.harmonic_distortion_analysis(audio_data, sample_rate)?;
 
         // Combined embedding probability
-        let embedding_probability = (spectral_score + phase_coherence_score + cepstral_score + harmonic_distortion) / 4.0;
-        
+        let embedding_probability =
+            (spectral_score + phase_coherence_score + cepstral_score + harmonic_distortion) / 4.0;
+
         let spectral_anomalies = embedding_probability > self.detection_threshold;
 
         Ok(AudioSteganalysisResult {
@@ -654,7 +715,7 @@ impl AdvancedSteganalysis {
         for i in (0..data.len()).step_by(2) {
             let avg = (data[i] + data[i + 1]) / 2.0; // Low frequency (approximation)
             let diff = (data[i] - data[i + 1]) / 2.0; // High frequency (detail)
-            
+
             low_freq.push(avg);
             high_freq.push(diff);
         }
@@ -666,12 +727,14 @@ impl AdvancedSteganalysis {
         // Simple FFT-based spectral analysis
         let window_size = 1024.min(audio_data.len());
         let mut spectral_energy = vec![0.0; window_size / 2];
-        
+
         // Process overlapping windows
-        for window_start in (0..audio_data.len().saturating_sub(window_size)).step_by(window_size / 2) {
+        for window_start in
+            (0..audio_data.len().saturating_sub(window_size)).step_by(window_size / 2)
+        {
             let window = &audio_data[window_start..window_start + window_size];
             let fft_result = self.simple_fft(window)?;
-            
+
             for (i, &magnitude) in fft_result.iter().enumerate() {
                 if i < spectral_energy.len() {
                     spectral_energy[i] += magnitude * magnitude;
@@ -681,9 +744,12 @@ impl AdvancedSteganalysis {
 
         // Detect anomalies in spectral distribution
         let total_energy: f64 = spectral_energy.iter().map(|&x| x as f64).sum();
-        let high_freq_energy: f64 = spectral_energy[spectral_energy.len()/2..].iter().map(|&x| x as f64).sum();
+        let high_freq_energy: f64 = spectral_energy[spectral_energy.len() / 2..]
+            .iter()
+            .map(|&x| x as f64)
+            .sum();
         let high_freq_ratio = high_freq_energy / total_energy;
-        
+
         // Anomaly score based on unexpected high-frequency content
         Ok((high_freq_ratio - 0.1).max(0.0).min(1.0)) // Expected ratio ~0.1 for speech
     }
@@ -692,12 +758,12 @@ impl AdvancedSteganalysis {
         // Analyze phase relationships between adjacent samples
         let mut phase_jumps = 0;
         let mut total_comparisons = 0;
-        
+
         for window in audio_data.windows(3) {
             let phase1 = (window[1] / window[0]).atan();
             let phase2 = (window[2] / window[1]).atan();
             let phase_diff = (phase2 - phase1).abs();
-            
+
             if phase_diff > std::f32::consts::PI / 2.0 {
                 phase_jumps += 1;
             }
@@ -711,45 +777,42 @@ impl AdvancedSteganalysis {
     fn cepstral_analysis(&self, audio_data: &[f32]) -> Result<f64> {
         // Simple cepstral analysis for detecting embedding artifacts
         let fft_result = self.simple_fft(audio_data)?;
-        
+
         // Log magnitude spectrum
-        let log_spectrum: Vec<f32> = fft_result.iter()
-            .map(|&x| (x + 1e-10).ln())
-            .collect();
-        
+        let log_spectrum: Vec<f32> = fft_result.iter().map(|&x| (x + 1e-10).ln()).collect();
+
         // IFFT of log spectrum (simplified cepstrum)
         let cepstrum = self.simple_fft(&log_spectrum)?;
-        
+
         // Analyze cepstral coefficients for anomalies
-        let cepstral_variance = cepstrum.iter()
-            .map(|&x| x * x)
-            .sum::<f32>() / cepstrum.len() as f32;
-        
+        let cepstral_variance =
+            cepstrum.iter().map(|&x| x * x).sum::<f32>() / cepstrum.len() as f32;
+
         Ok((cepstral_variance - 0.1).max(0.0) as f64)
     }
 
     fn harmonic_distortion_analysis(&self, audio_data: &[f32], _sample_rate: f32) -> Result<f64> {
         let fft_result = self.simple_fft(audio_data)?;
-        
+
         // Find fundamental frequency (simplified)
         let mut max_magnitude = 0.0;
         let mut fundamental_bin = 0;
-        
+
         for (i, &magnitude) in fft_result.iter().enumerate().take(fft_result.len() / 4) {
             if magnitude > max_magnitude {
                 max_magnitude = magnitude;
                 fundamental_bin = i;
             }
         }
-        
+
         if fundamental_bin == 0 {
             return Ok(0.0);
         }
-        
+
         // Check harmonics
         let mut harmonic_energy = 0.0;
         let mut total_energy = max_magnitude * max_magnitude;
-        
+
         for harmonic in 2..=5 {
             let harmonic_bin = fundamental_bin * harmonic;
             if harmonic_bin < fft_result.len() {
@@ -758,13 +821,13 @@ impl AdvancedSteganalysis {
                 total_energy += harmonic_magnitude * harmonic_magnitude;
             }
         }
-        
+
         let thd = if total_energy > 0.0 {
             (harmonic_energy / total_energy).sqrt()
         } else {
             0.0
         };
-        
+
         Ok(thd as f64)
     }
 
@@ -772,27 +835,29 @@ impl AdvancedSteganalysis {
         // Simplified DFT implementation for magnitude spectrum
         let n = data.len();
         let mut magnitudes = Vec::with_capacity(n);
-        
+
         for k in 0..n {
             let mut real_sum = 0.0;
             let mut imag_sum = 0.0;
-            
+
             for j in 0..n {
                 let angle = -2.0 * std::f32::consts::PI * (k * j) as f32 / n as f32;
                 real_sum += data[j] * angle.cos();
                 imag_sum += data[j] * angle.sin();
             }
-            
+
             magnitudes.push((real_sum * real_sum + imag_sum * imag_sum).sqrt());
         }
-        
+
         Ok(magnitudes)
     }
 
     fn chi_square_p_value(&self, chi_square: f64, df: usize) -> f64 {
         // Simplified p-value calculation
-        if df == 0 { return 1.0; }
-        
+        if df == 0 {
+            return 1.0;
+        }
+
         // Use gamma function approximation
         let z = ((2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt()).abs();
         2.0 * (1.0 - self.standard_normal_cdf(z))
@@ -867,7 +932,11 @@ impl PerformanceAnalysis {
     }
 
     /// Comprehensive ROC analysis with optimal threshold selection
-    pub fn roc_analysis(&self, true_labels: &[bool], predicted_scores: &[f64]) -> Result<ROCAnalysis> {
+    pub fn roc_analysis(
+        &self,
+        true_labels: &[bool],
+        predicted_scores: &[f64],
+    ) -> Result<ROCAnalysis> {
         if true_labels.len() != predicted_scores.len() {
             return Err(SteganoError::InvalidParameter(
                 "Labels and scores must have same length".to_string(),
@@ -891,12 +960,19 @@ impl PerformanceAnalysis {
 
         // Calculate TPR and FPR for each threshold
         for &threshold in &thresholds {
-            let (tp, fp, tn, fn_count) = self.confusion_matrix_at_threshold(
-                true_labels, predicted_scores, threshold
-            );
+            let (tp, fp, tn, fn_count) =
+                self.confusion_matrix_at_threshold(true_labels, predicted_scores, threshold);
 
-            let tpr = if tp + fn_count > 0 { tp as f64 / (tp + fn_count) as f64 } else { 0.0 };
-            let fpr = if fp + tn > 0 { fp as f64 / (fp + tn) as f64 } else { 0.0 };
+            let tpr = if tp + fn_count > 0 {
+                tp as f64 / (tp + fn_count) as f64
+            } else {
+                0.0
+            };
+            let fpr = if fp + tn > 0 {
+                fp as f64 / (fp + tn) as f64
+            } else {
+                0.0
+            };
 
             tpr_values.push(tpr);
             fpr_values.push(fpr);
@@ -907,7 +983,7 @@ impl PerformanceAnalysis {
         let auc = self.calculate_auc(&fpr_values, &tpr_values);
 
         // Find optimal threshold using Youden's index
-        let (optimal_threshold, optimal_sensitivity, optimal_specificity, youden_index) = 
+        let (optimal_threshold, optimal_sensitivity, optimal_specificity, youden_index) =
             self.find_optimal_threshold(&threshold_values, &tpr_values, &fpr_values);
 
         Ok(ROCAnalysis {
@@ -923,10 +999,10 @@ impl PerformanceAnalysis {
     }
 
     fn confusion_matrix_at_threshold(
-        &self, 
-        true_labels: &[bool], 
-        predicted_scores: &[f64], 
-        threshold: f64
+        &self,
+        true_labels: &[bool],
+        predicted_scores: &[f64],
+        threshold: f64,
     ) -> (usize, usize, usize, usize) {
         let mut tp = 0; // True positives
         let mut fp = 0; // False positives
@@ -935,7 +1011,7 @@ impl PerformanceAnalysis {
 
         for (&true_label, &score) in true_labels.iter().zip(predicted_scores.iter()) {
             let predicted = score >= threshold;
-            
+
             match (true_label, predicted) {
                 (true, true) => tp += 1,
                 (false, true) => fp += 1,
@@ -954,15 +1030,20 @@ impl PerformanceAnalysis {
 
         let mut auc = 0.0;
         for i in 1..fpr.len() {
-            let dx = fpr[i] - fpr[i-1];
-            let avg_y = (tpr[i] + tpr[i-1]) / 2.0;
+            let dx = fpr[i] - fpr[i - 1];
+            let avg_y = (tpr[i] + tpr[i - 1]) / 2.0;
             auc += dx * avg_y;
         }
 
         auc.abs() // Ensure positive AUC
     }
 
-    fn find_optimal_threshold(&self, thresholds: &[f64], tpr: &[f64], fpr: &[f64]) -> (f64, f64, f64, f64) {
+    fn find_optimal_threshold(
+        &self,
+        thresholds: &[f64],
+        tpr: &[f64],
+        fpr: &[f64],
+    ) -> (f64, f64, f64, f64) {
         let mut best_youden = -1.0;
         let mut best_threshold = 0.0;
         let mut best_sensitivity = 0.0;
@@ -981,7 +1062,12 @@ impl PerformanceAnalysis {
             }
         }
 
-        (best_threshold, best_sensitivity, best_specificity, best_youden)
+        (
+            best_threshold,
+            best_sensitivity,
+            best_specificity,
+            best_youden,
+        )
     }
 }
 
@@ -1002,11 +1088,18 @@ impl ROCAnalysis {
 
 impl CrossValidation {
     fn new(k_folds: usize, random_seed: u64) -> Self {
-        Self { k_folds, random_seed }
+        Self {
+            k_folds,
+            random_seed,
+        }
     }
 
     /// Perform k-fold cross-validation for model performance assessment
-    pub fn k_fold_validation<F>(&self, data: &[(Vec<f64>, bool)], mut model_fn: F) -> Result<CrossValidationResult>
+    pub fn k_fold_validation<F>(
+        &self,
+        data: &[(Vec<f64>, bool)],
+        mut model_fn: F,
+    ) -> Result<CrossValidationResult>
     where
         F: FnMut(&[(Vec<f64>, bool)], &[(Vec<f64>, bool)]) -> Result<f64>,
     {
@@ -1022,10 +1115,15 @@ impl CrossValidation {
 
         for fold in 0..self.k_folds {
             let test_start = fold * fold_size;
-            let test_end = if fold == self.k_folds - 1 { data.len() } else { (fold + 1) * fold_size };
-            
+            let test_end = if fold == self.k_folds - 1 {
+                data.len()
+            } else {
+                (fold + 1) * fold_size
+            };
+
             let test_data = &data[test_start..test_end];
-            let train_data: Vec<_> = data.iter()
+            let train_data: Vec<_> = data
+                .iter()
                 .enumerate()
                 .filter(|(i, _)| *i < test_start || *i >= test_end)
                 .map(|(_, item)| item.clone())
@@ -1038,15 +1136,20 @@ impl CrossValidation {
         }
 
         let mean_accuracy = fold_accuracies.iter().sum::<f64>() / fold_accuracies.len() as f64;
-        let variance = fold_accuracies.iter()
+        let variance = fold_accuracies
+            .iter()
             .map(|x| (x - mean_accuracy).powi(2))
-            .sum::<f64>() / fold_accuracies.len() as f64;
+            .sum::<f64>()
+            / fold_accuracies.len() as f64;
         let std_accuracy = variance.sqrt();
 
         // 95% confidence interval
         let t_value = 2.776; // t-value for 95% CI with 4 df (5-fold CV)
         let margin_of_error = t_value * std_accuracy / (fold_accuracies.len() as f64).sqrt();
-        let confidence_interval = (mean_accuracy - margin_of_error, mean_accuracy + margin_of_error);
+        let confidence_interval = (
+            mean_accuracy - margin_of_error,
+            mean_accuracy + margin_of_error,
+        );
 
         let mean_auc = fold_aucs.iter().sum::<f64>() / fold_aucs.len() as f64;
 
@@ -1119,18 +1222,23 @@ impl StatisticalValidationSuite {
     }
 
     /// Run complete validation suite on steganographic data
-    pub fn comprehensive_validation(&self, original: &[u8], stego: &[u8], format: &DataFormat) -> Result<ValidationReport> {
+    pub fn comprehensive_validation(
+        &self,
+        original: &[u8],
+        stego: &[u8],
+        format: &DataFormat,
+    ) -> Result<ValidationReport> {
         let mut report = ValidationReport::new();
 
         // Classical statistical tests
         report.classical_results = self.run_classical_tests(original, stego)?;
-        
+
         // Advanced steganalysis
         report.steganalysis_results = self.run_steganalysis(stego, format)?;
-        
+
         // Performance analysis
         report.performance_results = self.run_performance_analysis(original, stego)?;
-        
+
         // Domain-specific validation
         report.domain_results = self.run_domain_validation(original, stego, format)?;
 
@@ -1145,27 +1253,45 @@ impl StatisticalValidationSuite {
         let (observed_hist, expected_hist) = self.create_histograms(&stego_f64, &original_f64);
 
         Ok(ClassicalTestResults {
-            ks_test: self.classical_tests.kolmogorov_smirnov_test(&original_f64, &stego_f64)?,
-            chi_square_test: self.classical_tests.chi_square_test(&observed_hist, &expected_hist)?,
+            ks_test: self
+                .classical_tests
+                .kolmogorov_smirnov_test(&original_f64, &stego_f64)?,
+            chi_square_test: self
+                .classical_tests
+                .chi_square_test(&observed_hist, &expected_hist)?,
             runs_test: {
                 let binary_seq: Vec<bool> = stego.iter().map(|&x| x & 1 == 1).collect();
                 self.classical_tests.runs_test(&binary_seq)?
             },
             anderson_darling: self.classical_tests.anderson_darling_test(&stego_f64)?,
-            autocorrelation: self.classical_tests.autocorrelation_analysis(&stego_f64, 20)?,
+            autocorrelation: self
+                .classical_tests
+                .autocorrelation_analysis(&stego_f64, 20)?,
         })
     }
 
-    fn create_histograms(&self, observed_data: &[f64], expected_data: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    fn create_histograms(
+        &self,
+        observed_data: &[f64],
+        expected_data: &[f64],
+    ) -> (Vec<f64>, Vec<f64>) {
         const BINS: usize = 10;
         let mut observed_hist = vec![0.0; BINS];
         let mut expected_hist = vec![0.0; BINS];
-        
+
         // Find min and max values for binning
-        let min_val = observed_data.iter().chain(expected_data.iter()).copied().fold(f64::INFINITY, f64::min);
-        let max_val = observed_data.iter().chain(expected_data.iter()).copied().fold(f64::NEG_INFINITY, f64::max);
+        let min_val = observed_data
+            .iter()
+            .chain(expected_data.iter())
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let max_val = observed_data
+            .iter()
+            .chain(expected_data.iter())
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
         let range = max_val - min_val;
-        
+
         if range == 0.0 {
             // All values are the same, create uniform distribution
             for i in 0..BINS {
@@ -1174,20 +1300,20 @@ impl StatisticalValidationSuite {
             }
             return (observed_hist, expected_hist);
         }
-        
+
         // Bin the data
         for &value in observed_data {
             let bin = ((value - min_val) / range * (BINS - 1) as f64).floor() as usize;
             let bin = bin.min(BINS - 1);
             observed_hist[bin] += 1.0;
         }
-        
+
         for &value in expected_data {
             let bin = ((value - min_val) / range * (BINS - 1) as f64).floor() as usize;
             let bin = bin.min(BINS - 1);
             expected_hist[bin] += 1.0;
         }
-        
+
         // Ensure no zero frequencies (add small constant)
         for i in 0..BINS {
             if expected_hist[i] == 0.0 {
@@ -1197,7 +1323,7 @@ impl StatisticalValidationSuite {
                 observed_hist[i] = 1.0;
             }
         }
-        
+
         (observed_hist, expected_hist)
     }
 
@@ -1206,43 +1332,51 @@ impl StatisticalValidationSuite {
 
         match format {
             DataFormat::PNG | DataFormat::TIFF => {
-                results.pixel_pair_analysis = Some(
-                    self.steganalysis.pixel_pair_analysis(stego, 256, 256)?
-                );
-                results.wavelet_analysis = Some(
-                    self.steganalysis.wavelet_structural_analysis(stego)?
-                );
-            },
+                results.pixel_pair_analysis =
+                    Some(self.steganalysis.pixel_pair_analysis(stego, 256, 256)?);
+                results.wavelet_analysis =
+                    Some(self.steganalysis.wavelet_structural_analysis(stego)?);
+            }
             DataFormat::WAV => {
-                let audio_data: Vec<f32> = stego.chunks(4)
+                let audio_data: Vec<f32> = stego
+                    .chunks(4)
                     .map(|chunk| {
                         let mut bytes = [0u8; 4];
                         for (i, &b) in chunk.iter().enumerate() {
-                            if i < 4 { bytes[i] = b; }
+                            if i < 4 {
+                                bytes[i] = b;
+                            }
                         }
                         f32::from_le_bytes(bytes)
                     })
                     .collect();
-                results.audio_analysis = Some(
-                    self.steganalysis.audio_steganalysis(&audio_data, 44100.0)?
-                );
-            },
+                results.audio_analysis =
+                    Some(self.steganalysis.audio_steganalysis(&audio_data, 44100.0)?);
+            }
             _ => {
-                results.wavelet_analysis = Some(
-                    self.steganalysis.wavelet_structural_analysis(stego)?
-                );
+                results.wavelet_analysis =
+                    Some(self.steganalysis.wavelet_structural_analysis(stego)?);
             }
         }
 
         Ok(results)
     }
 
-    fn run_performance_analysis(&self, _original: &[u8], _stego: &[u8]) -> Result<PerformanceResults> {
+    fn run_performance_analysis(
+        &self,
+        _original: &[u8],
+        _stego: &[u8],
+    ) -> Result<PerformanceResults> {
         // Placeholder for performance analysis
         Ok(PerformanceResults::default())
     }
 
-    fn run_domain_validation(&self, _original: &[u8], _stego: &[u8], _format: &DataFormat) -> Result<DomainResults> {
+    fn run_domain_validation(
+        &self,
+        _original: &[u8],
+        _stego: &[u8],
+        _format: &DataFormat,
+    ) -> Result<DomainResults> {
         // Placeholder for domain-specific validation
         Ok(DomainResults::default())
     }
@@ -1406,33 +1540,39 @@ impl TestDatasetManager {
     fn create_synthetic_datasets(&mut self) -> Result<()> {
         // Create synthetic PNG test data
         let png_data = self.create_synthetic_png(256, 256)?;
-        self.datasets.insert("synthetic_png".to_string(), TestDataset {
-            name: "Synthetic PNG".to_string(),
-            description: "256x256 synthetic image for testing".to_string(),
-            data: png_data,
-            format: DataFormat::PNG,
-            ground_truth: Some(GroundTruth {
-                has_hidden_data: false,
-                embedding_method: None,
-                payload_size: None,
-                embedding_parameters: None,
-            }),
-        });
+        self.datasets.insert(
+            "synthetic_png".to_string(),
+            TestDataset {
+                name: "Synthetic PNG".to_string(),
+                description: "256x256 synthetic image for testing".to_string(),
+                data: png_data,
+                format: DataFormat::PNG,
+                ground_truth: Some(GroundTruth {
+                    has_hidden_data: false,
+                    embedding_method: None,
+                    payload_size: None,
+                    embedding_parameters: None,
+                }),
+            },
+        );
 
         // Create synthetic audio test data
         let audio_data = self.create_synthetic_audio(44100, 1.0)?; // 1 second at 44.1kHz
-        self.datasets.insert("synthetic_audio".to_string(), TestDataset {
-            name: "Synthetic Audio".to_string(),
-            description: "1 second sine wave at 440Hz".to_string(),
-            data: audio_data,
-            format: DataFormat::WAV,
-            ground_truth: Some(GroundTruth {
-                has_hidden_data: false,
-                embedding_method: None,
-                payload_size: None,
-                embedding_parameters: None,
-            }),
-        });
+        self.datasets.insert(
+            "synthetic_audio".to_string(),
+            TestDataset {
+                name: "Synthetic Audio".to_string(),
+                description: "1 second sine wave at 440Hz".to_string(),
+                data: audio_data,
+                format: DataFormat::WAV,
+                ground_truth: Some(GroundTruth {
+                    has_hidden_data: false,
+                    embedding_method: None,
+                    payload_size: None,
+                    embedding_parameters: None,
+                }),
+            },
+        );
 
         Ok(())
     }
@@ -1446,7 +1586,7 @@ impl TestDatasetManager {
                 let r = (255.0 * x as f64 / width as f64) as u8;
                 let g = (255.0 * y as f64 / height as f64) as u8;
                 let b = (255.0 * ((x + y) as f64 / (width + height) as f64)) as u8;
-                
+
                 data.push(r);
                 data.push(g);
                 data.push(b);
@@ -1464,7 +1604,7 @@ impl TestDatasetManager {
             // Generate 440Hz sine wave
             let t = i as f32 / sample_rate as f32;
             let sample = (2.0 * std::f32::consts::PI * 440.0 * t).sin() * 0.5;
-            
+
             // Convert to bytes
             let bytes = sample.to_le_bytes();
             audio_data.extend_from_slice(&bytes);
@@ -1499,8 +1639,11 @@ mod tests {
         let validation = StatisticalValidationSuite::new();
         let observed = vec![10.0, 15.0, 20.0, 25.0];
         let expected = vec![12.0, 16.0, 18.0, 24.0];
-        
-        let result = validation.classical_tests.chi_square_test(&observed, &expected).unwrap();
+
+        let result = validation
+            .classical_tests
+            .chi_square_test(&observed, &expected)
+            .unwrap();
         assert!(result.test_statistic > 0.0);
         assert!(result.degrees_of_freedom == 3);
         assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
@@ -1511,8 +1654,11 @@ mod tests {
         let validation = StatisticalValidationSuite::new();
         let sample1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let sample2 = vec![1.1, 2.1, 3.1, 4.1, 5.1];
-        
-        let result = validation.classical_tests.kolmogorov_smirnov_test(&sample1, &sample2).unwrap();
+
+        let result = validation
+            .classical_tests
+            .kolmogorov_smirnov_test(&sample1, &sample2)
+            .unwrap();
         assert!(result.test_statistic >= 0.0);
         assert!(result.p_value >= 0.0, "p_value: {}", result.p_value);
         assert!(result.p_value <= 1.0, "p_value: {}", result.p_value);
@@ -1522,7 +1668,7 @@ mod tests {
     fn test_runs_test() {
         let validation = StatisticalValidationSuite::new();
         let sequence = vec![true, false, true, false, true, false, true, false];
-        
+
         let result = validation.classical_tests.runs_test(&sequence).unwrap();
         assert!(result.observed_runs > 0);
         assert!(result.expected_runs > 0.0);
@@ -1532,8 +1678,11 @@ mod tests {
     fn test_pixel_pair_analysis() {
         let validation = StatisticalValidationSuite::new();
         let image_data = vec![100u8; 1024]; // Simple test image
-        
-        let result = validation.steganalysis.pixel_pair_analysis(&image_data, 32, 32).unwrap();
+
+        let result = validation
+            .steganalysis
+            .pixel_pair_analysis(&image_data, 32, 32)
+            .unwrap();
         assert!(result.embedding_probability >= 0.0 && result.embedding_probability <= 1.0);
     }
 
@@ -1541,8 +1690,11 @@ mod tests {
     fn test_wavelet_analysis() {
         let validation = StatisticalValidationSuite::new();
         let data = vec![128u8; 1024]; // Simple test data
-        
-        let result = validation.steganalysis.wavelet_structural_analysis(&data).unwrap();
+
+        let result = validation
+            .steganalysis
+            .wavelet_structural_analysis(&data)
+            .unwrap();
         assert!(result.energy_distribution.len() > 0);
         assert!(result.anomaly_score >= 0.0);
     }
@@ -1554,10 +1706,21 @@ mod tests {
         let audio_data: Vec<f32> = (0..44100)
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin() * 0.5)
             .collect();
-        
-        let result = validation.steganalysis.audio_steganalysis(&audio_data, 44100.0).unwrap();
-        assert!(result.embedding_probability >= 0.0, "embedding_probability: {}", result.embedding_probability);
-        assert!(result.embedding_probability <= 1.0, "embedding_probability: {}", result.embedding_probability);
+
+        let result = validation
+            .steganalysis
+            .audio_steganalysis(&audio_data, 44100.0)
+            .unwrap();
+        assert!(
+            result.embedding_probability >= 0.0,
+            "embedding_probability: {}",
+            result.embedding_probability
+        );
+        assert!(
+            result.embedding_probability <= 1.0,
+            "embedding_probability: {}",
+            result.embedding_probability
+        );
     }
 
     #[test]
@@ -1565,8 +1728,11 @@ mod tests {
         let validation = StatisticalValidationSuite::new();
         let true_labels = vec![true, false, true, false, true];
         let scores = vec![0.8, 0.3, 0.9, 0.2, 0.7];
-        
-        let result = validation.performance_analysis.roc_analysis(&true_labels, &scores).unwrap();
+
+        let result = validation
+            .performance_analysis
+            .roc_analysis(&true_labels, &scores)
+            .unwrap();
         assert!(result.auc >= 0.0 && result.auc <= 1.0);
         assert!(result.optimal_threshold >= 0.0);
     }
@@ -1575,11 +1741,11 @@ mod tests {
     fn test_test_dataset_creation() {
         let mut manager = TestDatasetManager::new();
         manager.load_standard_datasets().unwrap();
-        
+
         let datasets = manager.list_datasets();
         assert!(datasets.contains(&"synthetic_png".to_string()));
         assert!(datasets.contains(&"synthetic_audio".to_string()));
-        
+
         let png_dataset = manager.get_dataset("synthetic_png").unwrap();
         assert_eq!(png_dataset.format, DataFormat::PNG);
         assert!(!png_dataset.data.is_empty());
@@ -1591,8 +1757,10 @@ mod tests {
         // Create data with mixed bit patterns to ensure both true and false values
         let original: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
         let stego: Vec<u8> = (0..1024).map(|i| ((i + 1) % 256) as u8).collect();
-        
-        let result = validation.comprehensive_validation(&original, &stego, &DataFormat::BINARY).unwrap();
+
+        let result = validation
+            .comprehensive_validation(&original, &stego, &DataFormat::BINARY)
+            .unwrap();
         assert!(result.classical_results.ks_test.p_value >= 0.0);
         assert!(result.overall_score >= 0.0);
     }
