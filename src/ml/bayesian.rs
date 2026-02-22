@@ -492,41 +492,149 @@ impl BayesianOptimizer {
         }
     }
 
-    /// Optimize GP hyperparameters using maximum likelihood
+    /// Optimise GP hyperparameters by maximising the log marginal likelihood.
+    ///
+    /// Uses gradient ascent with numerical finite-difference gradients in log-space
+    /// (θ = exp(ψ)) so all three hyperparameters stay strictly positive throughout.
+    /// After convergence the kernel enum fields and the internal Cholesky are updated
+    /// so that subsequent `fit`/`predict` calls use the new parameters.
     fn optimize_hyperparameters(&mut self) {
-        // Simplified hyperparameter optimization
-        // In practice, would use gradient-based optimization
+        if self.gaussian_process.training_x.is_empty() {
+            return;
+        }
 
-        let mut best_likelihood = f32::NEG_INFINITY;
-        let mut best_hyperparams = self.gaussian_process.hyperparams.clone();
+        let eps = 1e-3_f32;
+        let lr  = 0.1_f32;
+        let clip = 5.0_f32;
 
-        // Grid search over hyperparameters
-        for noise_var in [0.001, 0.01, 0.1] {
-            for signal_var in [0.1, 1.0, 10.0] {
-                for length_scale in [0.1, 1.0, 10.0] {
-                    let mut test_hyperparams = self.gaussian_process.hyperparams.clone();
-                    test_hyperparams.noise_variance = noise_var;
-                    test_hyperparams.signal_variance = signal_var;
-                    test_hyperparams.length_scale = length_scale;
+        // Work in log-space: ψ = ln(θ), θ = exp(ψ)
+        let mut log_noise  = self.gaussian_process.hyperparams.noise_variance.max(1e-6).ln();
+        let mut log_signal = self.gaussian_process.hyperparams.signal_variance.max(1e-6).ln();
+        let mut log_length = self.gaussian_process.hyperparams.length_scale.max(1e-6).ln();
 
-                    let likelihood = self.calculate_log_likelihood(&test_hyperparams);
+        for _ in 0..30 {
+            let base_ll = self.calculate_log_likelihood(&GpHyperparams {
+                noise_variance: log_noise.exp(),
+                signal_variance: log_signal.exp(),
+                length_scale: log_length.exp(),
+                kernel_params: HashMap::new(),
+            });
 
-                    if likelihood > best_likelihood {
-                        best_likelihood = likelihood;
-                        best_hyperparams = test_hyperparams;
-                    }
+            if !base_ll.is_finite() {
+                break;
+            }
+
+            // Numerical gradients ∂LL/∂ψ via forward finite differences
+            let grad_noise = (self.calculate_log_likelihood(&GpHyperparams {
+                noise_variance: (log_noise + eps).exp(),
+                signal_variance: log_signal.exp(),
+                length_scale: log_length.exp(),
+                kernel_params: HashMap::new(),
+            }) - base_ll) / eps;
+
+            let grad_signal = (self.calculate_log_likelihood(&GpHyperparams {
+                noise_variance: log_noise.exp(),
+                signal_variance: (log_signal + eps).exp(),
+                length_scale: log_length.exp(),
+                kernel_params: HashMap::new(),
+            }) - base_ll) / eps;
+
+            let grad_length = (self.calculate_log_likelihood(&GpHyperparams {
+                noise_variance: log_noise.exp(),
+                signal_variance: log_signal.exp(),
+                length_scale: (log_length + eps).exp(),
+                kernel_params: HashMap::new(),
+            }) - base_ll) / eps;
+
+            // Gradient ascent with clipping and bounded log-space values
+            log_noise  = (log_noise  + lr * grad_noise.clamp(-clip, clip)).clamp(-10.0, 4.0);
+            log_signal = (log_signal + lr * grad_signal.clamp(-clip, clip)).clamp(-5.0, 5.0);
+            log_length = (log_length + lr * grad_length.clamp(-clip, clip)).clamp(-5.0, 5.0);
+        }
+
+        let best = GpHyperparams {
+            noise_variance: log_noise.exp(),
+            signal_variance: log_signal.exp(),
+            length_scale: log_length.exp(),
+            kernel_params: HashMap::new(),
+        };
+
+        self.gaussian_process.hyperparams = best.clone();
+
+        // Sync length_scale and signal_variance into the kernel enum so that
+        // kernel_function() (which reads the enum fields) stays consistent.
+        match &mut self.gaussian_process.kernel {
+            KernelFunction::RBF { length_scale, signal_variance }
+            | KernelFunction::Matern32 { length_scale, signal_variance }
+            | KernelFunction::Matern52 { length_scale, signal_variance } => {
+                *length_scale  = best.length_scale;
+                *signal_variance = best.signal_variance;
+            }
+            KernelFunction::RationalQuadratic { length_scale, signal_variance, .. } => {
+                *length_scale  = best.length_scale;
+                *signal_variance = best.signal_variance;
+            }
+        }
+
+        // Refit to rebuild Cholesky with the updated kernel parameters
+        let x = self.gaussian_process.training_x.clone();
+        let y = self.gaussian_process.training_y.clone();
+        self.gaussian_process.fit(&x, &y);
+    }
+
+    /// Compute GP log marginal likelihood for a candidate set of hyperparameters.
+    ///
+    /// log p(y | X, θ) = −½ y^T α  −  Σ_i log L_{ii}  −  n/2 log(2π)
+    ///
+    /// where K + σ²I = L L^T (Cholesky) and α = K^{-1} y.
+    fn calculate_log_likelihood(&self, hyperparams: &GpHyperparams) -> f32 {
+        let x = &self.gaussian_process.training_x;
+        let y = &self.gaussian_process.training_y;
+        let n = x.len();
+
+        if n == 0 {
+            return 0.0;
+        }
+
+        // Build K(θ) + σ_noise² I using candidate hyperparams
+        let mut k = vec![vec![0.0f32; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                k[i][j] = self.gaussian_process.kernel_with_params(
+                    &x[i],
+                    &x[j],
+                    hyperparams.signal_variance,
+                    hyperparams.length_scale,
+                );
+                if i == j {
+                    k[i][j] += hyperparams.noise_variance;
                 }
             }
         }
 
-        self.gaussian_process.hyperparams = best_hyperparams;
-    }
+        // Cholesky: K = L L^T
+        let l = self.gaussian_process.cholesky_decomposition(&k);
 
-    /// Calculate log marginal likelihood for hyperparameter optimization
-    fn calculate_log_likelihood(&self, hyperparams: &GpHyperparams) -> f32 {
-        // Simplified likelihood calculation
-        // Would implement full GP marginal likelihood in practice
-        -hyperparams.noise_variance - hyperparams.length_scale.abs()
+        // Reject non-positive-definite matrices
+        for i in 0..n {
+            if l[i][i] <= 0.0 || !l[i][i].is_finite() {
+                return f32::NEG_INFINITY;
+            }
+        }
+
+        // α = K^{-1} y via Cholesky solve
+        let alpha = self.gaussian_process.solve_cholesky(&l, y);
+
+        // Data-fit term: −½ y^T α
+        let data_fit: f32 = y.iter().zip(&alpha).map(|(yi, ai)| yi * ai).sum();
+
+        // Complexity penalty: −Σ_i log(L_{ii})  (= −½ log|K|)
+        let log_det: f32 = l.iter().enumerate().map(|(i, row)| row[i].ln()).sum();
+
+        // Normalisation constant: −n/2 log(2π)
+        let norm_const = (n as f32) * 0.5 * (2.0 * std::f32::consts::PI).ln();
+
+        -0.5 * data_fit - log_det - norm_const
     }
 
     /// Check convergence based on improvement in recent iterations
@@ -641,24 +749,30 @@ impl GaussianProcess {
             return (0.0, self.hyperparams.signal_variance);
         }
 
-        // Compute covariance between test point and training points
+        // k_* = covariance between test point and all training points
         let k_star: Vec<f32> = self
             .training_x
             .iter()
             .map(|x_train| self.kernel_function(x_test, x_train))
             .collect();
 
-        // Compute test point covariance
+        // k** = prior variance at test point
         let k_star_star = self.kernel_function(x_test, x_test);
 
-        // Predict mean
-        let mean = k_star.iter().zip(&self.alpha).map(|(k, a)| k * a).sum();
+        // Posterior mean: k_*^T (K + σ²I)^{-1} y = k_*^T α
+        let mean: f32 = k_star.iter().zip(&self.alpha).map(|(k, a)| k * a).sum();
 
-        // Predict variance (simplified)
-        let variance =
-            k_star_star - k_star.iter().map(|k| k * k).sum::<f32>() / self.training_x.len() as f32;
+        // Posterior variance: k** - k_*^T (K + σ²I)^{-1} k_*
+        //   = k** - ||v||²  where  v = L^{-1} k_*
+        let variance = if let Some(ref l) = self.cholesky_l {
+            let v = self.forward_substitution(l, &k_star);
+            let quad: f32 = v.iter().map(|vi| vi * vi).sum();
+            (k_star_star - quad).max(1e-6)
+        } else {
+            self.hyperparams.signal_variance
+        };
 
-        (mean, variance.max(1e-6))
+        (mean, variance)
     }
 
     /// Kernel function evaluation
@@ -735,6 +849,49 @@ impl GaussianProcess {
         }
 
         l
+    }
+
+    /// Forward substitution only: solve L * v = b (first half of solve_cholesky)
+    fn forward_substitution(&self, l: &[Vec<f32>], b: &[f32]) -> Vec<f32> {
+        let n = l.len();
+        let mut v = vec![0.0f32; n];
+        for i in 0..n {
+            let sum: f32 = (0..i).map(|j| l[i][j] * v[j]).sum();
+            v[i] = if l[i][i].abs() > 1e-10 {
+                (b[i] - sum) / l[i][i]
+            } else {
+                0.0
+            };
+        }
+        v
+    }
+
+    /// Evaluate the kernel with explicit signal_variance and length_scale,
+    /// using the same kernel *type* as `self.kernel` (ignores embedded field values).
+    /// Used by log-likelihood optimisation to try candidate hyperparams.
+    fn kernel_with_params(&self, x1: &[f32], x2: &[f32], signal_var: f32, length_scale: f32) -> f32 {
+        let sq_dist: f32 = x1.iter().zip(x2).map(|(a, b)| (a - b).powi(2)).sum();
+        match &self.kernel {
+            KernelFunction::RBF { .. } => {
+                signal_var * (-0.5 * sq_dist / (length_scale * length_scale)).exp()
+            }
+            KernelFunction::Matern32 { .. } => {
+                let dist = sq_dist.sqrt();
+                let t = 3.0_f32.sqrt() * dist / length_scale;
+                signal_var * (1.0 + t) * (-t).exp()
+            }
+            KernelFunction::Matern52 { .. } => {
+                let dist = sq_dist.sqrt();
+                let t = 5.0_f32.sqrt() * dist / length_scale;
+                signal_var
+                    * (1.0 + t + 5.0 * sq_dist / (3.0 * length_scale * length_scale))
+                    * (-t).exp()
+            }
+            KernelFunction::RationalQuadratic { alpha, .. } => {
+                signal_var
+                    * (1.0 + sq_dist / (2.0 * alpha * length_scale * length_scale)).powf(-alpha)
+            }
+        }
     }
 
     /// Solve linear system using Cholesky decomposition
@@ -838,5 +995,154 @@ mod tests {
 
         let k_self = gp.kernel_function(&x1, &x1);
         assert!((k_self - 1.0).abs() < 1e-6); // Self-similarity should be 1
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn make_optimizer_with_data() -> BayesianOptimizer {
+        let bounds = ParameterBounds {
+            lower_bounds: vec![0.0, 0.0, 0.0],
+            upper_bounds: vec![1.0, 1.0, 1.0],
+            parameter_names: vec!["ec".to_string(), "stealth".to_string(), "gpu".to_string()],
+        };
+        let mut opt = BayesianOptimizer::new(bounds, BayesianConfig::default());
+        // 5 observations along a parabola y = x*(1-x) in the first parameter dimension
+        for i in 0..5 {
+            let x = i as f32 / 4.0;
+            opt.observations.push(Observation {
+                parameters: vec![x, 0.5, 0.0],
+                objective_value: x * (1.0 - x),
+                noise_level: 0.01,
+                timestamp: 0,
+            });
+        }
+        opt.update_gaussian_process();
+        opt
+    }
+
+    // ── log marginal likelihood ───────────────────────────────────────────────
+
+    #[test]
+    fn test_log_likelihood_is_finite_with_data() {
+        let opt = make_optimizer_with_data();
+        let ll = opt.calculate_log_likelihood(&GpHyperparams::default());
+        assert!(
+            ll.is_finite(),
+            "Log marginal likelihood should be finite with training data, got {ll}"
+        );
+    }
+
+    #[test]
+    fn test_log_likelihood_is_not_placeholder() {
+        // The old stub returned -noise_variance - length_scale regardless of data.
+        // Verify the output depends on the actual training targets by checking that
+        // a tiny-noise, well-scaled GP gives a meaningfully different value from
+        // a wildly mismatched one.
+        let opt = make_optimizer_with_data();
+
+        let good = opt.calculate_log_likelihood(&GpHyperparams {
+            noise_variance: 0.01,
+            signal_variance: 1.0,
+            length_scale: 0.5,
+            kernel_params: HashMap::new(),
+        });
+        let bad = opt.calculate_log_likelihood(&GpHyperparams {
+            noise_variance: 100.0,
+            signal_variance: 0.001,
+            length_scale: 1000.0,
+            kernel_params: HashMap::new(),
+        });
+
+        assert!(
+            good > bad,
+            "Well-scaled hyperparams should yield higher log likelihood \
+             (good={good:.3} bad={bad:.3})"
+        );
+    }
+
+    // ── hyperparameter optimisation ───────────────────────────────────────────
+
+    #[test]
+    fn test_hyperparameter_optimization_does_not_decrease_likelihood() {
+        let mut opt = make_optimizer_with_data();
+        let ll_before =
+            opt.calculate_log_likelihood(&opt.gaussian_process.hyperparams.clone());
+
+        opt.optimize_hyperparameters();
+
+        let ll_after =
+            opt.calculate_log_likelihood(&opt.gaussian_process.hyperparams.clone());
+
+        assert!(
+            ll_after >= ll_before - 1e-2,
+            "Hyperparameter optimisation should not decrease log likelihood \
+             (before={ll_before:.4} after={ll_after:.4})"
+        );
+    }
+
+    #[test]
+    fn test_hyperparameter_optimization_updates_kernel_fields() {
+        let mut opt = make_optimizer_with_data();
+        // Deliberately misset kernel fields so we can check they get updated
+        opt.gaussian_process.kernel = KernelFunction::RBF {
+            length_scale: 99.0,
+            signal_variance: 99.0,
+        };
+        opt.optimize_hyperparameters();
+
+        // After optimisation the kernel fields should match hyperparams
+        if let KernelFunction::RBF { length_scale, signal_variance } =
+            opt.gaussian_process.kernel
+        {
+            assert!(
+                (length_scale - opt.gaussian_process.hyperparams.length_scale).abs() < 1e-5,
+                "Kernel length_scale not synced: kernel={length_scale} hyperparams={}",
+                opt.gaussian_process.hyperparams.length_scale
+            );
+            assert!(
+                (signal_variance - opt.gaussian_process.hyperparams.signal_variance).abs() < 1e-5,
+                "Kernel signal_variance not synced"
+            );
+        }
+    }
+
+    // ── predict variance ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_predict_variance_decreases_near_data() {
+        let opt = make_optimizer_with_data();
+
+        // Near the middle training point (x=[0.5,0.5,0]) variance should be low
+        let (_, near_var) = opt.gaussian_process.predict(&[0.5, 0.5, 0.0]);
+
+        // Far outside the training distribution variance should be higher
+        let (_, far_var) = opt.gaussian_process.predict(&[10.0, 10.0, 10.0]);
+
+        assert!(
+            near_var < far_var,
+            "Posterior variance near data ({near_var:.5}) should be less than \
+             variance far from data ({far_var:.5})"
+        );
+    }
+
+    #[test]
+    fn test_predict_mean_interpolates_data() {
+        // With very small noise the posterior mean should be close to the
+        // training target at an observed input.
+        let mut gp = GaussianProcess::new(KernelFunction::RBF {
+            length_scale: 0.5,
+            signal_variance: 1.0,
+        });
+        gp.hyperparams.noise_variance = 1e-4;
+
+        let x_data = vec![vec![0.0f32], vec![0.5], vec![1.0]];
+        let y_data = vec![0.0_f32, 0.25, 0.0];
+        gp.fit(&x_data, &y_data);
+
+        let (mean, _) = gp.predict(&[0.5]);
+        assert!(
+            (mean - 0.25).abs() < 0.05,
+            "GP mean at training point should ≈ training target: got {mean:.4}"
+        );
     }
 }
