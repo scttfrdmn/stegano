@@ -63,8 +63,10 @@ extern "C" __global__ void lsb_extract(
 
         /// Initialise the accelerator on device 0.  Compiles both kernels via
         /// NVRTC so the driver can JIT them to the native architecture.
+        ///
+        /// `CudaDevice::new` returns `Arc<CudaDevice>` directly in cudarc 0.12.
         pub fn new() -> Result<Self> {
-            let device = CudaDevice::new(0)
+            let device: Arc<CudaDevice> = CudaDevice::new(0)
                 .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             // Compile and load LSB embed kernel
@@ -81,9 +83,7 @@ extern "C" __global__ void lsb_extract(
                 .load_ptx(extract_ptx, "lsb_extract_mod", &["lsb_extract"])
                 .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
-            Ok(Self {
-                device: Arc::new(device),
-            })
+            Ok(Self { device })
         }
 
         /// GPU-accelerated LSB embedding.
