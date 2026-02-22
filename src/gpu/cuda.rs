@@ -65,21 +65,21 @@ extern "C" __global__ void lsb_extract(
         /// NVRTC so the driver can JIT them to the native architecture.
         pub fn new() -> Result<Self> {
             let device = CudaDevice::new(0)
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             // Compile and load LSB embed kernel
             let embed_ptx = compile_ptx(LSB_EMBED_SRC)
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
             device
                 .load_ptx(embed_ptx, "lsb_embed_mod", &["lsb_embed"])
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             // Compile and load LSB extract kernel
             let extract_ptx = compile_ptx(LSB_EXTRACT_SRC)
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
             device
                 .load_ptx(extract_ptx, "lsb_extract_mod", &["lsb_extract"])
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             Ok(Self {
                 device: Arc::new(device),
@@ -101,11 +101,11 @@ extern "C" __global__ void lsb_extract(
             let mut d_data = self
                 .device
                 .htod_sync_copy(&data[..n as usize])
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
             let d_payload = self
                 .device
                 .htod_sync_copy(&payload[..n as usize])
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             let f = self
                 .device
@@ -114,12 +114,12 @@ extern "C" __global__ void lsb_extract(
 
             let cfg = LaunchConfig::for_num_elems(n);
             unsafe { f.launch(cfg, (&mut d_data, &d_payload, n)) }
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             let result = self
                 .device
                 .dtoh_sync_copy(&d_data)
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
             data[..n as usize].copy_from_slice(&result);
 
             Ok(n as usize)
@@ -138,11 +138,11 @@ extern "C" __global__ void lsb_extract(
             let d_data = self
                 .device
                 .htod_sync_copy(&data[..n as usize])
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
             let mut d_output = self
                 .device
                 .alloc_zeros::<u8>(n as usize)
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             let f = self
                 .device
@@ -151,11 +151,11 @@ extern "C" __global__ void lsb_extract(
 
             let cfg = LaunchConfig::for_num_elems(n);
             unsafe { f.launch(cfg, (&d_data, &mut d_output, n)) }
-                .map_err(|e| SteganoError::GpuError(e.to_string()))?;
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             self.device
                 .dtoh_sync_copy(&d_output)
-                .map_err(|e| SteganoError::GpuError(e.to_string()))
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))
         }
 
         /// Returns the name of the CUDA device in use.

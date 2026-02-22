@@ -54,25 +54,20 @@ impl GpuFoundation {
     /// Detect if GPU acceleration is available on this system
     fn detect_gpu_availability() -> bool {
         #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            if crate::gpu::metal::MetalAccelerator::is_available() {
-                return true;
-            }
+        if crate::gpu::metal::MetalAccelerator::is_available() {
+            return true;
         }
 
         #[cfg(feature = "cuda")]
-        {
-            if crate::gpu::cuda::CudaAccelerator::is_available() {
-                return true;
-            }
+        if crate::gpu::cuda::CudaAccelerator::is_available() {
+            return true;
         }
 
-        #[cfg(feature = "gpu")]
-        {
-            true
+        // WGPU: feature presence implies availability
+        if cfg!(feature = "gpu") {
+            return true;
         }
 
-        #[cfg(not(any(feature = "gpu", feature = "cuda")))]
         false
     }
 
@@ -126,21 +121,16 @@ impl GpuFoundation {
     /// Detect backend information
     fn detect_backend_info() -> String {
         #[cfg(all(target_os = "macos", feature = "metal"))]
-        {
-            if crate::gpu::metal::MetalAccelerator::is_available() {
-                return "Metal (macOS)".to_string();
-            }
+        if crate::gpu::metal::MetalAccelerator::is_available() {
+            return "Metal (macOS)".to_string();
         }
 
         #[cfg(feature = "cuda")]
-        {
-            if crate::gpu::cuda::CudaAccelerator::is_available() {
-                return "CUDA (NVIDIA)".to_string();
-            }
+        if crate::gpu::cuda::CudaAccelerator::is_available() {
+            return "CUDA (NVIDIA)".to_string();
         }
 
-        #[cfg(feature = "gpu")]
-        {
+        if cfg!(feature = "gpu") {
             return "WGPU (Cross-platform)".to_string();
         }
 
