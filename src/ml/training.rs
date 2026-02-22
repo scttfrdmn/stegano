@@ -376,8 +376,11 @@ impl TrainingPipeline {
                 model.update(example)?;
             }
 
-            // Calculate batch loss (simplified)
-            total_loss += 0.1; // Placeholder
+            // Compute real batch loss from the model's evaluation on this batch
+            if !batch.is_empty() {
+                let batch_perf = model.evaluate(batch)?;
+                total_loss += batch_perf.capacity_mse + batch_perf.time_mse;
+            }
             batch_count += 1;
         }
 

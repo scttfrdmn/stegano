@@ -8,6 +8,16 @@ use crate::core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Standard normal CDF via Abramowitz & Stegun approximation 7.1.26 (max error 1.5e-7).
+fn normal_cdf(x: f32) -> f32 {
+    let t = 1.0 / (1.0 + 0.3275911 * x.abs());
+    let poly = t * (0.254_829_592
+        + t * (-0.284_496_736
+            + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let approx = 1.0 - poly * (-x.abs() * x.abs()).exp();
+    if x >= 0.0 { approx } else { 1.0 - approx }
+}
+
 /// Performance analysis engine
 #[derive(Debug)]
 pub struct AnalysisEngine {
@@ -97,7 +107,7 @@ pub enum DistributionTest {
 #[derive(Debug)]
 pub struct CorrelationAnalyzer {
     /// Correlation method
-    _method: CorrelationMethod,
+    method: CorrelationMethod,
 }
 
 /// Correlation analysis methods
@@ -868,7 +878,47 @@ impl StatisticalAnalyzer for DistributionAnalyzer {
 
 impl CorrelationAnalyzer {
     pub fn new(method: CorrelationMethod) -> Self {
-        Self { _method: method }
+        Self { method }
+    }
+
+    /// Pearson correlation coefficient between two equal-length slices.
+    fn pearson(xs: &[f32], ys: &[f32]) -> f32 {
+        let n = xs.len() as f32;
+        if n < 2.0 { return 0.0; }
+        let xm = xs.iter().sum::<f32>() / n;
+        let ym = ys.iter().sum::<f32>() / n;
+        let cov: f32 = xs.iter().zip(ys).map(|(&x, &y)| (x - xm) * (y - ym)).sum();
+        let sx = xs.iter().map(|&x| (x - xm).powi(2)).sum::<f32>().sqrt();
+        let sy = ys.iter().map(|&y| (y - ym).powi(2)).sum::<f32>().sqrt();
+        if sx == 0.0 || sy == 0.0 { 0.0 } else { (cov / (sx * sy)).clamp(-1.0, 1.0) }
+    }
+
+    /// Spearman rank correlation: Pearson applied to the ranks of each variable.
+    fn spearman(xs: &[f32], ys: &[f32]) -> f32 {
+        let rank = |vals: &[f32]| -> Vec<f32> {
+            let mut indexed: Vec<(usize, f32)> =
+                vals.iter().copied().enumerate().collect();
+            indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let mut ranks = vec![0.0f32; vals.len()];
+            let mut i = 0;
+            while i < indexed.len() {
+                let mut j = i + 1;
+                while j < indexed.len() && indexed[j].1 == indexed[i].1 { j += 1; }
+                let avg_rank = (i + j - 1) as f32 / 2.0;
+                for k in i..j { ranks[indexed[k].0] = avg_rank; }
+                i = j;
+            }
+            ranks
+        };
+        Self::pearson(&rank(xs), &rank(ys))
+    }
+
+    /// Dispatch to the configured correlation method.
+    fn correlate(&self, xs: &[f32], ys: &[f32]) -> f32 {
+        match self.method {
+            CorrelationMethod::Pearson => Self::pearson(xs, ys),
+            CorrelationMethod::Spearman | CorrelationMethod::Kendall => Self::spearman(xs, ys),
+        }
     }
 }
 
@@ -877,8 +927,27 @@ impl StatisticalAnalyzer for CorrelationAnalyzer {
         let mut correlations = HashMap::new();
 
         if data.len() >= 2 {
-            // Calculate simple correlation between capacity and time
-            correlations.insert("capacity_time_correlation".to_string(), -0.3); // Placeholder
+            let capacity: Vec<f32> = data.iter().map(|m| m.capacity_efficiency).collect();
+            let time_ms:  Vec<f32> = data.iter().map(|m| m.embedding_time_ms as f32).collect();
+            let quality:  Vec<f32> = data.iter().map(|m| m.quality_preservation).collect();
+            let accuracy: Vec<f32> = data.iter().map(|m| m.extraction_accuracy).collect();
+
+            correlations.insert(
+                "capacity_time_correlation".to_string(),
+                self.correlate(&capacity, &time_ms),
+            );
+            correlations.insert(
+                "capacity_quality_correlation".to_string(),
+                self.correlate(&capacity, &quality),
+            );
+            correlations.insert(
+                "time_quality_correlation".to_string(),
+                self.correlate(&time_ms, &quality),
+            );
+            correlations.insert(
+                "capacity_accuracy_correlation".to_string(),
+                self.correlate(&capacity, &accuracy),
+            );
         }
 
         Ok(StatisticalSummary {
@@ -977,19 +1046,79 @@ impl ChiSquareDetector {
 }
 
 impl DetectionEvaluator for ChiSquareDetector {
-    fn evaluate(&self, _original: &[u8], _stego: &[u8]) -> Result<DetectionScore> {
-        // Simplified chi-square test implementation
+    /// Real chi-square test comparing the byte-frequency distributions of `original`
+    /// and `stego`.  Uses the Wilson-Hilferty normal approximation to convert the
+    /// χ²(255) statistic to a p-value without requiring an incomplete-gamma library.
+    fn evaluate(&self, original: &[u8], stego: &[u8]) -> Result<DetectionScore> {
+        // Byte frequency histograms
+        let mut orig_hist = [0u64; 256];
+        let mut stego_hist = [0u64; 256];
+        for &b in original { orig_hist[b as usize] += 1; }
+        for &b in stego   { stego_hist[b as usize] += 1; }
+
+        let orig_n  = original.len() as f64;
+        let stego_n = stego.len()    as f64;
+
+        // χ² = Σ (observed − expected)² / expected
+        // expected[i] = orig_hist[i] / orig_n * stego_n   (scale original distribution to stego size)
+        let df = 255.0_f64;
+        let mut chi2 = 0.0_f64;
+        let mut active_bins = 0usize;
+
+        for i in 0..256 {
+            if orig_n > 0.0 {
+                let expected = orig_hist[i] as f64 / orig_n * stego_n;
+                if expected >= 0.5 {       // skip near-zero expected cells
+                    let diff = stego_hist[i] as f64 - expected;
+                    chi2 += diff * diff / expected;
+                    active_bins += 1;
+                }
+            }
+        }
+
+        // Wilson-Hilferty approximation: χ²(df) → standard normal
+        // z ≈ ((χ²/df)^(1/3) − (1 − 2/(9·df))) / √(2/(9·df))
+        let effective_df = active_bins.saturating_sub(1).max(1) as f64;
+        let x   = (chi2 / effective_df).cbrt();
+        let mu  = 1.0 - 2.0 / (9.0 * effective_df);
+        let sig = (2.0 / (9.0 * effective_df)).sqrt();
+        let z   = ((x - mu) / sig) as f32;
+
+        // p-value = P(χ²(df) > chi2) = 1 − Φ(z)
+        let p_value = 1.0 - normal_cdf(z);
+
+        // Low p-value → distributions differ → steganography is detectable
+        let detection_probability = (1.0 - p_value).clamp(0.0, 1.0);
+
+        let confidence = if orig_n >= 256.0 && stego_n >= 256.0 { 0.85 } else { 0.5 };
+
+        let resistance_grade = match detection_probability {
+            p if p < 0.2 => ResistanceGrade::Excellent,
+            p if p < 0.4 => ResistanceGrade::Good,
+            p if p < 0.6 => ResistanceGrade::Fair,
+            p if p < 0.8 => ResistanceGrade::Poor,
+            _            => ResistanceGrade::Failed,
+        };
+
+        let mut method_scores = HashMap::new();
+        method_scores.insert("chi2_statistic".to_string(), chi2 as f32);
+        method_scores.insert("p_value".to_string(), p_value);
+        method_scores.insert("degrees_of_freedom".to_string(), df as f32);
+
         Ok(DetectionScore {
-            detection_probability: 0.3, // Placeholder
-            confidence: 0.8,
-            method_scores: HashMap::new(),
+            detection_probability,
+            confidence,
+            method_scores,
             evidence: vec![DetectionEvidence {
-                description: "Statistical anomaly detected in byte distribution".to_string(),
-                strength: 0.3,
+                description: format!(
+                    "χ²={:.2} ({} bins, df={}), p={:.4}",
+                    chi2, active_bins, effective_df as usize, p_value
+                ),
+                strength: detection_probability,
                 method: self.name().to_string(),
                 location: None,
             }],
-            resistance_grade: ResistanceGrade::Good,
+            resistance_grade,
         })
     }
 

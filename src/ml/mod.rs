@@ -520,19 +520,116 @@ impl MLOptimizer {
         result
     }
 
-    /// Calculate complexity measures
-    fn calculate_complexity_measures(&self, _carrier: &CarrierData) -> Result<Vec<f32>> {
-        // TODO: Implement various complexity measures
-        Ok(vec![0.0; 5]) // Placeholder
+    /// Calculate five carrier complexity measures, all normalised to [0, 1]:
+    ///   0. Byte variance (normalised by max possible variance for 8-bit data)
+    ///   1. Byte range   (max – min / 255)
+    ///   2. Mean run length (fraction of bytes that are identical to their predecessor)
+    ///   3. Byte uniqueness (fraction of the 256 possible byte values that appear)
+    ///   4. Byte transition rate (fraction of adjacent byte pairs that differ)
+    fn calculate_complexity_measures(&self, carrier: &CarrierData) -> Result<Vec<f32>> {
+        let data = &carrier.raw_data;
+        if data.is_empty() {
+            return Ok(vec![0.0; 5]);
+        }
+        let n = data.len();
+
+        // 0 — normalised byte variance
+        let mean = data.iter().map(|&b| b as f32).sum::<f32>() / n as f32;
+        let variance =
+            data.iter().map(|&b| { let d = b as f32 - mean; d * d }).sum::<f32>() / n as f32;
+        let norm_variance = variance / (127.5 * 127.5); // max variance ≈ 127.5²
+
+        // 1 — byte range
+        let min_b = *data.iter().min().unwrap() as f32;
+        let max_b = *data.iter().max().unwrap() as f32;
+        let byte_range = (max_b - min_b) / 255.0;
+
+        // 2 — mean run length (fraction of bytes equal to their predecessor;
+        //     0 = all bytes differ, 1 = one long run of identical bytes)
+        let repeated = data.windows(2).filter(|w| w[0] == w[1]).count();
+        let run_fraction = repeated as f32 / (n - 1) as f32;
+
+        // 3 — byte uniqueness
+        let mut seen = [false; 256];
+        for &b in data { seen[b as usize] = true; }
+        let uniqueness = seen.iter().filter(|&&v| v).count() as f32 / 256.0;
+
+        // 4 — transition rate (fraction of adjacent pairs that differ)
+        let transitions = data.windows(2).filter(|w| w[0] != w[1]).count();
+        let transition_rate = transitions as f32 / (n - 1) as f32;
+
+        Ok(vec![norm_variance, byte_range, run_fraction, uniqueness, transition_rate])
     }
 
-    /// Extract format-specific features
+    /// Extract format-specific features as a named map.
+    ///
+    /// FASTA/FASTQ → base composition (A, T, C, G fractions + GC content)
+    /// WAV/BinarySignal → zero-crossing rate + normalised signal energy
+    /// PNG/TIFF/MICROSCOPY/DICOM → pixel mean, std, dark ratio, bright ratio
+    /// everything else → printable-character ratio
     fn extract_format_specific_features(
         &self,
-        _carrier: &CarrierData,
+        carrier: &CarrierData,
     ) -> Result<HashMap<String, f32>> {
-        // TODO: Implement format-specific feature extraction
-        Ok(HashMap::new()) // Placeholder
+        let mut features = HashMap::new();
+        let data = &carrier.raw_data;
+        if data.is_empty() {
+            return Ok(features);
+        }
+        let total = data.len() as f32;
+
+        match carrier.format {
+            DataFormat::FASTA | DataFormat::FASTQ => {
+                let a = data.iter().filter(|&&b| b == b'A' || b == b'a').count() as f32 / total;
+                let t = data.iter().filter(|&&b| b == b'T' || b == b't').count() as f32 / total;
+                let c = data.iter().filter(|&&b| b == b'C' || b == b'c').count() as f32 / total;
+                let g = data.iter().filter(|&&b| b == b'G' || b == b'g').count() as f32 / total;
+                features.insert("base_a".to_string(), a);
+                features.insert("base_t".to_string(), t);
+                features.insert("base_c".to_string(), c);
+                features.insert("base_g".to_string(), g);
+                features.insert("gc_content".to_string(), g + c);
+            }
+            DataFormat::WAV | DataFormat::BinarySignal => {
+                // Treat each byte as an 8-bit unsigned sample; centre around 128
+                let samples: Vec<f32> = data.iter().map(|&b| b as f32 - 128.0).collect();
+                let n = samples.len();
+                let zcr = samples
+                    .windows(2)
+                    .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
+                    .count() as f32
+                    / (n - 1) as f32;
+                let energy =
+                    samples.iter().map(|&s| s * s).sum::<f32>() / n as f32 / (128.0 * 128.0);
+                features.insert("zero_crossing_rate".to_string(), zcr);
+                features.insert("signal_energy".to_string(), energy);
+            }
+            DataFormat::PNG
+            | DataFormat::TIFF
+            | DataFormat::MICROSCOPY
+            | DataFormat::DICOM => {
+                // Skip typical file header (8 bytes) and treat the rest as pixel bytes
+                let pixel_start = 8.min(data.len());
+                let pixels: Vec<f32> =
+                    data[pixel_start..].iter().map(|&b| b as f32 / 255.0).collect();
+                let pn = pixels.len() as f32;
+                let mean = pixels.iter().sum::<f32>() / pn;
+                let std = (pixels.iter().map(|&p| (p - mean).powi(2)).sum::<f32>() / pn).sqrt();
+                let dark = pixels.iter().filter(|&&p| p < 0.25).count() as f32 / pn;
+                let bright = pixels.iter().filter(|&&p| p > 0.75).count() as f32 / pn;
+                features.insert("pixel_mean".to_string(), mean);
+                features.insert("pixel_std".to_string(), std);
+                features.insert("dark_ratio".to_string(), dark);
+                features.insert("bright_ratio".to_string(), bright);
+            }
+            _ => {
+                let printable =
+                    data.iter().filter(|&&b| b >= 32 && b < 127).count() as f32 / total;
+                features.insert("printable_ratio".to_string(), printable);
+            }
+        }
+
+        Ok(features)
     }
 
     /// Predict performance metrics for given features and parameters based on historical data

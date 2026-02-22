@@ -690,22 +690,129 @@ impl DecisionTreeModel {
         }
     }
 
-    /// Find best feature and threshold for splitting
-    fn find_best_split(&self, _examples: &[TrainingExample]) -> Option<(usize, f32)> {
-        // Simplified implementation - would need proper information gain calculation
-        Some((0, 0.5)) // Placeholder
+    /// Extract a flat feature vector from CarrierFeatures (for decision tree splits)
+    fn extract_features(features: &CarrierFeatures) -> Vec<f32> {
+        let mut v = vec![features.size as f32, features.entropy];
+        v.extend_from_slice(&features.frequency_characteristics);
+        v.extend_from_slice(&features.complexity_measures);
+        // Sorted keys for determinism
+        let mut keys: Vec<&String> = features.format_specific.keys().collect();
+        keys.sort();
+        for k in keys {
+            v.push(features.format_specific[k]);
+        }
+        v
     }
 
-    /// Split examples based on feature and threshold
+    /// Gini impurity of a slice of integer class labels
+    fn gini(labels: &[u8]) -> f32 {
+        if labels.is_empty() {
+            return 0.0;
+        }
+        let n = labels.len() as f32;
+        let mut counts = [0u32; 5]; // ECLevel has 5 variants
+        for &l in labels {
+            counts[l as usize] += 1;
+        }
+        let sum_sq: f32 = counts.iter().map(|&c| (c as f32 / n).powi(2)).sum();
+        1.0 - sum_sq
+    }
+
+    /// Map ECLevel to integer label
+    fn ec_label(params: &EmbedParams) -> u8 {
+        match params.error_correction_level {
+            ECLevel::None => 0,
+            ECLevel::Low => 1,
+            ECLevel::Medium => 2,
+            ECLevel::High => 3,
+            ECLevel::Maximum => 4,
+        }
+    }
+
+    /// Find best feature and threshold for splitting using Gini impurity
+    fn find_best_split(&self, examples: &[TrainingExample]) -> Option<(usize, f32)> {
+        if examples.is_empty() {
+            return None;
+        }
+
+        let feature_vecs: Vec<Vec<f32>> = examples
+            .iter()
+            .map(|e| Self::extract_features(&e.carrier_features))
+            .collect();
+        let n_features = feature_vecs.iter().map(|v| v.len()).max().unwrap_or(0);
+        if n_features == 0 {
+            return None;
+        }
+
+        let labels: Vec<u8> = examples
+            .iter()
+            .map(|e| Self::ec_label(&e.embed_params))
+            .collect();
+
+        let n = examples.len() as f32;
+        let mut best_impurity = f32::MAX;
+        let mut best_split: Option<(usize, f32)> = None;
+
+        for fi in 0..n_features {
+            // Collect feature values, replacing missing with 0.0
+            let mut vals: Vec<f32> = feature_vecs
+                .iter()
+                .map(|v| v.get(fi).copied().unwrap_or(0.0))
+                .collect();
+            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            vals.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+            // Try midpoints between adjacent unique values
+            for w in vals.windows(2) {
+                let threshold = (w[0] + w[1]) / 2.0;
+
+                let mut left_labels: Vec<u8> = Vec::new();
+                let mut right_labels: Vec<u8> = Vec::new();
+                for (j, fv) in feature_vecs.iter().enumerate() {
+                    let val = fv.get(fi).copied().unwrap_or(0.0);
+                    if val <= threshold {
+                        left_labels.push(labels[j]);
+                    } else {
+                        right_labels.push(labels[j]);
+                    }
+                }
+
+                if left_labels.is_empty() || right_labels.is_empty() {
+                    continue;
+                }
+
+                let weighted_gini = (left_labels.len() as f32 / n) * Self::gini(&left_labels)
+                    + (right_labels.len() as f32 / n) * Self::gini(&right_labels);
+
+                if weighted_gini < best_impurity {
+                    best_impurity = weighted_gini;
+                    best_split = Some((fi, threshold));
+                }
+            }
+        }
+
+        best_split
+    }
+
+    /// Split examples based on feature index and threshold
     fn split_examples(
         &self,
         examples: &[TrainingExample],
-        _feature_idx: usize,
-        _threshold: f32,
+        feature_idx: usize,
+        threshold: f32,
     ) -> (Vec<TrainingExample>, Vec<TrainingExample>) {
-        // Simplified implementation
-        let mid = examples.len() / 2;
-        (examples[..mid].to_vec(), examples[mid..].to_vec())
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for example in examples {
+            let fv = Self::extract_features(&example.carrier_features);
+            let val = fv.get(feature_idx).copied().unwrap_or(0.0);
+            if val <= threshold {
+                left.push(example.clone());
+            } else {
+                right.push(example.clone());
+            }
+        }
+        (left, right)
     }
 }
 
@@ -930,5 +1037,82 @@ mod tests {
         assert!(perf.time_mse >= 0.0);
         // r_squared is finite (not the old hardcoded 0.0 for non-trivial data)
         assert!(perf.r_squared.is_finite());
+    }
+
+    fn make_example(size: usize, entropy: f32, ec: ECLevel) -> TrainingExample {
+        TrainingExample {
+            carrier_features: CarrierFeatures {
+                format: DataFormat::PNG,
+                size,
+                entropy,
+                frequency_characteristics: vec![],
+                complexity_measures: vec![],
+                format_specific: HashMap::new(),
+            },
+            embed_params: EmbedParams {
+                encryption_key: vec![],
+                error_correction_level: ec,
+                stealth_level: StealthLevel::Low,
+                use_gpu: false,
+                format_specific: HashMap::new(),
+                enable_validation: false,
+            },
+            performance: super::super::PerformanceMetrics {
+                capacity_efficiency: 0.8,
+                embedding_time_ms: 10,
+                extraction_accuracy: 1.0,
+                quality_preservation: 0.9,
+                memory_usage: 512,
+                gpu_acceleration_benefit: 1.0,
+            },
+            detection_resistance: 0.7,
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn test_find_best_split_separates_classes() {
+        // Two clearly separable groups: small/high-entropy → ECLevel::High,
+        // large/low-entropy → ECLevel::Low.
+        let mut examples: Vec<TrainingExample> = (0..5)
+            .map(|i| make_example(100 + i * 10, 7.5, ECLevel::High))
+            .collect();
+        examples.extend((0..5).map(|i| make_example(10000 + i * 1000, 2.0, ECLevel::Low)));
+
+        let tree = DecisionTreeModel::new(5, 1);
+        let split = tree.find_best_split(&examples);
+        assert!(split.is_some(), "should find a split for clearly separable data");
+
+        let (fi, threshold) = split.unwrap();
+        let (left, right) = tree.split_examples(&examples, fi, threshold);
+        // Both sides must be non-empty
+        assert!(!left.is_empty(), "left partition must be non-empty");
+        assert!(!right.is_empty(), "right partition must be non-empty");
+        // Total count preserved
+        assert_eq!(left.len() + right.len(), examples.len());
+    }
+
+    #[test]
+    fn test_find_best_split_single_class_returns_split_or_none() {
+        // All identical features and same EC level — no gain split possible.
+        let examples: Vec<TrainingExample> = (0..5)
+            .map(|_| make_example(500, 5.0, ECLevel::Medium))
+            .collect();
+        let tree = DecisionTreeModel::new(5, 1);
+        // With identical values there are no midpoints → None, or any split (implementation detail)
+        let split = tree.find_best_split(&examples);
+        // Just ensure it doesn't panic
+        let _ = split;
+    }
+
+    #[test]
+    fn test_gini_impurity() {
+        // Pure node → 0.0
+        assert_eq!(DecisionTreeModel::gini(&[0, 0, 0, 0]), 0.0);
+        // Binary 50/50 → 0.5
+        let g = DecisionTreeModel::gini(&[0, 0, 1, 1]);
+        assert!((g - 0.5).abs() < 1e-5, "50/50 gini should be 0.5, got {g}");
+        // Empty → 0.0
+        assert_eq!(DecisionTreeModel::gini(&[]), 0.0);
     }
 }

@@ -135,8 +135,29 @@ impl SteganoEmbedder {
                 }
             }
             DataFormat::WAV | DataFormat::BinarySignal => {
-                // Audio-specific validation (placeholder)
-                // TODO: Implement proper audio steganalysis validation
+                // Skip 44-byte RIFF/WAV header if present; otherwise treat all bytes as samples
+                let sample_start = if modified_data.starts_with(b"RIFF") && modified_data.len() > 44 {
+                    44
+                } else {
+                    0
+                };
+                if modified_data.len() > sample_start {
+                    let audio_data: Vec<f32> = modified_data[sample_start..]
+                        .iter()
+                        .map(|&b| (b as f32 - 128.0) / 128.0)
+                        .collect();
+                    if let Ok(audio_analysis) = self
+                        .validation_suite
+                        .advanced_steganalysis()
+                        .audio_steganalysis(&audio_data, 44100.0)
+                    {
+                        report.add_test_result(
+                            "audio_steganalysis".to_string(),
+                            serde_json::to_value(audio_analysis)
+                                .map_err(|e| SteganoError::SerializationError(e))?,
+                        );
+                    }
+                }
             }
             _ => {
                 // Generic analysis for other formats
