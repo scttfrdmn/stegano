@@ -1,7 +1,7 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
@@ -9,10 +9,12 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.1 - Latest Production Release
+## 🎯 Version 0.3.2 - Latest Production Release
 
-Stegano v0.3.1 completes the statistical validation framework with enterprise-grade reporting and performance optimizations:
-- ✅ **261 Tests Passing** - Comprehensive coverage across all modules
+Stegano v0.3.2 adds NVIDIA CUDA acceleration and fixes cross-platform Linux builds:
+- ✅ **261 Tests Passing** - Comprehensive coverage across all modules (264 with `--features cuda`)
+- ✅ **CUDA Acceleration** - NVRTC-compiled LSB kernels, JIT to native GPU arch (RTX 5090 / Blackwell tested)
+- ✅ **Linux Cross-Platform Fix** - TOML scoping bug resolved; all non-macOS targets now build cleanly
 - ✅ **Validation Dashboard** - Human-readable `fmt::Display` output for `ValidationReport`
 - ✅ **Parallel Validation** - Classical statistical tests run concurrently via Rayon
 - ✅ **JSON Export** - `to_json_string()` for machine-readable report output
