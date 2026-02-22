@@ -646,9 +646,12 @@ impl RLAgent {
     }
 
     /// Thompson sampling action selection
+    ///
+    /// Uses Gaussian Thompson sampling: the posterior over the mean reward of each
+    /// (state, action) pair is N(Q(s,a), 1/(n+1)) where n is the visit count. We draw
+    /// one sample per action using the Box-Muller transform and pick the action with the
+    /// highest sample.
     fn thompson_sampling_action(&self, state: &RLState) -> RLAction {
-        // Simplified Thompson sampling implementation
-        // In practice would use proper Bayesian inference
         let mut best_action = self.get_random_action();
         let mut best_sample = f32::NEG_INFINITY;
 
@@ -658,23 +661,29 @@ impl RLAgent {
                 action: action.clone(),
             };
 
-            let q_value = self
+            let q_mean = self
                 .q_table
                 .values
                 .get(&state_action)
                 .cloned()
                 .unwrap_or(0.0);
-            let visits = self
+            let n = self
                 .q_table
                 .visit_counts
                 .get(&state_action)
                 .cloned()
                 .unwrap_or(0) as f32;
 
-            // Sample from normal distribution centered at Q-value
-            let uncertainty = 1.0 / (visits + 1.0);
-            let sample = q_value + uncertainty * (random::<f32>() - 0.5) * 2.0;
+            // Posterior std dev: σ / sqrt(n+1) with σ = 1 (unit prior variance)
+            let std_dev = 1.0 / (n + 1.0).sqrt();
 
+            // Box-Muller transform: generate a standard normal sample Z
+            let u1 = random::<f32>().max(f32::EPSILON); // avoid log(0)
+            let u2 = random::<f32>();
+            let z = (-2.0_f32 * u1.ln()).sqrt()
+                * (2.0 * std::f32::consts::PI * u2).cos();
+
+            let sample = q_mean + std_dev * z;
             if sample > best_sample {
                 best_sample = sample;
                 best_action = action;
@@ -899,30 +908,68 @@ impl RLAgent {
         Ok((next_state, reward, done))
     }
 
-    /// Simulate reward for action in given state
+    /// Simulate reward for action in given state.
+    ///
+    /// Reward is composed of four independent alignment signals, each normalised to
+    /// a similar scale, plus small Gaussian noise that keeps the environment stochastic:
+    ///
+    /// 1. Strategy ↔ Format compatibility  (up to 0.45)
+    /// 2. Parameter config ↔ Stealth level alignment (up to 0.25 / down to -0.20)
+    /// 3. Optimizer ↔ Security level suitability (up to 0.15)
+    /// 4. Strategy/params ↔ Performance priority (up to 0.10)
     async fn simulate_action_reward(&self, state: &RLState, action: &RLAction) -> Result<f32> {
-        // Simplified reward function
-        let mut reward = 0.0;
+        let mut reward = 0.0_f32;
 
-        // Reward for strategy-format alignment
-        match (&action.strategy, &state.format) {
-            (EmbeddingStrategy::LSB, DataFormat::PNG) => reward += 0.8,
-            (EmbeddingStrategy::DCT, DataFormat::PNG) => reward += 0.9,
-            (EmbeddingStrategy::FFT, DataFormat::WAV) => reward += 0.8,
-            (EmbeddingStrategy::Statistical, DataFormat::FASTA) => reward += 0.7,
-            _ => reward += 0.3,
-        }
+        // ── 1. Strategy ↔ Format compatibility ───────────────────────────────
+        reward += match (&action.strategy, &state.format) {
+            (EmbeddingStrategy::DCT, DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY) => 0.45,
+            (EmbeddingStrategy::DWT, DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY) => 0.40,
+            (EmbeddingStrategy::LSB, DataFormat::PNG | DataFormat::TIFF) => 0.35,
+            (EmbeddingStrategy::FFT, DataFormat::WAV | DataFormat::BinarySignal) => 0.45,
+            (EmbeddingStrategy::Statistical, DataFormat::FASTA | DataFormat::FASTQ) => 0.42,
+            _ => 0.10, // generic fallback
+        };
 
-        // Penalty for mismatched stealth requirements
-        match (&action.params, &state.stealth_level) {
-            (ParameterConfig::Conservative, StealthLevel::Maximum) => reward += 0.5,
-            (ParameterConfig::Aggressive, StealthLevel::Low) => reward += 0.5,
-            (ParameterConfig::Balanced, StealthLevel::Medium) => reward += 0.6,
-            _ => reward -= 0.2,
-        }
+        // ── 2. Parameter config ↔ Stealth level alignment ────────────────────
+        reward += match (&action.params, &state.stealth_level) {
+            (ParameterConfig::Conservative, StealthLevel::Maximum) => 0.25,
+            (ParameterConfig::Conservative, StealthLevel::High)    => 0.20,
+            (ParameterConfig::Balanced,     StealthLevel::Medium)  => 0.20,
+            (ParameterConfig::Aggressive,   StealthLevel::Low)     => 0.20,
+            (ParameterConfig::Aggressive,   StealthLevel::Maximum) => -0.20, // dangerous mismatch
+            (ParameterConfig::Conservative, StealthLevel::Low)     => -0.05, // wasteful
+            _ => 0.05,
+        };
 
-        // Add some noise
-        reward += (random::<f32>() - 0.5) * 0.1;
+        // ── 3. Optimizer ↔ Security level suitability ────────────────────────
+        reward += match (&state.security_level, &action.optimizer) {
+            (SecurityLevel::Maximum | SecurityLevel::High,
+             OptimizationAlgorithmType::BayesianOptimization) => 0.15,
+            (SecurityLevel::Maximum,
+             OptimizationAlgorithmType::SimulatedAnnealing) => 0.12,
+            (SecurityLevel::Standard,
+             OptimizationAlgorithmType::GeneticAlgorithm
+             | OptimizationAlgorithmType::ParticleSwarm) => 0.10,
+            (SecurityLevel::Basic,
+             OptimizationAlgorithmType::RandomSearch
+             | OptimizationAlgorithmType::GridSearch) => 0.10,
+            _ => 0.03,
+        };
+
+        // ── 4. Strategy / params ↔ Performance priority ───────────────────────
+        reward += match (&state.performance_priority, &action.strategy, &action.params) {
+            (PerformancePriority::Speed,   EmbeddingStrategy::LSB, _)               => 0.10,
+            (PerformancePriority::Quality, EmbeddingStrategy::DWT | EmbeddingStrategy::DCT, _) => 0.10,
+            (PerformancePriority::Stealth, _, ParameterConfig::Conservative)        => 0.10,
+            (PerformancePriority::Balanced, _, ParameterConfig::Balanced)           => 0.08,
+            _ => 0.02,
+        };
+
+        // ── Gaussian noise (σ≈0.02) for stochastic simulation ─────────────────
+        let u1 = random::<f32>().max(f32::EPSILON);
+        let u2 = random::<f32>();
+        let noise = (-2.0_f32 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
+        reward += 0.02 * noise;
 
         Ok(reward.clamp(-1.0, 1.0))
     }
@@ -1214,26 +1261,96 @@ impl PolicyNetwork {
         activations[0]
     }
 
-    /// Backward pass (simplified implementation)
-    pub fn backward(&mut self, error: f32, input: &[f32], learning_rate: f32) {
-        // Simplified gradient update for last layer only
-        let output_layer = self.weights.len() - 1;
-
-        for neuron in 0..self.weights[output_layer].len() {
-            for i in 0..self.weights[output_layer][neuron].len() {
-                self.weights[output_layer][neuron][i] += learning_rate * error * input[i];
+    /// Forward pass storing all layer activations (used by backward)
+    fn forward_all(&self, input: &[f32]) -> Vec<Vec<f32>> {
+        let mut all = vec![input.to_vec()];
+        let mut current = input.to_vec();
+        for l in 0..self.weights.len() {
+            let mut next = vec![0.0f32; self.weights[l].len()];
+            for neuron in 0..self.weights[l].len() {
+                let mut sum = self.biases[l][neuron];
+                for (i, &w) in self.weights[l][neuron].iter().enumerate() {
+                    if i < current.len() {
+                        sum += w * current[i];
+                    }
+                }
+                next[neuron] = self.apply_activation(sum, &self.activations[l]);
             }
-            self.biases[output_layer][neuron] += learning_rate * error;
+            current = next.clone();
+            all.push(next);
+        }
+        all
+    }
+
+    /// Activation derivative using the post-activation value `a = f(z)`
+    fn activation_derivative(&self, activation: &ActivationFunction, a: f32) -> f32 {
+        match activation {
+            ActivationFunction::ReLU     => if a > 0.0 { 1.0 } else { 0.0 },
+            ActivationFunction::Sigmoid  => a * (1.0 - a),
+            ActivationFunction::Tanh     => 1.0 - a * a,
+            ActivationFunction::Softmax  => a * (1.0 - a), // single-output: same as sigmoid
+        }
+    }
+
+    /// Full backpropagation through all layers (gradient descent on MSE).
+    ///
+    /// `error = target − prediction` (positive means prediction is too low).
+    /// We minimise L = ½(target − pred)² so dL/dpred = −error, and the delta
+    /// for the output neuron is −error × f′(a_out).  Gradients are propagated
+    /// backwards layer by layer using the stored activations from `forward_all`.
+    pub fn backward(&mut self, error: f32, input: &[f32], learning_rate: f32) {
+        let all = self.forward_all(input);
+        let n = self.weights.len();
+
+        // δ[layer][neuron] = dL / d(pre-activation)
+        let mut deltas: Vec<Vec<f32>> = vec![vec![]; n];
+
+        // Output layer delta
+        let a_out = all[n][0];
+        let d_out = (-error) * self.activation_derivative(&self.activations[n - 1], a_out);
+        deltas[n - 1] = vec![d_out];
+
+        // Hidden layers: propagate delta backwards
+        for l in (0..n - 1).rev() {
+            let n_curr = self.weights[l].len();
+            let n_next = self.weights[l + 1].len();
+            let mut layer_deltas = vec![0.0f32; n_curr];
+            for j in 0..n_curr {
+                let mut grad = 0.0f32;
+                for k in 0..n_next {
+                    if j < self.weights[l + 1][k].len() {
+                        grad += self.weights[l + 1][k][j] * deltas[l + 1][k];
+                    }
+                }
+                let a_j = all[l + 1][j];
+                layer_deltas[j] = grad * self.activation_derivative(&self.activations[l], a_j);
+            }
+            deltas[l] = layer_deltas;
+        }
+
+        // Apply weight and bias updates
+        for l in 0..n {
+            let prev = &all[l];
+            for neuron in 0..self.weights[l].len() {
+                let d = deltas[l][neuron];
+                for i in 0..self.weights[l][neuron].len() {
+                    if i < prev.len() {
+                        self.weights[l][neuron][i] -= learning_rate * d * prev[i];
+                    }
+                }
+                self.biases[l][neuron] -= learning_rate * d;
+            }
         }
     }
 
     /// Apply activation function
     fn apply_activation(&self, x: f32, activation: &ActivationFunction) -> f32 {
         match activation {
-            ActivationFunction::ReLU => x.max(0.0),
+            ActivationFunction::ReLU    => x.max(0.0),
             ActivationFunction::Sigmoid => 1.0 / (1.0 + (-x).exp()),
-            ActivationFunction::Tanh => x.tanh(),
-            ActivationFunction::Softmax => x.exp(), // Simplified for single output
+            ActivationFunction::Tanh    => x.tanh(),
+            // For a single-output network softmax reduces to sigmoid
+            ActivationFunction::Softmax => 1.0 / (1.0 + (-x).exp()),
         }
     }
 }
@@ -1454,5 +1571,147 @@ mod tests {
         assert!(recommendation.confidence >= 0.0 && recommendation.confidence <= 1.0);
         assert!(!recommendation.alternatives.is_empty());
         assert!(!recommendation.reasoning.is_empty());
+    }
+
+    // ── Thompson sampling ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_thompson_sampling_returns_valid_action() {
+        let config = RLConfig {
+            exploration_config: ExplorationConfig {
+                strategy_type: ExplorationStrategy::Thompson,
+                ..RLConfig::default().exploration_config
+            },
+            ..RLConfig::default()
+        };
+        let agent = RLAgent::new(config);
+        let state = agent.sample_random_state();
+        let action = agent.thompson_sampling_action(&state);
+        assert!(matches!(
+            action.strategy,
+            EmbeddingStrategy::LSB
+                | EmbeddingStrategy::DCT
+                | EmbeddingStrategy::DWT
+                | EmbeddingStrategy::FFT
+                | EmbeddingStrategy::Statistical
+        ));
+    }
+
+    #[test]
+    fn test_thompson_sampling_is_stochastic() {
+        // With zero Q-table data all actions have Q=0 and visit=0, so
+        // pure sampling noise should give different results across calls.
+        let agent = RLAgent::new(RLConfig::default());
+        let state = agent.sample_random_state();
+        let mut actions = std::collections::HashSet::new();
+        for _ in 0..30 {
+            let a = agent.thompson_sampling_action(&state);
+            actions.insert(format!("{:?}", a.strategy));
+        }
+        // Should explore more than one strategy in 30 trials
+        assert!(actions.len() > 1, "Thompson sampling should be stochastic over many trials");
+    }
+
+    // ── Policy network backprop ───────────────────────────────────────────────
+
+    #[test]
+    fn test_policy_network_loss_decreases() {
+        let config = NetworkConfig {
+            hidden_dims: vec![16, 8],
+            learning_rate: 0.01,
+            activation: ActivationFunction::ReLU,
+            dropout_prob: 0.0,
+        };
+        let mut network = PolicyNetwork::new(&config);
+        let input = vec![0.5_f32; 24];
+        let target = 0.8_f32;
+
+        let initial_loss = {
+            let pred = network.forward(&input);
+            (target - pred).powi(2)
+        };
+
+        for _ in 0..200 {
+            let pred = network.forward(&input);
+            let error = target - pred;
+            network.backward(error, &input, 0.01);
+        }
+
+        let final_loss = {
+            let pred = network.forward(&input);
+            (target - pred).powi(2)
+        };
+
+        assert!(
+            final_loss < initial_loss,
+            "Policy network loss should decrease after 200 backprop steps: \
+             initial={initial_loss:.4} final={final_loss:.4}"
+        );
+    }
+
+    #[test]
+    fn test_policy_network_activation_derivative() {
+        let config = NetworkConfig {
+            hidden_dims: vec![8],
+            learning_rate: 0.01,
+            activation: ActivationFunction::ReLU,
+            dropout_prob: 0.0,
+        };
+        let net = PolicyNetwork::new(&config);
+
+        // Sigmoid derivative: a*(1-a) at a=0.5 should be 0.25
+        let d = net.activation_derivative(&ActivationFunction::Sigmoid, 0.5);
+        assert!((d - 0.25).abs() < 1e-6, "Sigmoid deriv at 0.5 should be 0.25, got {d}");
+
+        // ReLU derivative: positive activation → 1
+        assert_eq!(net.activation_derivative(&ActivationFunction::ReLU, 1.0), 1.0);
+        // ReLU: zero/negative activation → 0
+        assert_eq!(net.activation_derivative(&ActivationFunction::ReLU, 0.0), 0.0);
+
+        // Tanh derivative: 1 - a² at a=0 should be 1
+        let d = net.activation_derivative(&ActivationFunction::Tanh, 0.0);
+        assert!((d - 1.0).abs() < 1e-6, "Tanh deriv at a=0 should be 1.0, got {d}");
+    }
+
+    // ── Reward function ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_reward_good_alignment_beats_mismatch() {
+        let agent = RLAgent::new(RLConfig::default());
+
+        let png_state = RLState {
+            format: DataFormat::PNG,
+            size_category: SizeCategory::Medium,
+            stealth_level: StealthLevel::High,
+            performance_priority: PerformancePriority::Quality,
+            security_level: SecurityLevel::High,
+            resource_constraints: ResourceConstraints::None,
+        };
+
+        // DCT on PNG with conservative params for high stealth — well aligned
+        let good_action = RLAction {
+            strategy: EmbeddingStrategy::DCT,
+            optimizer: OptimizationAlgorithmType::BayesianOptimization,
+            params: ParameterConfig::Conservative,
+        };
+        // FFT on PNG with aggressive params for high stealth — poor alignment
+        let bad_action = RLAction {
+            strategy: EmbeddingStrategy::FFT,
+            optimizer: OptimizationAlgorithmType::RandomSearch,
+            params: ParameterConfig::Aggressive,
+        };
+
+        // Average over 20 trials to wash out noise
+        let mut good_sum = 0.0_f32;
+        let mut bad_sum = 0.0_f32;
+        for _ in 0..20 {
+            good_sum += agent.simulate_action_reward(&png_state, &good_action).await.unwrap();
+            bad_sum  += agent.simulate_action_reward(&png_state, &bad_action).await.unwrap();
+        }
+        assert!(
+            good_sum > bad_sum,
+            "Well-aligned action should have higher mean reward than mismatched action \
+             (good={:.3} bad={:.3})", good_sum / 20.0, bad_sum / 20.0
+        );
     }
 }
