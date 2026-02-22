@@ -14,7 +14,7 @@ pub struct NeuralNetworkModel {
     layers: Vec<NetworkLayer>,
 
     /// Learning rate for training
-    _learning_rate: f32,
+    learning_rate: f32,
 
     /// Training history
     training_history: Vec<TrainingExample>,
@@ -250,7 +250,7 @@ impl NeuralNetworkModel {
 
         Self {
             layers,
-            _learning_rate: learning_rate,
+            learning_rate,
             training_history: Vec::new(),
             performance: ModelPerformance {
                 capacity_mse: f32::INFINITY,
@@ -350,15 +350,12 @@ impl NeuralNetworkModel {
         }
     }
 
-    /// Train network on batch of examples
+    /// Train network on batch of examples (online SGD — one update per example)
     fn train_batch(&mut self, examples: &[TrainingExample]) {
-        // Simple gradient descent (placeholder implementation)
         for example in examples {
             let input = self.features_to_input(&example.carrier_features);
             let target = self.params_to_target(&example.embed_params);
             let output = self.forward(&input);
-
-            // Calculate loss and update weights (simplified)
             let loss = self.calculate_loss(&output, &target);
             self.backpropagate(&input, &output, &target, loss);
         }
@@ -391,10 +388,100 @@ impl NeuralNetworkModel {
             / output.len() as f32
     }
 
-    /// Backpropagation (simplified placeholder)
-    fn backpropagate(&mut self, _input: &[f32], _output: &[f32], _target: &[f32], _loss: f32) {
-        // Placeholder for actual backpropagation implementation
-        // In a real implementation, this would calculate gradients and update weights
+    /// Forward pass collecting every layer's output, including the raw input.
+    /// Returns `activations` where `activations[k]` is the input to `layers[k]`
+    /// and `activations[n_layers]` is the final network output.
+    fn forward_all_layers(&self, input: &[f32]) -> Vec<Vec<f32>> {
+        let mut activations = Vec::with_capacity(self.layers.len() + 1);
+        activations.push(input.to_vec());
+        let mut current = input.to_vec();
+        for layer in &self.layers {
+            current = self.layer_forward(&current, layer);
+            activations.push(current.clone());
+        }
+        activations
+    }
+
+    /// Point-wise activation derivative computed from the post-activation value `a`.
+    /// This avoids storing pre-activation values:
+    /// - ReLU: 1 if a > 0 else 0  (since relu(z) > 0 ↔ z > 0)
+    /// - Sigmoid: a*(1-a)
+    /// - Tanh: 1 - a²
+    /// - Linear: 1
+    fn activation_derivative(activation: ActivationFunction, a: f32) -> f32 {
+        match activation {
+            ActivationFunction::ReLU => if a > 0.0 { 1.0 } else { 0.0 },
+            ActivationFunction::Sigmoid => a * (1.0 - a),
+            ActivationFunction::Tanh => 1.0 - a * a,
+            ActivationFunction::Linear => 1.0,
+        }
+    }
+
+    /// Full backpropagation with SGD weight update.
+    ///
+    /// Algorithm (standard reverse-mode autodiff):
+    ///   1. Collect all layer activations via a forward pass.
+    ///   2. Compute the pre-activation gradient (δ) at the output layer.
+    ///   3. For each layer from last to first:
+    ///      a. Update W and b using δ and the layer's input activations.
+    ///      b. Back-propagate δ through the weight matrix and apply the
+    ///         activation derivative of the preceding layer to get the
+    ///         next δ.
+    fn backpropagate(&mut self, input: &[f32], _output: &[f32], target: &[f32], _loss: f32) {
+        let lr = self.learning_rate;
+        let n = self.layers.len();
+
+        // Collect all intermediate activations.
+        // activations[k]   = input to layers[k]  (= activations[0] for the raw input)
+        // activations[n]   = final network output
+        let activations = self.forward_all_layers(input);
+
+        // Output layer: δ = (ŷ - y) · f'(ŷ).  For Linear, f' = 1, so δ = ŷ - y.
+        let out = activations.last().unwrap();
+        let out_activation = self.layers[n - 1].activation;
+        let mut delta: Vec<f32> = out
+            .iter()
+            .zip(target)
+            .map(|(o, t)| (o - t) * Self::activation_derivative(out_activation, *o))
+            .collect();
+
+        for l in (0..n).rev() {
+            let layer_input = &activations[l];      // a_{l-1}
+            let layer_output = &activations[l + 1]; // a_l (used only for next iter's derivative)
+
+            // --- weight and bias update for layer l ---
+            for (i, &d) in delta.iter().enumerate() {
+                for (j, &inp) in layer_input.iter().enumerate() {
+                    self.layers[l].weights[i][j] -= lr * d * inp;
+                }
+                self.layers[l].biases[i] -= lr * d;
+            }
+
+            // --- propagate δ to layer l-1 (skip at the input layer) ---
+            if l > 0 {
+                let prev_size = layer_input.len();
+                let mut grad = vec![0.0f32; prev_size];
+
+                // δ_input[j] = Σ_i  W[i][j] · δ[i]
+                for (i, &d) in delta.iter().enumerate() {
+                    for j in 0..prev_size {
+                        grad[j] += self.layers[l].weights[i][j] * d;
+                    }
+                }
+
+                // Apply activation derivative of layer l-1.
+                // layer_input = activations[l] = post-activation output of layers[l-1].
+                let prev_activation = self.layers[l - 1].activation;
+                delta = grad
+                    .into_iter()
+                    .zip(layer_input.iter())
+                    .map(|(g, &a)| g * Self::activation_derivative(prev_activation, a))
+                    .collect();
+            }
+
+            // Suppress unused-variable warning on layer_output (used only conceptually)
+            let _ = layer_output;
+        }
     }
 }
 
@@ -438,32 +525,60 @@ impl MLModel for NeuralNetworkModel {
             return Ok(self.performance.clone());
         }
 
-        let mut capacity_errors = Vec::new();
-        let mut time_errors = Vec::new();
-        let mut correct_strategies = 0;
+        // Collect per-example predictions and targets as output vectors.
+        // Output[0] → EC level,  Output[1] → stealth level,  Output[2] → GPU flag.
+        // capacity_mse tracks EC output error; time_mse tracks GPU output error
+        // (closest semantic match given the model's 3-output encoding).
+        let mut ec_sq_err = 0.0f32;
+        let mut gpu_sq_err = 0.0f32;
+        let mut correct_strategies = 0usize;
+
+        // Accumulate residuals and target values for R² over the full output vector.
+        let mut all_targets: Vec<f32> = Vec::new();
+        let mut all_predictions: Vec<f32> = Vec::new();
 
         for example in test_data {
-            let predicted = self.predict_optimal_params(&example.carrier_features)?;
+            let input = self.features_to_input(&example.carrier_features);
+            let target = self.params_to_target(&example.embed_params);
+            let prediction = self.forward(&input);
 
-            // Calculate prediction errors (simplified)
-            capacity_errors.push(0.1); // Placeholder
-            time_errors.push(100.0); // Placeholder
+            // Per-output squared errors
+            let ec_err = prediction.first().unwrap_or(&0.0) - target.first().unwrap_or(&0.0);
+            let gpu_err = prediction.get(2).unwrap_or(&0.0) - target.get(2).unwrap_or(&0.0);
+            ec_sq_err += ec_err * ec_err;
+            gpu_sq_err += gpu_err * gpu_err;
 
-            // Check strategy correctness (simplified)
-            if predicted.error_correction_level == example.embed_params.error_correction_level {
+            // Strategy accuracy: EC level classification
+            let predicted_params = self.output_to_params(&prediction);
+            if predicted_params.error_correction_level == example.embed_params.error_correction_level {
                 correct_strategies += 1;
             }
+
+            // Accumulate for R²
+            all_targets.extend_from_slice(&target);
+            all_predictions.extend_from_slice(&prediction);
         }
 
-        let capacity_mse = capacity_errors.iter().sum::<f32>() / capacity_errors.len() as f32;
-        let time_mse = time_errors.iter().sum::<f32>() / time_errors.len() as f32;
-        let strategy_accuracy = correct_strategies as f32 / test_data.len() as f32;
+        let n = test_data.len() as f32;
+        let capacity_mse = ec_sq_err / n;
+        let time_mse = gpu_sq_err / n;
+        let strategy_accuracy = correct_strategies as f32 / n;
+
+        // R² = 1 - SS_res / SS_tot  (over all output dimensions)
+        let target_mean = all_targets.iter().sum::<f32>() / all_targets.len() as f32;
+        let ss_tot: f32 = all_targets.iter().map(|&y| (y - target_mean).powi(2)).sum();
+        let ss_res: f32 = all_targets
+            .iter()
+            .zip(&all_predictions)
+            .map(|(&y, &yhat)| (y - yhat).powi(2))
+            .sum();
+        let r_squared = if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { 1.0 };
 
         Ok(ModelPerformance {
             capacity_mse,
             time_mse,
             strategy_accuracy,
-            r_squared: 0.0, // TODO: Calculate R-squared
+            r_squared,
             sample_size: test_data.len(),
         })
     }
@@ -678,7 +793,7 @@ mod tests {
     fn test_neural_network_creation() {
         let model = NeuralNetworkModel::new(&[10, 5, 3], 0.01);
         assert_eq!(model.layers.len(), 2);
-        assert_eq!(model._learning_rate, 0.01);
+        assert_eq!(model.learning_rate, 0.01);
     }
 
     #[test]
@@ -722,5 +837,98 @@ mod tests {
         assert!(matches!(params.error_correction_level, ECLevel::High));
         assert!(matches!(params.stealth_level, StealthLevel::Low));
         assert!(params.use_gpu);
+    }
+
+    #[test]
+    fn test_backprop_reduces_loss() {
+        // A tiny network: input(2) → hidden(4, ReLU) → output(3, Linear).
+        // After enough SGD steps on a fixed example, loss should decrease.
+        let mut model = NeuralNetworkModel::new(&[2, 4, 3], 0.1);
+        let input = vec![1.0_f32, -0.5];
+        let target = vec![1.0_f32, 0.0, 1.0];
+
+        let initial_loss = model.calculate_loss(&model.forward(&input), &target);
+
+        for _ in 0..200 {
+            let output = model.forward(&input);
+            let loss = model.calculate_loss(&output, &target);
+            model.backpropagate(&input, &output, &target, loss);
+        }
+
+        let final_loss = model.calculate_loss(&model.forward(&input), &target);
+        assert!(
+            final_loss < initial_loss,
+            "loss should decrease: initial={initial_loss:.4}, final={final_loss:.4}"
+        );
+    }
+
+    #[test]
+    fn test_activation_derivative_values() {
+        use NeuralNetworkModel as N;
+        // ReLU
+        assert_eq!(N::activation_derivative(ActivationFunction::ReLU, 0.5), 1.0);
+        assert_eq!(N::activation_derivative(ActivationFunction::ReLU, 0.0), 0.0);
+        assert_eq!(N::activation_derivative(ActivationFunction::ReLU, -1.0), 0.0);
+        // Sigmoid: f'(a) = a*(1-a)
+        let sig_deriv = N::activation_derivative(ActivationFunction::Sigmoid, 0.5);
+        assert!((sig_deriv - 0.25).abs() < 1e-6);
+        // Linear
+        assert_eq!(N::activation_derivative(ActivationFunction::Linear, 999.0), 1.0);
+    }
+
+    #[test]
+    fn test_forward_all_layers_lengths() {
+        let model = NeuralNetworkModel::new(&[3, 4, 2], 0.01);
+        let input = vec![0.1, 0.2, 0.3];
+        let acts = model.forward_all_layers(&input);
+        // Should have n_layers + 1 entries: [input, hidden_out, output_out]
+        assert_eq!(acts.len(), 3);
+        assert_eq!(acts[0].len(), 3);
+        assert_eq!(acts[1].len(), 4);
+        assert_eq!(acts[2].len(), 2);
+    }
+
+    #[test]
+    fn test_evaluate_returns_real_metrics() {
+        let mut model = NeuralNetworkModel::new(&[4, 4, 3], 0.05);
+
+        // Create a small test set
+        let examples: Vec<TrainingExample> = (0..10)
+            .map(|i| TrainingExample {
+                carrier_features: CarrierFeatures {
+                    format: DataFormat::PNG,
+                    size: 1000 + i * 100,
+                    entropy: 5.0 + i as f32 * 0.2,
+                    frequency_characteristics: vec![0.1, 0.2],
+                    complexity_measures: vec![0.5],
+                    format_specific: HashMap::new(),
+                },
+                embed_params: EmbedParams {
+                    encryption_key: vec![],
+                    error_correction_level: if i % 2 == 0 { ECLevel::High } else { ECLevel::Low },
+                    stealth_level: StealthLevel::Medium,
+                    use_gpu: i % 3 == 0,
+                    format_specific: HashMap::new(),
+                    enable_validation: false,
+                },
+                performance: super::super::PerformanceMetrics {
+                    embedding_time_ms: 10,
+                    capacity_efficiency: 0.8,
+                    extraction_accuracy: 1.0,
+                    quality_preservation: 0.95,
+                    memory_usage: 1024,
+                    gpu_acceleration_benefit: 1.0,
+                },
+                detection_resistance: 0.7,
+                timestamp: 0,
+            })
+            .collect();
+
+        let perf = model.evaluate(&examples).unwrap();
+        assert_eq!(perf.sample_size, 10);
+        assert!(perf.capacity_mse >= 0.0);
+        assert!(perf.time_mse >= 0.0);
+        // r_squared is finite (not the old hardcoded 0.0 for non-trivial data)
+        assert!(perf.r_squared.is_finite());
     }
 }
