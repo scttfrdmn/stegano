@@ -13,17 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
-### Deprecated
-- Nothing yet
+## [0.3.1] - 2026-02-21
 
-### Removed
-- Nothing yet
+### Added
+- **Validation Dashboard**: `ValidationReport` now implements `fmt::Display`, rendering a human-readable text dashboard with per-test results (statistic, p-value, pass/fail) and recommendations
+- **JSON Export**: `ValidationReport::to_json_string()` convenience method wraps `serde_json::to_string_pretty` for machine-readable report output
+- **Validation Summary API**: `ValidationReport::summary()` returns a compact `ValidationSummary` struct with `tests_run`, `passed`, `overall_score`, and `status` fields
+- **Community Infrastructure**: GitHub issue templates for bug reports and feature requests; blank-issue guard with link to discussions
+- **Validation User Guide**: `docs/VALIDATION_GUIDE.md` covering how to enable validation, interpret dashboard output, and understand scoring
+
+### Changed
+- **Parallel Classical Tests**: The five independent classical statistical tests (chi-square, KS, runs, Anderson-Darling, autocorrelation) in `run_classical_tests()` now execute concurrently using `rayon::join` chains, reducing wall-clock validation time on multi-core systems
 
 ### Fixed
-- Nothing yet
-
-### Security
-- Nothing yet
+- Version badge in README updated to 0.3.1
+- Test count badge updated to 261+
 
 ## [0.3.0] - 2025-01-12
 

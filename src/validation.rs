@@ -6,6 +6,7 @@
 use crate::core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 /// Complete statistical validation suite with comprehensive test coverage
 #[derive(Debug)]
@@ -1255,21 +1256,38 @@ impl StatisticalValidationSuite {
         // Create histograms for chi-square test to ensure positive frequencies
         let (observed_hist, expected_hist) = self.create_histograms(&stego_f64, &original_f64);
 
-        Ok(ClassicalTestResults {
-            ks_test: self
-                .classical_tests
-                .kolmogorov_smirnov_test(&original_f64, &stego_f64)?,
-            chi_square_test: self
-                .classical_tests
-                .chi_square_test(&observed_hist, &expected_hist)?,
-            runs_test: {
-                let binary_seq: Vec<bool> = stego.iter().map(|&x| x & 1 == 1).collect();
-                self.classical_tests.runs_test(&binary_seq)?
+        // Run five independent tests in parallel using rayon::join chains
+        let ct = &self.classical_tests;
+        let ((ks_result, chi_result), (runs_result, (ad_result, autocorr_result))) = rayon::join(
+            || {
+                rayon::join(
+                    || ct.kolmogorov_smirnov_test(&original_f64, &stego_f64),
+                    || ct.chi_square_test(&observed_hist, &expected_hist),
+                )
             },
-            anderson_darling: self.classical_tests.anderson_darling_test(&stego_f64)?,
-            autocorrelation: self
-                .classical_tests
-                .autocorrelation_analysis(&stego_f64, 20)?,
+            || {
+                rayon::join(
+                    || {
+                        let binary_seq: Vec<bool> =
+                            stego.iter().map(|&x| x & 1 == 1).collect();
+                        ct.runs_test(&binary_seq)
+                    },
+                    || {
+                        rayon::join(
+                            || ct.anderson_darling_test(&stego_f64),
+                            || ct.autocorrelation_analysis(&stego_f64, 20),
+                        )
+                    },
+                )
+            },
+        );
+
+        Ok(ClassicalTestResults {
+            ks_test: ks_result?,
+            chi_square_test: chi_result?,
+            runs_test: runs_result?,
+            anderson_darling: ad_result?,
+            autocorrelation: autocorr_result?,
         })
     }
 
@@ -1405,6 +1423,15 @@ impl StatisticalValidationSuite {
     }
 }
 
+/// Lightweight summary of a validation run
+#[derive(Debug, Clone)]
+pub struct ValidationSummary {
+    pub tests_run: usize,
+    pub passed: usize,
+    pub overall_score: f64,
+    pub status: String,
+}
+
 /// Comprehensive validation report
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
@@ -1513,6 +1540,115 @@ impl ValidationReport {
 
     pub fn test_results(&self) -> &std::collections::HashMap<String, serde_json::Value> {
         &self.test_results
+    }
+
+    /// Return a compact summary of the validation results.
+    pub fn summary(&self) -> ValidationSummary {
+        let cr = &self.classical_results;
+        let tests_run = 5;
+        let mut passed = 0usize;
+
+        if !cr.ks_test.is_significant {
+            passed += 1;
+        }
+        if !cr.chi_square_test.is_significant {
+            passed += 1;
+        }
+        if cr.runs_test.is_random {
+            passed += 1;
+        }
+        if cr.anderson_darling.is_normal {
+            passed += 1;
+        }
+        if !cr.autocorrelation.has_correlation {
+            passed += 1;
+        }
+
+        let status = if passed == tests_run {
+            "PASS".to_string()
+        } else if passed * 2 >= tests_run {
+            "WARN".to_string()
+        } else {
+            "FAIL".to_string()
+        };
+
+        ValidationSummary {
+            tests_run,
+            passed,
+            overall_score: self.overall_score,
+            status,
+        }
+    }
+
+    /// Serialize the report to a pretty-printed JSON string.
+    pub fn to_json_string(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+impl fmt::Display for ValidationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let summary = self.summary();
+        let cr = &self.classical_results;
+
+        writeln!(f, "╔══════════════════════════════════════╗")?;
+        writeln!(f, "║      Stegano Validation Dashboard    ║")?;
+        writeln!(f, "╚══════════════════════════════════════╝")?;
+        writeln!(
+            f,
+            "Tests completed: {}  |  Status: {}",
+            summary.tests_run, summary.status
+        )?;
+        writeln!(f)?;
+        writeln!(f, "Classical Tests")?;
+
+        let ok_fail = |pass: bool| if pass { "[ OK ]" } else { "[FAIL]" };
+
+        writeln!(
+            f,
+            "  chi_square  χ²={:.3}  p={:.3}  {}",
+            cr.chi_square_test.test_statistic,
+            cr.chi_square_test.p_value,
+            ok_fail(!cr.chi_square_test.is_significant)
+        )?;
+        writeln!(
+            f,
+            "  ks_test     D={:.3}   p={:.3}  {}",
+            cr.ks_test.test_statistic,
+            cr.ks_test.p_value,
+            ok_fail(!cr.ks_test.is_significant)
+        )?;
+        writeln!(
+            f,
+            "  runs_test   z={:.3}   p={:.3}  {}",
+            cr.runs_test.z_score,
+            cr.runs_test.p_value,
+            ok_fail(cr.runs_test.is_random)
+        )?;
+        writeln!(
+            f,
+            "  anderson_d  A²={:.3}  p={:.3}  {}",
+            cr.anderson_darling.test_statistic,
+            cr.anderson_darling.p_value,
+            ok_fail(cr.anderson_darling.is_normal)
+        )?;
+        writeln!(
+            f,
+            "  autocorr    LB={:.3}  p={:.3}  {}",
+            cr.autocorrelation.ljung_box_statistic,
+            cr.autocorrelation.ljung_box_p_value,
+            ok_fail(!cr.autocorrelation.has_correlation)
+        )?;
+
+        if !self.recommendations.is_empty() {
+            writeln!(f)?;
+            writeln!(f, "Recommendations")?;
+            for rec in &self.recommendations {
+                writeln!(f, "  \u{2022} {rec}")?;
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -1,32 +1,32 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-250%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-261%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.2.0 - Latest Production Release
+## 🎯 Version 0.3.1 - Latest Production Release
 
-Stegano v0.2.0 represents a major milestone with advanced ML-driven optimization and scientific format support:
-- ✅ **95% Test Coverage** - 250+ comprehensive tests across all modules
-- ✅ **ML-Powered Optimization** - 5 advanced algorithms for intelligent parameter selection
-- ✅ **Scientific Formats** - Native VCF, DICOM, and SAM/BAM support with domain compliance
-- ✅ **GPU Acceleration** - Metal/WGPU compute acceleration for 10-50x performance
-- ✅ **Multi-Objective Optimization** - NSGA-II Pareto front analysis for trade-off optimization
-- ✅ **Bayesian Optimization** - Gaussian process models for efficient parameter exploration
-- ✅ **Reinforcement Learning** - Adaptive strategy selection through Q-learning
+Stegano v0.3.1 completes the statistical validation framework with enterprise-grade reporting and performance optimizations:
+- ✅ **261 Tests Passing** - Comprehensive coverage across all modules
+- ✅ **Validation Dashboard** - Human-readable `fmt::Display` output for `ValidationReport`
+- ✅ **Parallel Validation** - Classical statistical tests run concurrently via Rayon
+- ✅ **JSON Export** - `to_json_string()` for machine-readable report output
+- ✅ **Validation Summary API** - Compact `summary()` for quick status checks
+- ✅ **Statistical Validation Framework** - Chi-square, KS, Runs, Anderson-Darling, autocorrelation
+- ✅ **High-Level Embedding API** - `SteganoEmbedder` with integrated validation pipeline
 - ✅ **Enterprise Security** - AES-256-GCM with BLAKE3 integrity verification
 
-### 🆕 New in v0.2.0
-- **Advanced ML Optimization**: Genetic algorithms, particle swarm, Bayesian optimization, and reinforcement learning
-- **Scientific Format Support**: VCF genomics, DICOM medical imaging, SAM/BAM bioinformatics with integrity preservation
-- **Multi-Objective Optimization**: NSGA-II algorithm for finding Pareto-optimal embedding solutions
-- **Gaussian Process Models**: Bayesian optimization with multiple kernel functions and acquisition strategies
-- **Adaptive Strategy Selection**: Reinforcement learning agent for context-dependent optimization
+### 🆕 New in v0.3.1
+- **Validation Dashboard**: `ValidationReport` now implements `fmt::Display` — print a full text dashboard with test results and recommendations
+- **Parallel Statistical Tests**: Five classical tests (chi-square, KS, runs, Anderson-Darling, autocorrelation) now run concurrently using `rayon::join`
+- **JSON Report Export**: `ValidationReport::to_json_string()` for structured logging and downstream tooling
+- **Validation Summary**: `ValidationReport::summary()` returns a compact `ValidationSummary` with pass/fail counts and overall status
+- **Community Infrastructure**: GitHub issue templates for bugs and feature requests
 
 ## Overview
 
