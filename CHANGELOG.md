@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.2] - 2026-02-21
+
+### Added
+- **CUDA Acceleration**: NVIDIA GPU backend via `cudarc 0.12` behind the optional `cuda` feature flag
+  - `CudaAccelerator` with `parallel_lsb_embed()` and `parallel_lsb_extract()` powered by NVRTC-compiled kernels
+  - Kernels compiled at runtime so the driver JITs them to the native GPU architecture (forward-compatible with Blackwell sm_120 and beyond)
+  - `GpuBackend::Cuda` variant wired into `best_available()` with priority Metal > CUDA > WGPU > CPU
+  - Enable with `--features cuda`; stub struct on non-CUDA targets keeps all other builds unaffected
+
+### Fixed
+- **Cross-platform build**: Dependencies placed after `[target.'cfg(target_os = "macos")'.dependencies]` in `Cargo.toml` were silently treated as macOS-only by TOML, causing 64 compilation errors on Linux. Moved all non-macOS-specific deps (`log`, `clap`, `hex`, `libc`, `bio`, `csv`, `wav`, `reed-solomon`, etc.) above the platform-specific section.
+
 ## [0.3.1] - 2026-02-21
 
 ### Added
