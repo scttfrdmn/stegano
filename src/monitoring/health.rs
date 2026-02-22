@@ -155,97 +155,214 @@ impl HealthChecker {
         Ok(())
     }
 
-    /// Check memory usage in MB
+    /// Check memory usage in MB (system-wide used physical memory)
     fn check_memory_usage() -> Result<u64, Box<dyn std::error::Error>> {
-        // Platform-specific memory checking
         #[cfg(target_os = "macos")]
         {
-            // Use system calls to get memory info on macOS
-            // This is a simplified implementation
             use std::process::Command;
 
-            let output = Command::new("vm_stat").output()?;
-            let _output_str = String::from_utf8(output.stdout)?;
+            // Total physical RAM via sysctl
+            let total_out = Command::new("sysctl").args(["-n", "hw.memsize"]).output()?;
+            let total_bytes: u64 = String::from_utf8(total_out.stdout)?.trim().parse()?;
 
-            // Parse vm_stat output (simplified)
-            // In a real implementation, you'd parse the actual values
-            Ok(256) // Placeholder: 256MB
+            // Page counts and page size via vm_stat
+            let vm_out = Command::new("vm_stat").output()?;
+            let vm_str = String::from_utf8(vm_out.stdout)?;
+
+            // First line: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+            let page_size: u64 = vm_str
+                .lines()
+                .next()
+                .and_then(|l| l.split_once("page size of "))
+                .and_then(|(_, rest)| rest.split_once(" bytes"))
+                .and_then(|(n, _)| n.trim().parse().ok())
+                .unwrap_or(4096);
+
+            let parse_pages = |label: &str| -> u64 {
+                vm_str
+                    .lines()
+                    .find(|l| l.trim_start().starts_with(label))
+                    .and_then(|l| l.split(':').nth(1))
+                    .map(|v| v.trim().trim_end_matches('.'))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+            };
+
+            // "Available" pages: free + inactive + speculative + purgeable
+            let available_pages = parse_pages("Pages free:")
+                + parse_pages("Pages inactive:")
+                + parse_pages("Pages speculative:")
+                + parse_pages("Pages purgeable:");
+
+            let used = total_bytes.saturating_sub(available_pages * page_size);
+            Ok(used / (1024 * 1024))
         }
 
         #[cfg(target_os = "linux")]
         {
-            // Read from /proc/meminfo on Linux
-            use std::fs;
-            let meminfo = fs::read_to_string("/proc/meminfo")?;
+            let meminfo = std::fs::read_to_string("/proc/meminfo")?;
 
-            // Parse meminfo (simplified)
-            // In a real implementation, you'd parse MemTotal and MemAvailable
-            Ok(512) // Placeholder: 512MB
+            let parse_kb = |label: &str| -> u64 {
+                meminfo
+                    .lines()
+                    .find(|l| l.starts_with(label))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+            };
+
+            let total_kb = parse_kb("MemTotal:");
+            let avail_kb = parse_kb("MemAvailable:");
+            Ok(total_kb.saturating_sub(avail_kb) / 1024)
         }
 
         #[cfg(target_os = "windows")]
         {
-            // Use Windows API for memory info
-            // This would require additional dependencies
-            Ok(384) // Placeholder: 384MB
+            use std::process::Command;
+            let out = Command::new("wmic")
+                .args(["OS", "get", "TotalVisibleMemorySize,FreePhysicalMemory", "/value"])
+                .output()?;
+            let s = String::from_utf8(out.stdout)?;
+            let parse = |key: &str| -> u64 {
+                s.lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split('=').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0)
+            };
+            let total_kb = parse("TotalVisibleMemorySize");
+            let free_kb = parse("FreePhysicalMemory");
+            Ok(total_kb.saturating_sub(free_kb) / 1024)
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
-            // Generic fallback
-            Ok(128) // Placeholder: 128MB
+            Err("Memory checking not supported on this platform".into())
         }
     }
 
-    /// Check CPU usage percentage
+    /// Check CPU usage percentage (0.0–100.0)
     async fn check_cpu_usage() -> Result<f64, Box<dyn std::error::Error>> {
-        // Simplified CPU usage check
-        // In a real implementation, this would use platform-specific APIs
-        // or libraries like sysinfo
+        #[cfg(target_os = "macos")]
+        {
+            // `top -l 1 -n 0` returns one sample using the last scheduling interval — very fast
+            let out = tokio::process::Command::new("top")
+                .args(["-l", "1", "-n", "0"])
+                .output()
+                .await?;
+            let stdout = String::from_utf8(out.stdout)?;
 
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::time::Duration;
+            // Line format: "CPU usage: 8.14% user, 4.08% sys, 87.77% idle"
+            let idle_pct: f64 = stdout
+                .lines()
+                .find(|l| l.contains("CPU usage:"))
+                .and_then(|l| l.split(',').find(|s| s.contains("idle")))
+                .and_then(|s| s.trim().split_whitespace().next())
+                .and_then(|s| s.trim_end_matches('%').parse().ok())
+                .ok_or("could not parse CPU idle percentage from top output")?;
 
-        static CPU_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        // Simulate CPU measurement over a brief period
-        let start = Instant::now();
-        let mut work_done = 0u64;
-
-        while start.elapsed() < Duration::from_millis(10) {
-            work_done += 1;
+            Ok((100.0 - idle_pct).clamp(0.0, 100.0))
         }
 
-        // Store and calculate relative usage
-        let prev_work = CPU_COUNTER.swap(work_done, Ordering::Relaxed);
-        let cpu_percentage = if prev_work > 0 {
-            ((work_done as f64 / prev_work as f64) * 25.0).min(100.0)
-        } else {
-            15.0 // Default value for first measurement
-        };
+        #[cfg(target_os = "linux")]
+        {
+            // Read /proc/stat twice; compute delta-based usage over ~100 ms
+            let read_stat = || -> Result<(u64, u64), Box<dyn std::error::Error>> {
+                let stat = std::fs::read_to_string("/proc/stat")?;
+                let line = stat.lines().next().ok_or("/proc/stat is empty")?;
+                let nums: Vec<u64> = line
+                    .split_whitespace()
+                    .skip(1) // skip "cpu" label
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                // Fields: user nice system idle iowait irq softirq steal ...
+                let idle = nums.get(3).copied().unwrap_or(0)   // idle
+                    + nums.get(4).copied().unwrap_or(0);        // iowait
+                let total: u64 = nums.iter().sum();
+                Ok((idle, total))
+            };
 
-        Ok(cpu_percentage)
+            let (idle1, total1) = read_stat()?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let (idle2, total2) = read_stat()?;
+
+            let d_total = total2.saturating_sub(total1) as f64;
+            let d_idle = idle2.saturating_sub(idle1) as f64;
+            if d_total == 0.0 {
+                return Ok(0.0);
+            }
+            Ok((100.0 * (1.0 - d_idle / d_total)).clamp(0.0, 100.0))
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::process::Command;
+            let out = Command::new("wmic")
+                .args(["cpu", "get", "LoadPercentage", "/value"])
+                .output()?;
+            let s = String::from_utf8(out.stdout)?;
+            let pct: f64 = s
+                .lines()
+                .find(|l| l.starts_with("LoadPercentage="))
+                .and_then(|l| l.split('=').nth(1))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0.0);
+            Ok(pct)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            Err("CPU checking not supported on this platform".into())
+        }
     }
 
-    /// Check disk usage percentage
+    /// Check disk usage percentage for the root filesystem (0.0–100.0)
     fn check_disk_usage() -> Result<f64, Box<dyn std::error::Error>> {
-        // Platform-specific disk usage checking
         #[cfg(unix)]
         {
-            // This is a simplified implementation
-            // In a real implementation, you'd use statvfs or similar
-            Ok(45.0) // Placeholder: 45% disk usage
+            use std::ffi::CString;
+            let path = CString::new("/")?;
+            let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+            let rc = unsafe { libc::statvfs(path.as_ptr(), &mut stat) };
+            if rc != 0 {
+                return Err(
+                    format!("statvfs failed: {}", std::io::Error::last_os_error()).into()
+                );
+            }
+            let total = stat.f_blocks as u64 * stat.f_frsize as u64;
+            let avail = stat.f_bavail as u64 * stat.f_frsize as u64;
+            if total == 0 {
+                return Ok(0.0);
+            }
+            Ok((100.0 * (1.0 - avail as f64 / total as f64)).clamp(0.0, 100.0))
         }
 
         #[cfg(windows)]
         {
-            // Use Windows API for disk space
-            Ok(60.0) // Placeholder: 60% disk usage
+            use std::process::Command;
+            let out = Command::new("wmic")
+                .args(["logicaldisk", "where", "DeviceID='C:'",
+                       "get", "Size,FreeSpace", "/value"])
+                .output()?;
+            let s = String::from_utf8(out.stdout)?;
+            let parse = |key: &str| -> u64 {
+                s.lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split('=').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0)
+            };
+            let total = parse("Size");
+            let free = parse("FreeSpace");
+            if total == 0 {
+                return Ok(0.0);
+            }
+            Ok((100.0 * (1.0 - free as f64 / total as f64)).clamp(0.0, 100.0))
         }
 
         #[cfg(not(any(unix, windows)))]
         {
-            Ok(30.0) // Placeholder: 30% disk usage
+            Err("Disk usage checking not supported on this platform".into())
         }
     }
 
