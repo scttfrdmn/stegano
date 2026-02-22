@@ -163,9 +163,18 @@ extern "C" __global__ void byte_histogram(
     // CudaAccelerator
     // -----------------------------------------------------------------------
 
-    /// CUDA-backed accelerator for steganographic LSB operations.
+    /// CUDA-backed accelerator for steganographic LSB and ML operations.
     pub struct CudaAccelerator {
         device: Arc<CudaDevice>,
+    }
+
+    impl std::fmt::Debug for CudaAccelerator {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let name = self.device.name().unwrap_or_else(|_| "unknown".into());
+            f.debug_struct("CudaAccelerator")
+                .field("device", &name)
+                .finish()
+        }
     }
 
     impl CudaAccelerator {
