@@ -47,6 +47,119 @@ extern "C" __global__ void lsb_extract(
 "#;
 
     // -----------------------------------------------------------------------
+    // ML kernel source code
+    // -----------------------------------------------------------------------
+
+    /// Dense layer forward pass with sigmoid activation.
+    /// out[i] = sigmoid( sum_j( w[i*in_size + j] * x[j] ) + b[i] )
+    const DENSE_SIGMOID_SRC: &str = r#"
+extern "C" __global__ void dense_sigmoid(
+    const float* __restrict__ w,
+    const float* __restrict__ x,
+    const float* __restrict__ b,
+    float* __restrict__ out,
+    unsigned int in_size,
+    unsigned int out_size
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < out_size) {
+        float acc = b[i];
+        for (unsigned int j = 0; j < in_size; j++) {
+            acc += w[i * in_size + j] * x[j];
+        }
+        out[i] = 1.0f / (1.0f + expf(-acc));
+    }
+}
+"#;
+
+    /// SGD weight update: params[i] -= lr * grads[i]
+    const SGD_UPDATE_SRC: &str = r#"
+extern "C" __global__ void sgd_update(
+    float* __restrict__ params,
+    const float* __restrict__ grads,
+    float lr,
+    unsigned int n
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        params[i] -= lr * grads[i];
+    }
+}
+"#;
+
+    /// Output layer delta: delta[i] = (out[i] - target[i]) * out[i] * (1 - out[i])
+    /// (MSE gradient combined with sigmoid derivative)
+    const OUTPUT_DELTA_SRC: &str = r#"
+extern "C" __global__ void output_delta(
+    const float* __restrict__ output,
+    const float* __restrict__ target,
+    float* __restrict__ delta,
+    unsigned int n
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        float s = output[i];
+        delta[i] = (s - target[i]) * s * (1.0f - s);
+    }
+}
+"#;
+
+    /// Weight gradient (outer product): grad[i*in + j] = delta[i] * input[j]
+    const WEIGHT_GRAD_SRC: &str = r#"
+extern "C" __global__ void weight_grad(
+    const float* __restrict__ delta,
+    const float* __restrict__ input,
+    float* __restrict__ grad,
+    unsigned int in_size,
+    unsigned int out_size
+) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < out_size * in_size) {
+        unsigned int i = idx / in_size;
+        unsigned int j = idx % in_size;
+        grad[idx] = delta[i] * input[j];
+    }
+}
+"#;
+
+    /// Hidden layer delta for backprop through a sigmoid layer:
+    /// h_delta[j] = hidden[j]*(1-hidden[j]) * sum_i( w[i*hidden_size+j] * out_delta[i] )
+    const HIDDEN_DELTA_SRC: &str = r#"
+extern "C" __global__ void hidden_delta(
+    const float* __restrict__ w,
+    const float* __restrict__ out_delta,
+    const float* __restrict__ hidden,
+    float* __restrict__ h_delta,
+    unsigned int hidden_size,
+    unsigned int out_size
+) {
+    unsigned int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j < hidden_size) {
+        float acc = 0.0f;
+        for (unsigned int i = 0; i < out_size; i++) {
+            acc += w[i * hidden_size + j] * out_delta[i];
+        }
+        float h = hidden[j];
+        h_delta[j] = acc * h * (1.0f - h);
+    }
+}
+"#;
+
+    /// Byte histogram: atomicAdd each byte value into a 256-bucket histogram.
+    const BYTE_HISTOGRAM_SRC: &str = r#"
+extern "C" __global__ void byte_histogram(
+    const unsigned char* __restrict__ data,
+    unsigned int* __restrict__ hist,
+    unsigned int n
+) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        atomicAdd(&hist[(unsigned int)data[i]], 1u);
+    }
+}
+"#;
+
+    // -----------------------------------------------------------------------
     // CudaAccelerator
     // -----------------------------------------------------------------------
 
@@ -84,6 +197,223 @@ extern "C" __global__ void lsb_extract(
                 .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
 
             Ok(Self { device })
+        }
+
+        /// Initialise the accelerator on device 0 and compile the full set of
+        /// kernels including ML operations (dense layer, SGD, backprop, histogram).
+        pub fn new_with_ml() -> Result<Self> {
+            let acc = Self::new()?;
+
+            // Dense sigmoid forward pass
+            let ptx = compile_ptx(DENSE_SIGMOID_SRC)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            acc.device
+                .load_ptx(ptx, "dense_sigmoid_mod", &["dense_sigmoid"])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            // SGD weight update
+            let ptx = compile_ptx(SGD_UPDATE_SRC)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            acc.device
+                .load_ptx(ptx, "sgd_update_mod", &["sgd_update"])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            // Output delta (backprop)
+            let ptx = compile_ptx(OUTPUT_DELTA_SRC)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            acc.device
+                .load_ptx(ptx, "output_delta_mod", &["output_delta"])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            // Weight gradient (outer product)
+            let ptx = compile_ptx(WEIGHT_GRAD_SRC)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            acc.device
+                .load_ptx(ptx, "weight_grad_mod", &["weight_grad"])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            // Hidden layer delta
+            let ptx = compile_ptx(HIDDEN_DELTA_SRC)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            acc.device
+                .load_ptx(ptx, "hidden_delta_mod", &["hidden_delta"])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            // Byte histogram
+            let ptx = compile_ptx(BYTE_HISTOGRAM_SRC)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            acc.device
+                .load_ptx(ptx, "byte_histogram_mod", &["byte_histogram"])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            Ok(acc)
+        }
+
+        // -----------------------------------------------------------------------
+        // ML operations
+        // -----------------------------------------------------------------------
+
+        /// Forward pass through one dense layer with sigmoid activation.
+        ///
+        /// `weights`: flattened row-major `[out_size × in_size]`
+        /// Returns `out_size` activated values.
+        pub fn dense_layer_sigmoid(
+            &self,
+            weights: &[f32],
+            input: &[f32],
+            bias: &[f32],
+        ) -> Result<Vec<f32>> {
+            let out_size = bias.len() as u32;
+            let in_size = input.len() as u32;
+
+            let d_w = self.device.htod_sync_copy(weights)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_x = self.device.htod_sync_copy(input)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_b = self.device.htod_sync_copy(bias)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let mut d_out = self.device.alloc_zeros::<f32>(out_size as usize)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let f = self.device.get_func("dense_sigmoid_mod", "dense_sigmoid")
+                .ok_or_else(|| SteganoError::GpuError("dense_sigmoid kernel not loaded".into()))?;
+            let cfg = LaunchConfig::for_num_elems(out_size);
+            unsafe { f.launch(cfg, (&d_w, &d_x, &d_b, &mut d_out, in_size, out_size)) }
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            self.device.dtoh_sync_copy(&d_out)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))
+        }
+
+        /// Apply an SGD update: `params[i] -= lr * grads[i]`.  Returns the
+        /// updated parameter vector.
+        pub fn sgd_update(&self, params: &[f32], grads: &[f32], lr: f32) -> Result<Vec<f32>> {
+            let n = params.len() as u32;
+            let mut d_p = self.device.htod_sync_copy(params)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_g = self.device.htod_sync_copy(grads)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let f = self.device.get_func("sgd_update_mod", "sgd_update")
+                .ok_or_else(|| SteganoError::GpuError("sgd_update kernel not loaded".into()))?;
+            let cfg = LaunchConfig::for_num_elems(n);
+            unsafe { f.launch(cfg, (&mut d_p, &d_g, lr, n)) }
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            self.device.dtoh_sync_copy(&d_p)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))
+        }
+
+        /// Compute the output-layer backprop delta:
+        /// `delta[i] = (output[i] - target[i]) * output[i] * (1 - output[i])`
+        pub fn compute_output_delta(&self, output: &[f32], target: &[f32]) -> Result<Vec<f32>> {
+            let n = output.len().min(target.len()) as u32;
+            let d_out = self.device.htod_sync_copy(&output[..n as usize])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_tgt = self.device.htod_sync_copy(&target[..n as usize])
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let mut d_delta = self.device.alloc_zeros::<f32>(n as usize)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let f = self.device.get_func("output_delta_mod", "output_delta")
+                .ok_or_else(|| SteganoError::GpuError("output_delta kernel not loaded".into()))?;
+            let cfg = LaunchConfig::for_num_elems(n);
+            unsafe { f.launch(cfg, (&d_out, &d_tgt, &mut d_delta, n)) }
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            self.device.dtoh_sync_copy(&d_delta)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))
+        }
+
+        /// Compute the weight gradient (outer product): `grad[i*in+j] = delta[i]*input[j]`.
+        pub fn compute_weight_grad(&self, delta: &[f32], input: &[f32]) -> Result<Vec<f32>> {
+            let out_size = delta.len() as u32;
+            let in_size = input.len() as u32;
+            let total = out_size * in_size;
+
+            let d_delta = self.device.htod_sync_copy(delta)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_input = self.device.htod_sync_copy(input)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let mut d_grad = self.device.alloc_zeros::<f32>(total as usize)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let f = self.device.get_func("weight_grad_mod", "weight_grad")
+                .ok_or_else(|| SteganoError::GpuError("weight_grad kernel not loaded".into()))?;
+            let cfg = LaunchConfig::for_num_elems(total);
+            unsafe { f.launch(cfg, (&d_delta, &d_input, &mut d_grad, in_size, out_size)) }
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            self.device.dtoh_sync_copy(&d_grad)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))
+        }
+
+        /// Backpropagate delta through a hidden sigmoid layer.
+        ///
+        /// `w2` is the weight matrix of the layer *after* the hidden layer
+        /// (`[out_size × hidden_size]`). Returns `hidden_size` delta values.
+        pub fn compute_hidden_delta(
+            &self,
+            w2: &[f32],
+            out_delta: &[f32],
+            hidden: &[f32],
+        ) -> Result<Vec<f32>> {
+            let hidden_size = hidden.len() as u32;
+            let out_size = out_delta.len() as u32;
+
+            let d_w2 = self.device.htod_sync_copy(w2)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_od = self.device.htod_sync_copy(out_delta)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let d_h = self.device.htod_sync_copy(hidden)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let mut d_hd = self.device.alloc_zeros::<f32>(hidden_size as usize)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let f = self.device.get_func("hidden_delta_mod", "hidden_delta")
+                .ok_or_else(|| SteganoError::GpuError("hidden_delta kernel not loaded".into()))?;
+            let cfg = LaunchConfig::for_num_elems(hidden_size);
+            unsafe { f.launch(cfg, (&d_w2, &d_od, &d_h, &mut d_hd, hidden_size, out_size)) }
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            self.device.dtoh_sync_copy(&d_hd)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))
+        }
+
+        /// Build a 256-bucket byte histogram on the GPU and compute Shannon entropy.
+        ///
+        /// Returns the entropy in bits (0 – 8 for byte data).
+        pub fn compute_entropy(&self, data: &[u8]) -> Result<f32> {
+            if data.is_empty() {
+                return Ok(0.0);
+            }
+            let n = data.len() as u32;
+
+            let d_data = self.device.htod_sync_copy(data)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+            let mut d_hist = self.device.alloc_zeros::<u32>(256)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let f = self.device.get_func("byte_histogram_mod", "byte_histogram")
+                .ok_or_else(|| SteganoError::GpuError("byte_histogram kernel not loaded".into()))?;
+            let cfg = LaunchConfig::for_num_elems(n);
+            unsafe { f.launch(cfg, (&d_data, &mut d_hist, n)) }
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            let hist = self.device.dtoh_sync_copy(&d_hist)
+                .map_err(|e| SteganoError::GpuError(format!("{e:?}")))?;
+
+            // Shannon entropy: -sum(p * log2(p))
+            let len = data.len() as f32;
+            let entropy = hist.iter()
+                .filter(|&&c| c > 0)
+                .map(|&c| {
+                    let p = c as f32 / len;
+                    -p * p.log2()
+                })
+                .sum();
+
+            Ok(entropy)
         }
 
         /// GPU-accelerated LSB embedding.

@@ -76,6 +76,56 @@ impl FeatureNormalization {
             _feature_names: Vec::new(),
         }
     }
+
+    /// Fit normalization parameters from a matrix of feature vectors (rows = samples).
+    pub fn fit(&mut self, feature_matrix: &[Vec<f32>]) {
+        if feature_matrix.is_empty() {
+            return;
+        }
+        let n_features = feature_matrix[0].len();
+        let n = feature_matrix.len() as f32;
+
+        self.means = vec![0.0; n_features];
+        self.std_devs = vec![1.0; n_features];
+
+        // Compute means
+        for row in feature_matrix {
+            for (i, &v) in row.iter().enumerate().take(n_features) {
+                self.means[i] += v;
+            }
+        }
+        for m in &mut self.means {
+            *m /= n;
+        }
+
+        // Compute standard deviations
+        let mut variances = vec![0.0f32; n_features];
+        for row in feature_matrix {
+            for (i, &v) in row.iter().enumerate().take(n_features) {
+                variances[i] += (v - self.means[i]).powi(2);
+            }
+        }
+        for (i, var) in variances.into_iter().enumerate() {
+            self.std_devs[i] = (var / n).sqrt().max(1e-8);
+        }
+    }
+
+    /// Apply z-score normalization: (x - mean) / std.
+    /// If no parameters have been fitted, returns `input` unchanged.
+    pub fn normalize(&self, input: &[f32]) -> Vec<f32> {
+        if self.means.is_empty() {
+            return input.to_vec();
+        }
+        input
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let mean = self.means.get(i).copied().unwrap_or(0.0);
+                let std = self.std_devs.get(i).copied().unwrap_or(1.0);
+                (v - mean) / std
+            })
+            .collect()
+    }
 }
 
 /// Decision tree model for interpretable strategy selection
