@@ -207,13 +207,13 @@ pub struct SpeedObjective {
 /// Detection resistance objective
 #[derive(Debug)]
 pub struct StealthObjective {
-    _weight: f32,
+    weight: f32,
 }
 
 /// Quality preservation objective
 #[derive(Debug)]
 pub struct QualityObjective {
-    _weight: f32,
+    weight: f32,
 }
 
 /// Combined objective value
@@ -2153,14 +2153,48 @@ impl CapacityObjective {
 }
 
 impl ObjectiveFunction for CapacityObjective {
+    /// Score how efficiently the parameter combination uses the carrier's steganographic
+    /// capacity. Returns 0.0 if the payload cannot fit; otherwise a score in (0, 1]
+    /// that is higher when EC overhead is low and carrier utilisation is reasonable.
     fn evaluate(
         &self,
-        _params: &EmbedParams,
-        _carrier: &CarrierData,
-        _payload: &[u8],
+        params: &EmbedParams,
+        carrier: &CarrierData,
+        payload: &[u8],
     ) -> Result<f32> {
-        // Placeholder - would measure actual capacity efficiency
-        Ok(0.7)
+        // Bits of steganographic capacity per carrier byte varies by format.
+        // FASTA/FASTQ encode 2 bits per base character; all others use 1 LSB per byte.
+        let bits_per_carrier_byte: f64 = match carrier.format {
+            DataFormat::FASTA | DataFormat::FASTQ => 0.25, // 2 bits / 8 bits
+            _ => 0.125,                                    // 1 LSB / 8 bits
+        };
+
+        let stealth_mult = params.stealth_level.capacity_multiplier();
+        let ec_overhead = params.error_correction_level.overhead_percent();
+
+        // Usable capacity in bytes after stealth-level restriction
+        let effective_capacity =
+            carrier.raw_data.len() as f64 * bits_per_carrier_byte * stealth_mult;
+
+        if effective_capacity == 0.0 || payload.is_empty() {
+            return Ok(0.0);
+        }
+
+        // Feasibility: the expanded payload (including EC redundancy) must fit
+        let expanded = payload.len() as f64 * (1.0 + ec_overhead);
+        if expanded > effective_capacity {
+            return Ok(0.0);
+        }
+
+        // Utilisation: raw payload bytes as a fraction of usable capacity (not EC-expanded).
+        // Using raw payload size so EC overhead is not cancelled in the geometric mean below.
+        let utilisation = (payload.len() as f64 / effective_capacity) as f32;
+
+        // EC efficiency: fraction of embedded bytes that carry actual payload data
+        let ec_efficiency = (1.0 / (1.0 + ec_overhead)) as f32;
+
+        // Geometric mean rewards good utilisation and penalises EC overhead independently
+        Ok((utilisation * ec_efficiency).sqrt().clamp(0.0, 1.0))
     }
 
     fn name(&self) -> &str {
@@ -2183,18 +2217,164 @@ impl SpeedObjective {
 }
 
 impl ObjectiveFunction for SpeedObjective {
+    /// Estimate relative embedding throughput for the given parameter combination.
+    /// The score is normalised to [0, 1] against the theoretical maximum
+    /// (GPU-enabled, no EC, low-stealth).
     fn evaluate(
         &self,
-        _params: &EmbedParams,
+        params: &EmbedParams,
         _carrier: &CarrierData,
         _payload: &[u8],
     ) -> Result<f32> {
-        // Placeholder - would measure actual embedding speed
-        Ok(0.8)
+        // GPU provides ~8× throughput uplift for LSB scatter/gather
+        let gpu_factor: f32 = if params.use_gpu { 8.0 } else { 1.0 };
+
+        // EC computation is proportional to expansion; higher EC = slower
+        let ec_factor = (1.0 / (1.0 + params.error_correction_level.overhead_percent())) as f32;
+
+        // Higher stealth requires more careful bit placement per embedded bit
+        let stealth_factor: f32 = match params.stealth_level {
+            StealthLevel::Low => 1.00,     // plain LSB, minimal overhead
+            StealthLevel::Medium => 0.75,  // statistical distribution matching
+            StealthLevel::High => 0.45,    // careful per-bit placement
+            StealthLevel::Maximum => 0.20, // exhaustive analysis per bit
+        };
+
+        // Theoretical maximum: GPU(8) × no-EC(1.0) × Low-stealth(1.0) = 8.0
+        const MAX_FACTOR: f32 = 8.0;
+        Ok((gpu_factor * ec_factor * stealth_factor / MAX_FACTOR).clamp(0.0, 1.0))
     }
 
     fn name(&self) -> &str {
         "speed"
+    }
+
+    fn maximize(&self) -> bool {
+        true
+    }
+
+    fn weight(&self) -> f32 {
+        self.weight
+    }
+}
+
+impl StealthObjective {
+    pub fn new(weight: f32) -> Self {
+        Self { weight }
+    }
+}
+
+impl ObjectiveFunction for StealthObjective {
+    /// Score the detection-resistance of the embedding.  Higher is harder to detect.
+    /// Considers the stealth level's inherent detectability, the density of the
+    /// embedding (sparser = less detectable), and format-specific exposure.
+    fn evaluate(
+        &self,
+        params: &EmbedParams,
+        carrier: &CarrierData,
+        payload: &[u8],
+    ) -> Result<f32> {
+        // Base detectability resistance from the stealth algorithm choice
+        let base_stealth: f32 = match params.stealth_level {
+            StealthLevel::Maximum => 0.95, // Only 10% of capacity touched
+            StealthLevel::High => 0.75,    // 30% of capacity touched
+            StealthLevel::Medium => 0.45,  // 60% of capacity touched
+            StealthLevel::Low => 0.15,     // 100% of capacity touched; easily detectable
+        };
+
+        // Embedding density: the fuller the carrier, the more statistical anomalies
+        let bits_per_carrier_byte: f64 = match carrier.format {
+            DataFormat::FASTA | DataFormat::FASTQ => 0.25,
+            _ => 0.125,
+        };
+        let stealth_mult = params.stealth_level.capacity_multiplier();
+        let effective_capacity =
+            carrier.raw_data.len() as f64 * bits_per_carrier_byte * stealth_mult;
+
+        let density_penalty: f32 = if effective_capacity > 0.0 && !payload.is_empty() {
+            let density = (payload.len() as f64 / effective_capacity).min(1.0) as f32;
+            // Light penalty: full carriers are ~15% more detectable than sparse ones
+            1.0 - density * 0.15
+        } else {
+            1.0
+        };
+
+        // Format-specific exposure: genomics modifications are more auditable than image LSBs
+        let format_factor: f32 = match carrier.format {
+            DataFormat::FASTA | DataFormat::FASTQ | DataFormat::VCF | DataFormat::SAM
+            | DataFormat::BAM => 0.80, // base substitutions visible in alignment tools
+            DataFormat::WAV => 0.90, // LSB audio artifacts audible only at very high density
+            _ => 0.95,               // image LSB nearly imperceptible
+        };
+
+        Ok((base_stealth * density_penalty * format_factor).clamp(0.0, 1.0))
+    }
+
+    fn name(&self) -> &str {
+        "stealth"
+    }
+
+    fn maximize(&self) -> bool {
+        true
+    }
+
+    fn weight(&self) -> f32 {
+        self.weight
+    }
+}
+
+impl QualityObjective {
+    pub fn new(weight: f32) -> Self {
+        Self { weight }
+    }
+}
+
+impl ObjectiveFunction for QualityObjective {
+    /// Score how well carrier data quality is preserved after embedding.
+    /// High score means the embedded data introduces minimal perceptible distortion.
+    fn evaluate(
+        &self,
+        params: &EmbedParams,
+        carrier: &CarrierData,
+        _payload: &[u8],
+    ) -> Result<f32> {
+        // Stealth level controls how many carrier bits are touched:
+        // Maximum uses 10% → very low distortion; Low uses 100% → higher distortion.
+        let stealth_quality: f32 = match params.stealth_level {
+            StealthLevel::Maximum => 0.99, // Almost no perceptible change
+            StealthLevel::High => 0.94,    // Minor LSB changes in 30% of elements
+            StealthLevel::Medium => 0.83,  // Moderate changes in 60% of elements
+            StealthLevel::Low => 0.65,     // Noticeable changes across all elements
+        };
+
+        // Format-specific distortion sensitivity
+        let format_quality: f32 = match carrier.format {
+            // Genomics: base changes are lossless within valid alphabet but disrupt
+            // biological meaning; quality depends on sequence context
+            DataFormat::FASTA | DataFormat::FASTQ => 0.82,
+            DataFormat::VCF | DataFormat::SAM | DataFormat::BAM => 0.78,
+
+            // Audio: 1-bit LSB change in a 16-bit sample is inaudible; 8-bit is marginal
+            DataFormat::WAV => {
+                // Estimate bits per sample from carrier size heuristic (2 bytes = 16-bit)
+                let bytes_per_sample = if carrier.raw_data.len() > 44 { 2usize } else { 1 };
+                if bytes_per_sample >= 2 { 0.96 } else { 0.85 }
+            }
+
+            // Images: 1-bit LSB per channel is visually imperceptible (PSNR > 50 dB)
+            DataFormat::TIFF | DataFormat::PNG | DataFormat::MICROSCOPY | DataFormat::DICOM => {
+                0.97
+            }
+
+            // Signal and generic: low perceptual sensitivity
+            _ => 0.90,
+        };
+
+        Ok((stealth_quality * format_quality).clamp(0.0, 1.0))
+    }
+
+    fn name(&self) -> &str {
+        "quality"
     }
 
     fn maximize(&self) -> bool {
@@ -2233,6 +2413,92 @@ mod tests {
         assert_eq!(objective.weight(), 0.5);
         assert_eq!(objective.name(), "capacity");
         assert!(objective.maximize());
+    }
+
+    fn make_carrier(size: usize) -> CarrierData {
+        CarrierData {
+            format: DataFormat::PNG,
+            raw_data: vec![0u8; size],
+            metadata: HashMap::new(),
+            dimensions: Some(crate::core::Dimensions::new_2d(100, 100)),
+            sampling_rate: None,
+        }
+    }
+
+    fn make_params(ec: ECLevel, stealth: StealthLevel, gpu: bool) -> EmbedParams {
+        EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ec,
+            stealth_level: stealth,
+            use_gpu: gpu,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        }
+    }
+
+    #[test]
+    fn test_capacity_objective_scores() {
+        let obj = CapacityObjective::new(1.0);
+        let carrier = make_carrier(8000); // 8000 bytes → 1000 usable LSB bytes (Low stealth, no EC)
+
+        // No EC, low stealth: payload of 500 bytes fits with room to spare → non-zero score
+        let params = make_params(ECLevel::None, StealthLevel::Low, false);
+        let score = obj.evaluate(&params, &carrier, &vec![0u8; 500]).unwrap();
+        assert!(score > 0.0 && score <= 1.0, "score={score}");
+
+        // Payload larger than carrier capacity → 0
+        let params_max = make_params(ECLevel::Maximum, StealthLevel::Maximum, false);
+        let score_inf = obj.evaluate(&params_max, &carrier, &vec![0u8; 5000]).unwrap();
+        assert_eq!(score_inf, 0.0);
+
+        // Low EC + Low stealth should score higher than Maximum EC + Maximum stealth
+        let score_low = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Low, false), &carrier, &vec![0u8; 10]).unwrap();
+        let score_high_ec = obj.evaluate(&make_params(ECLevel::Maximum, StealthLevel::Low, false), &carrier, &vec![0u8; 10]).unwrap();
+        assert!(score_low > score_high_ec, "low EC should outscore high EC");
+    }
+
+    #[test]
+    fn test_speed_objective_scores() {
+        let obj = SpeedObjective::new(1.0);
+        let carrier = make_carrier(1000);
+        let payload = b"hello";
+
+        // GPU + no EC + low stealth = max speed
+        let fast = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Low, true), &carrier, payload).unwrap();
+        // No GPU + max EC + max stealth = slow
+        let slow = obj.evaluate(&make_params(ECLevel::Maximum, StealthLevel::Maximum, false), &carrier, payload).unwrap();
+
+        assert!(fast > slow, "fast={fast}, slow={slow}");
+        assert!(fast <= 1.0);
+        assert!(slow >= 0.0);
+    }
+
+    #[test]
+    fn test_stealth_objective_scores() {
+        let obj = StealthObjective::new(1.0);
+        let carrier = make_carrier(8000);
+        let payload = b"small payload";
+
+        // Maximum stealth should score higher than Low stealth
+        let max_stealth = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Maximum, false), &carrier, payload).unwrap();
+        let low_stealth = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Low, false), &carrier, payload).unwrap();
+        assert!(max_stealth > low_stealth, "max={max_stealth}, low={low_stealth}");
+        assert!(max_stealth <= 1.0);
+        assert!(low_stealth >= 0.0);
+    }
+
+    #[test]
+    fn test_quality_objective_scores() {
+        let obj = QualityObjective::new(1.0);
+        let carrier = make_carrier(1000);
+        let payload = b"test";
+
+        // Maximum stealth → highest quality preservation
+        let max_q = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Maximum, false), &carrier, payload).unwrap();
+        let low_q = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Low, false), &carrier, payload).unwrap();
+        assert!(max_q > low_q, "max={max_q}, low={low_q}");
+        assert!(max_q <= 1.0);
+        assert!(low_q >= 0.0);
     }
 
     #[tokio::test]
