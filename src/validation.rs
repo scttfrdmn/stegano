@@ -776,7 +776,9 @@ impl AdvancedSteganalysis {
 
     fn cepstral_analysis(&self, audio_data: &[f32]) -> Result<f64> {
         // Simple cepstral analysis for detecting embedding artifacts
-        let fft_result = self.simple_fft(audio_data)?;
+        // Use a fixed window to keep O(n^2) DFT tractable
+        let window_size = 1024.min(audio_data.len());
+        let fft_result = self.simple_fft(&audio_data[..window_size])?;
 
         // Log magnitude spectrum
         let log_spectrum: Vec<f32> = fft_result.iter().map(|&x| (x + 1e-10).ln()).collect();
@@ -788,11 +790,12 @@ impl AdvancedSteganalysis {
         let cepstral_variance =
             cepstrum.iter().map(|&x| x * x).sum::<f32>() / cepstrum.len() as f32;
 
-        Ok((cepstral_variance - 0.1).max(0.0) as f64)
+        Ok(((cepstral_variance - 0.1).max(0.0) as f64).min(1.0))
     }
 
     fn harmonic_distortion_analysis(&self, audio_data: &[f32], _sample_rate: f32) -> Result<f64> {
-        let fft_result = self.simple_fft(audio_data)?;
+        let window_size = 1024.min(audio_data.len());
+        let fft_result = self.simple_fft(&audio_data[..window_size])?;
 
         // Find fundamental frequency (simplified)
         let mut max_magnitude = 0.0;
@@ -828,7 +831,7 @@ impl AdvancedSteganalysis {
             0.0
         };
 
-        Ok(thd as f64)
+        Ok((thd as f64).min(1.0))
     }
 
     fn simple_fft(&self, data: &[f32]) -> Result<Vec<f32>> {

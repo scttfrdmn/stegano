@@ -85,12 +85,15 @@ impl SteganoEmbedder {
         let mut report = ValidationReport::new();
 
         // Classical statistical tests
+        // Compare modified data's byte distribution against uniform (all bins positive)
+        let n = modified_data.len() as f64;
+        let expected_uniform = vec![n / 256.0; 256];
         let chi_square_result = self
             .validation_suite
             .classical_tests()
             .chi_square_test(
-                &self.bytes_to_frequencies(original_data),
                 &self.bytes_to_frequencies(modified_data),
+                &expected_uniform,
             )
             .map_err(|e| SteganoError::IntegrityError(e.to_string()))?;
 
