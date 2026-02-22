@@ -157,6 +157,8 @@ mod tests {
         match best_backend {
             #[cfg(all(target_os = "macos", feature = "metal"))]
             GpuBackend::Metal => assert!(true),
+            #[cfg(feature = "cuda")]
+            GpuBackend::Cuda => assert!(true),
             #[cfg(feature = "gpu")]
             GpuBackend::Wgpu => assert!(true),
             GpuBackend::Cpu => assert!(true),
