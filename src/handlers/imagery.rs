@@ -4,6 +4,7 @@ use super::DataHandler;
 use crate::core::*;
 use crate::crypto::CryptoLayer;
 use async_trait::async_trait;
+use std::time::Instant;
 
 pub struct ImageryHandler {
     crypto: Option<CryptoLayer>,
@@ -156,13 +157,19 @@ impl ImageryHandler {
         payload: &[u8],
         strategy: &ImageEmbedStrategy,
     ) -> Result<EmbedResult> {
+        let embed_start = Instant::now();
+
         // Prepare payload with encryption if enabled
-        let final_payload = if let Some(ref crypto) = self.crypto {
+        let (final_payload, encryption_time_ms) = if let Some(ref crypto) = self.crypto {
             use crate::crypto::CryptoLayer;
+            let enc_start = Instant::now();
             let secure_payload = crypto.encrypt(payload)?;
-            CryptoLayer::serialize_payload(&secure_payload)
+            // Ceiling to nearest ms; at least 1 when encryption ran
+            let enc_ns = enc_start.elapsed().as_nanos().max(1) as u64;
+            let enc_ms = (enc_ns + 999_999) / 1_000_000;
+            (CryptoLayer::serialize_payload(&secure_payload), enc_ms)
         } else {
-            payload.to_vec()
+            (payload.to_vec(), 0)
         };
 
         // Create header
@@ -209,8 +216,8 @@ impl ImageryHandler {
         Ok(EmbedResult::success(
             payload.len(),
             PerformanceStats {
-                embedding_time_ms: 10, // Placeholder
-                encryption_time_ms: if self.crypto.is_some() { 5 } else { 0 },
+                embedding_time_ms: embed_start.elapsed().as_millis() as u64,
+                encryption_time_ms,
                 gpu_acceleration_used: false,
                 memory_usage_bytes: total_data.len() * 2,
             },
