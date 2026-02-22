@@ -156,14 +156,12 @@ async fn main() -> Result<()> {
     let cv_data = generate_cv_dataset(500);
     let start = Instant::now();
 
-    // Simple dummy model for demonstration
+    // Simple dummy model for demonstration — returns predicted probability scores
     let model_fn =
-        |_train_data: &[(Vec<f64>, bool)], test_data: &[(Vec<f64>, bool)]| -> Result<f64> {
-            let correct = test_data
-                .iter()
-                .filter(|(features, label)| (features[0] > 0.5) == *label)
-                .count();
-            Ok(correct as f64 / test_data.len() as f64)
+        |_train_data: &[(Vec<f64>, bool)], test_data: &[(Vec<f64>, bool)]| -> Result<Vec<f64>> {
+            // Use first feature directly as a probability score
+            let scores: Vec<f64> = test_data.iter().map(|(features, _)| features[0]).collect();
+            Ok(scores)
         };
 
     let cv_result = validation_suite

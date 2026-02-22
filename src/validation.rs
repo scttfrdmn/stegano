@@ -4,6 +4,7 @@
 //! including classical statistical tests, advanced steganalysis, and publication-ready metrics.
 
 use crate::core::*;
+use rustfft::{FftPlanner, num_complex::Complex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -367,14 +368,16 @@ impl ClassicalStatisticalTests {
     // Helper methods for statistical calculations
 
     fn chi_square_p_value(&self, chi_square: f64, df: usize) -> f64 {
-        // Simplified implementation using gamma function approximation
-        // For production, use a proper statistical library
+        if df == 0 {
+            return 1.0;
+        }
         if df == 1 {
-            2.0 * (1.0 - self.standard_normal_cdf(chi_square.sqrt()))
+            // χ²₁ = Z², so P(χ²₁ ≥ t) = P(|Z| ≥ √t) = 2*(1 - Φ(√t))
+            2.0 * (1.0 - self.standard_normal_cdf(chi_square.max(0.0).sqrt()))
         } else {
-            // Approximation for higher degrees of freedom
-            let z = ((2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt()).abs();
-            2.0 * (1.0 - self.standard_normal_cdf(z))
+            // Fisher approximation: z ≈ √(2χ²) - √(2k-1), p = 1 - Φ(z) (one-tailed right tail)
+            let z = (2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt();
+            (1.0 - self.standard_normal_cdf(z)).max(0.0).min(1.0)
         }
     }
 
@@ -836,35 +839,36 @@ impl AdvancedSteganalysis {
     }
 
     fn simple_fft(&self, data: &[f32]) -> Result<Vec<f32>> {
-        // Simplified DFT implementation for magnitude spectrum
         let n = data.len();
-        let mut magnitudes = Vec::with_capacity(n);
-
-        for k in 0..n {
-            let mut real_sum = 0.0;
-            let mut imag_sum = 0.0;
-
-            for j in 0..n {
-                let angle = -2.0 * std::f32::consts::PI * (k * j) as f32 / n as f32;
-                real_sum += data[j] * angle.cos();
-                imag_sum += data[j] * angle.sin();
-            }
-
-            magnitudes.push((real_sum * real_sum + imag_sum * imag_sum).sqrt());
+        if n == 0 {
+            return Ok(Vec::new());
         }
 
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(n);
+
+        let mut buffer: Vec<Complex<f32>> = data
+            .iter()
+            .map(|&x| Complex { re: x, im: 0.0 })
+            .collect();
+
+        fft.process(&mut buffer);
+
+        let magnitudes: Vec<f32> = buffer.iter().map(|c| c.norm()).collect();
         Ok(magnitudes)
     }
 
     fn chi_square_p_value(&self, chi_square: f64, df: usize) -> f64 {
-        // Simplified p-value calculation
         if df == 0 {
             return 1.0;
         }
-
-        // Use gamma function approximation
-        let z = ((2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt()).abs();
-        2.0 * (1.0 - self.standard_normal_cdf(z))
+        if df == 1 {
+            2.0 * (1.0 - self.standard_normal_cdf(chi_square.max(0.0).sqrt()))
+        } else {
+            // Fisher approximation: z ≈ √(2χ²) - √(2k-1), p = 1 - Φ(z) (one-tailed)
+            let z = (2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt();
+            (1.0 - self.standard_normal_cdf(z)).max(0.0).min(1.0)
+        }
     }
 
     fn standard_normal_cdf(&self, x: f64) -> f64 {
@@ -1098,14 +1102,18 @@ impl CrossValidation {
         }
     }
 
-    /// Perform k-fold cross-validation for model performance assessment
+    /// Perform k-fold cross-validation for model performance assessment.
+    ///
+    /// The closure receives (train_data, test_data) and must return a `Vec<f64>` of
+    /// predicted probability scores for each test sample. Accuracy is computed via
+    /// threshold at 0.5; AUC is computed via the Mann-Whitney U statistic.
     pub fn k_fold_validation<F>(
         &self,
         data: &[(Vec<f64>, bool)],
         mut model_fn: F,
     ) -> Result<CrossValidationResult>
     where
-        F: FnMut(&[(Vec<f64>, bool)], &[(Vec<f64>, bool)]) -> Result<f64>,
+        F: FnMut(&[(Vec<f64>, bool)], &[(Vec<f64>, bool)]) -> Result<Vec<f64>>,
     {
         if data.len() < self.k_folds {
             return Err(SteganoError::InvalidParameter(
@@ -1133,10 +1141,25 @@ impl CrossValidation {
                 .map(|(_, item)| item.clone())
                 .collect();
 
-            // Train and evaluate model
-            let accuracy = model_fn(&train_data, test_data)?;
+            // Model returns predicted probability scores for each test sample
+            let scores = model_fn(&train_data, test_data)?;
+
+            // Accuracy: threshold predictions at 0.5
+            let accuracy = if scores.is_empty() {
+                0.0
+            } else {
+                scores
+                    .iter()
+                    .zip(test_data.iter())
+                    .filter(|(&s, (_, label))| (s >= 0.5) == *label)
+                    .count() as f64
+                    / scores.len() as f64
+            };
             fold_accuracies.push(accuracy);
-            fold_aucs.push(accuracy); // Simplified - in real implementation, calculate actual AUC
+
+            // AUC via Mann-Whitney U statistic (O(n_pos * n_neg), n small in each fold)
+            let true_labels: Vec<bool> = test_data.iter().map(|(_, l)| *l).collect();
+            fold_aucs.push(Self::mann_whitney_auc(&true_labels, &scores));
         }
 
         let mean_accuracy = fold_accuracies.iter().sum::<f64>() / fold_accuracies.len() as f64;
@@ -1165,6 +1188,41 @@ impl CrossValidation {
             fold_aucs,
             mean_auc,
         })
+    }
+
+    /// AUC via Mann-Whitney U statistic: fraction of (positive, negative) score pairs
+    /// where the positive score exceeds the negative score.
+    fn mann_whitney_auc(labels: &[bool], scores: &[f64]) -> f64 {
+        let n_pos = labels.iter().filter(|&&l| l).count() as f64;
+        let n_neg = labels.iter().filter(|&&l| !l).count() as f64;
+        if n_pos == 0.0 || n_neg == 0.0 {
+            return 0.5; // undefined; return chance level
+        }
+
+        let pos_scores: Vec<f64> = scores
+            .iter()
+            .zip(labels.iter())
+            .filter(|(_, &l)| l)
+            .map(|(&s, _)| s)
+            .collect();
+        let neg_scores: Vec<f64> = scores
+            .iter()
+            .zip(labels.iter())
+            .filter(|(_, &l)| !l)
+            .map(|(&s, _)| s)
+            .collect();
+
+        let mut u = 0.0f64;
+        for &p in &pos_scores {
+            for &n in &neg_scores {
+                if p > n {
+                    u += 1.0;
+                } else if (p - n).abs() < f64::EPSILON {
+                    u += 0.5;
+                }
+            }
+        }
+        u / (n_pos * n_neg)
     }
 }
 
@@ -1902,5 +1960,101 @@ mod tests {
             .unwrap();
         assert!(result.classical_results.ks_test.p_value >= 0.0);
         assert!(result.overall_score >= 0.0);
+    }
+
+    #[test]
+    fn test_chi_square_p_value_is_one_tailed() {
+        let ct = ClassicalStatisticalTests::new(0.95);
+        // A large chi-square should give a small p-value
+        let p_large = ct.chi_square_p_value(20.0, 5);
+        // A small chi-square should give a large p-value
+        let p_small = ct.chi_square_p_value(1.0, 5);
+        assert!(p_large < p_small, "large χ² must give smaller p than small χ²");
+        // df=1: well-known value — χ²=3.841 corresponds to p≈0.05
+        let p_df1 = ct.chi_square_p_value(3.841, 1);
+        assert!(
+            (p_df1 - 0.05).abs() < 0.01,
+            "χ²₁=3.841 should give p≈0.05, got {}",
+            p_df1
+        );
+        // p-values must be in [0, 1]
+        for &chi2 in &[0.0, 1.0, 5.0, 10.0, 50.0] {
+            let p = ct.chi_square_p_value(chi2, 4);
+            assert!(p >= 0.0 && p <= 1.0, "p out of range for χ²={}: {}", chi2, p);
+        }
+    }
+
+    #[test]
+    fn test_simple_fft_produces_magnitudes() {
+        let steg = AdvancedSteganalysis::new(0.1);
+        // DC signal: all ones — energy should be concentrated at bin 0
+        let dc: Vec<f32> = vec![1.0; 64];
+        let mags = steg.simple_fft(&dc).unwrap();
+        assert_eq!(mags.len(), 64);
+        assert!(mags[0] > 60.0, "DC bin should dominate for constant signal");
+        // All-zeros should give all-zero magnitudes
+        let zeros = steg.simple_fft(&vec![0.0f32; 64]).unwrap();
+        assert!(zeros.iter().all(|&m| m.abs() < 1e-5));
+        // Empty input
+        let empty = steg.simple_fft(&[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_k_fold_auc_is_meaningful() {
+        let cv = CrossValidation::new(5, 42);
+        // Interleaved positives (score=0.75) and negatives (score=0.25) so every
+        // fold has representative samples and the model is a perfect separator.
+        let data: Vec<(Vec<f64>, bool)> = (0..100)
+            .map(|i| {
+                if i % 2 == 0 {
+                    (vec![0.75_f64], true)
+                } else {
+                    (vec![0.25_f64], false)
+                }
+            })
+            .collect();
+
+        let model_fn = |_train: &[(Vec<f64>, bool)],
+                        test: &[(Vec<f64>, bool)]|
+         -> crate::core::Result<Vec<f64>> {
+            Ok(test.iter().map(|(f, _)| f[0]).collect())
+        };
+
+        let result = cv.k_fold_validation(&data, model_fn).unwrap();
+        // AUC should be close to 1.0 for a near-perfect separator
+        assert!(
+            result.mean_auc > 0.9,
+            "mean AUC should be > 0.9 for separable data, got {}",
+            result.mean_auc
+        );
+        // All fold AUCs should be in [0, 1]
+        for &auc in &result.fold_aucs {
+            assert!(auc >= 0.0 && auc <= 1.0, "AUC out of range: {}", auc);
+        }
+    }
+
+    #[test]
+    fn test_k_fold_auc_chance_for_random() {
+        let cv = CrossValidation::new(5, 42);
+        // Random scores uncorrelated with labels — AUC ≈ 0.5
+        let data: Vec<(Vec<f64>, bool)> = (0..100)
+            .map(|i| (vec![(i % 3) as f64 / 3.0], i % 2 == 0))
+            .collect();
+
+        let model_fn = |_: &[(Vec<f64>, bool)],
+                        test: &[(Vec<f64>, bool)]|
+         -> crate::core::Result<Vec<f64>> {
+            // Return constant score — no discrimination
+            Ok(vec![0.5; test.len()])
+        };
+
+        let result = cv.k_fold_validation(&data, model_fn).unwrap();
+        // AUC should be ~0.5 for a non-discriminating model
+        assert!(
+            (result.mean_auc - 0.5).abs() < 0.2,
+            "mean AUC should be near 0.5 for non-discriminating model, got {}",
+            result.mean_auc
+        );
     }
 }

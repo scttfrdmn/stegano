@@ -362,13 +362,11 @@ fn bench_cross_validation(c: &mut Criterion) {
                 // Simple model function for testing
                 let model_fn = |_train_data: &[(Vec<f64>, bool)],
                                 test_data: &[(Vec<f64>, bool)]|
-                 -> Result<f64> {
-                    // Dummy model that returns accuracy based on first feature
-                    let correct = test_data
-                        .iter()
-                        .filter(|(features, label)| (features[0] > 0.5) == *label)
-                        .count();
-                    Ok(correct as f64 / test_data.len() as f64)
+                 -> Result<Vec<f64>> {
+                    // Dummy model: use first feature as predicted probability score
+                    let scores: Vec<f64> =
+                        test_data.iter().map(|(features, _)| features[0]).collect();
+                    Ok(scores)
                 };
 
                 validation_suite
