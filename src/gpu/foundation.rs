@@ -53,7 +53,6 @@ impl GpuFoundation {
 
     /// Detect if GPU acceleration is available on this system
     fn detect_gpu_availability() -> bool {
-        // Check for GPU acceleration capabilities
         #[cfg(all(target_os = "macos", feature = "metal"))]
         {
             if crate::gpu::metal::MetalAccelerator::is_available() {
@@ -61,16 +60,19 @@ impl GpuFoundation {
             }
         }
 
-        // For now, consider GPU available if we can create a WGPU instance
-        // This will be expanded with actual WGPU device detection
+        #[cfg(feature = "cuda")]
+        {
+            if crate::gpu::cuda::CudaAccelerator::is_available() {
+                return true;
+            }
+        }
+
         #[cfg(feature = "gpu")]
         {
-            // Simplified detection - in full implementation, this would
-            // actually attempt to create a WGPU instance asynchronously
             true
         }
 
-        #[cfg(not(feature = "gpu"))]
+        #[cfg(not(any(feature = "gpu", feature = "cuda")))]
         false
     }
 
@@ -130,12 +132,18 @@ impl GpuFoundation {
             }
         }
 
-        #[cfg(feature = "gpu")]
+        #[cfg(feature = "cuda")]
         {
-            "WGPU (Cross-platform)".to_string()
+            if crate::gpu::cuda::CudaAccelerator::is_available() {
+                return "CUDA (NVIDIA)".to_string();
+            }
         }
 
-        #[cfg(not(feature = "gpu"))]
+        #[cfg(feature = "gpu")]
+        {
+            return "WGPU (Cross-platform)".to_string();
+        }
+
         "CPU-only (No GPU features)".to_string()
     }
 

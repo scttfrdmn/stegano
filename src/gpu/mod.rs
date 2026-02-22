@@ -4,6 +4,7 @@
 //! backend selection and CPU fallbacks for optimal performance across platforms.
 
 pub mod compute;
+pub mod cuda;
 pub mod foundation;
 pub mod kernels;
 pub mod metal;
@@ -79,18 +80,22 @@ impl Default for GpuAccelerator {
     }
 }
 
-/// GPU backend selection for future expansion
+/// GPU backend selection
 #[derive(Debug, Clone, Copy)]
 pub enum GpuBackend {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     Metal,
+    #[cfg(feature = "cuda")]
+    Cuda,
     #[cfg(feature = "gpu")]
     Wgpu,
     Cpu,
 }
 
 impl GpuBackend {
-    /// Get the best available backend for this system
+    /// Get the best available backend for this system.
+    ///
+    /// Priority order: Metal (macOS) > CUDA > WGPU > CPU.
     pub fn best_available() -> Self {
         #[cfg(all(target_os = "macos", feature = "metal"))]
         {
@@ -99,10 +104,16 @@ impl GpuBackend {
             }
         }
 
+        #[cfg(feature = "cuda")]
+        {
+            if cuda::CudaAccelerator::is_available() {
+                return Self::Cuda;
+            }
+        }
+
         #[cfg(feature = "gpu")]
         {
-            // In future iterations, this will check WGPU availability
-            Self::Wgpu
+            return Self::Wgpu;
         }
 
         #[cfg(not(feature = "gpu"))]
@@ -114,6 +125,8 @@ impl GpuBackend {
         match self {
             #[cfg(all(target_os = "macos", feature = "metal"))]
             Self::Metal => "Metal",
+            #[cfg(feature = "cuda")]
+            Self::Cuda => "CUDA",
             #[cfg(feature = "gpu")]
             Self::Wgpu => "WGPU",
             Self::Cpu => "CPU",

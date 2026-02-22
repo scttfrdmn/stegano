@@ -54,6 +54,9 @@ wgpu = { version = "22.0", optional = true, features = ["wgsl"] }
 bytemuck = { version = "1.14", features = ["derive"] }
 futures = "0.3"
 
+# CUDA acceleration
+cudarc = { version = "0.12", optional = true, default-features = false, features = ["driver", "nvrtc"] }
+
 # Error correction
 reed-solomon = "0.2"
 
@@ -102,7 +105,7 @@ mockall = "0.12"     # For mocking in tests
 default = ["gpu"]
 gpu = ["wgpu"]
 metal = ["dep:metal", "dep:objc", "dep:core-graphics-types"]
-cuda = []
+cuda = ["dep:cudarc"]
 benchmarks = ["criterion"]
 
 [profile.release]
