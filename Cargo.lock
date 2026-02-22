@@ -936,6 +936,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cudarc"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38cd60a9a42ec83a2ed7effb0b1f073270264ea99da7acfc44f7e8d74dee0384"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "custom_derive"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3471,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "stegano"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3489,6 +3498,7 @@ dependencies = [
  "criterion",
  "crossbeam",
  "csv",
+ "cudarc",
  "env_logger",
  "futures",
  "hex",

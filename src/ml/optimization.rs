@@ -711,14 +711,133 @@ impl OptimizationEngine {
     /// Simulated annealing implementation
     async fn simulated_annealing(
         &mut self,
-        _carrier: &CarrierData,
-        _payload: &[u8],
-        _initial_params: Option<EmbedParams>,
-        _initial_temp: f32,
-        _cooling_rate: f32,
+        carrier: &CarrierData,
+        payload: &[u8],
+        initial_params: Option<EmbedParams>,
+        initial_temp: f32,
+        cooling_rate: f32,
     ) -> Result<OptimizationResult> {
-        // Placeholder implementation
-        todo!("Implement simulated annealing")
+        let mut current = initial_params.unwrap_or_else(|| self.generate_random_parameters());
+        let mut current_obj = self
+            .objective_evaluator
+            .evaluate(&current, carrier, payload)
+            .await?;
+
+        // Track global best (SA may temporarily accept worse solutions)
+        let mut best = current.clone();
+        let mut best_obj = current_obj.clone();
+
+        let mut temperature = initial_temp.max(f32::EPSILON);
+        let min_temperature: f32 = 1e-6;
+        let max_iterations = self.config.max_iterations;
+        let mut convergence_history = Vec::with_capacity(max_iterations);
+        let mut no_improvement_count = 0usize;
+
+        for iteration in 0..max_iterations {
+            // Generate a neighbour via mutation (pass 0 to keep full mutation strength)
+            let neighbor = self.gaussian_mutation(&current, 0);
+            let neighbor_obj = self
+                .objective_evaluator
+                .evaluate(&neighbor, carrier, payload)
+                .await?;
+
+            let delta = neighbor_obj.combined_score - current_obj.combined_score;
+
+            // Metropolis acceptance criterion
+            let accept = if delta > 0.0 {
+                true
+            } else {
+                // Accept worse solution probabilistically based on temperature
+                let probability = (delta / temperature).exp();
+                rand::random::<f32>() < probability
+            };
+
+            if accept {
+                current = neighbor;
+                current_obj = neighbor_obj;
+            }
+
+            // Update global best
+            if current_obj.combined_score > best_obj.combined_score {
+                best = current.clone();
+                best_obj = current_obj.clone();
+                no_improvement_count = 0;
+            } else {
+                no_improvement_count += 1;
+            }
+
+            convergence_history.push(best_obj.combined_score);
+
+            // Geometric cooling schedule
+            temperature *= cooling_rate;
+
+            // Early termination: temperature frozen
+            if temperature <= min_temperature {
+                return Ok(OptimizationResult {
+                    best_parameters: best.clone(),
+                    best_objective_value: best_obj.clone(),
+                    convergence: ConvergenceInfo {
+                        converged: true,
+                        iterations: iteration + 1,
+                        convergence_measure: temperature,
+                        termination_reason: TerminationReason::Converged,
+                    },
+                    pareto_front: Vec::new(),
+                    statistics: self.objective_evaluator.get_statistics(),
+                });
+            }
+
+            // Early termination: no improvement for 25% of budget
+            if no_improvement_count >= max_iterations / 4 {
+                let score = best_obj.combined_score;
+                return Ok(OptimizationResult {
+                    best_parameters: best.clone(),
+                    best_objective_value: best_obj.clone(),
+                    convergence: ConvergenceInfo {
+                        converged: true,
+                        iterations: iteration + 1,
+                        convergence_measure: score,
+                        termination_reason: TerminationReason::NoImprovement,
+                    },
+                    pareto_front: Vec::new(),
+                    statistics: self.objective_evaluator.get_statistics(),
+                });
+            }
+
+            // Early termination: tolerance met over last 10 iterations
+            if convergence_history.len() >= 10 {
+                let window = &convergence_history[convergence_history.len() - 10..];
+                let improvement = window.last().unwrap() - window.first().unwrap();
+                if improvement.abs() < self.config.tolerance {
+                    return Ok(OptimizationResult {
+                        best_parameters: best.clone(),
+                        best_objective_value: best_obj.clone(),
+                        convergence: ConvergenceInfo {
+                            converged: true,
+                            iterations: iteration + 1,
+                            convergence_measure: improvement.abs(),
+                            termination_reason: TerminationReason::Converged,
+                        },
+                        pareto_front: Vec::new(),
+                        statistics: self.objective_evaluator.get_statistics(),
+                    });
+                }
+            }
+        }
+
+        let final_score = best_obj.combined_score;
+        Ok(OptimizationResult {
+            best_parameters: best,
+            best_objective_value: best_obj,
+            convergence: ConvergenceInfo {
+                converged: false,
+                iterations: max_iterations,
+                convergence_measure: final_score,
+                termination_reason: TerminationReason::MaxIterations,
+            },
+            pareto_front: Vec::new(),
+            statistics: self.objective_evaluator.get_statistics(),
+        })
     }
 
     /// Bayesian optimization implementation (basic version)
@@ -2114,6 +2233,71 @@ mod tests {
         assert_eq!(objective.weight(), 0.5);
         assert_eq!(objective.name(), "capacity");
         assert!(objective.maximize());
+    }
+
+    #[tokio::test]
+    async fn test_simulated_annealing() {
+        let carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: vec![0; 1000],
+            metadata: HashMap::new(),
+            dimensions: Some(crate::core::Dimensions::new_2d(100, 100)),
+            sampling_rate: None,
+        };
+        let payload = b"test payload";
+
+        let mut engine = OptimizationEngine::new(OptimizationConfig {
+            algorithm: OptimizationAlgorithm::SimulatedAnnealing {
+                initial_temp: 10.0,
+                cooling_rate: 0.9,
+            },
+            max_iterations: 50,
+            ..OptimizationConfig::default()
+        });
+        engine.add_objective(Box::new(CapacityObjective::new(1.0)));
+
+        let result = engine.optimize(&carrier, payload, None).await.unwrap();
+        // Should terminate with a valid solution
+        assert!(result.convergence.iterations > 0);
+        assert!(result.convergence.iterations <= 50);
+        assert!(result.best_objective_value.combined_score >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_simulated_annealing_with_initial_params() {
+        let carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: vec![0; 1000],
+            metadata: HashMap::new(),
+            dimensions: Some(crate::core::Dimensions::new_2d(100, 100)),
+            sampling_rate: None,
+        };
+        let payload = b"test";
+
+        let initial = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::High,
+            stealth_level: StealthLevel::Maximum,
+            use_gpu: false,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        };
+
+        let mut engine = OptimizationEngine::new(OptimizationConfig {
+            algorithm: OptimizationAlgorithm::SimulatedAnnealing {
+                initial_temp: 5.0,
+                cooling_rate: 0.95,
+            },
+            max_iterations: 30,
+            ..OptimizationConfig::default()
+        });
+        engine.add_objective(Box::new(CapacityObjective::new(1.0)));
+
+        let result = engine
+            .optimize(&carrier, payload, Some(initial))
+            .await
+            .unwrap();
+        assert!(result.convergence.iterations > 0);
     }
 
     #[tokio::test]
