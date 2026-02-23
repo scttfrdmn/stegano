@@ -1451,21 +1451,131 @@ impl StatisticalValidationSuite {
 
     fn run_performance_analysis(
         &self,
-        _original: &[u8],
-        _stego: &[u8],
+        original: &[u8],
+        stego: &[u8],
     ) -> Result<PerformanceResults> {
-        // Placeholder for performance analysis
-        Ok(PerformanceResults::default())
+        let n = original.len().min(stego.len());
+        if n < 20 {
+            return Ok(PerformanceResults::default());
+        }
+
+        // Build a labeled dataset: cover bytes (label=false) vs stego bytes (label=true).
+        // Feature = normalized byte value [0, 1].  We interleave cover and stego so the
+        // k-fold splitter sees balanced classes in every fold.
+        let max_samples = 100.min(n / 2);
+        let stride = (n / 2 / max_samples).max(1);
+
+        let mut true_labels: Vec<bool> = Vec::with_capacity(max_samples * 2);
+        let mut scores: Vec<f64> = Vec::with_capacity(max_samples * 2);
+        let mut cv_data: Vec<(Vec<f64>, bool)> = Vec::with_capacity(max_samples * 2);
+
+        for i in (0..n / 2).step_by(stride).take(max_samples) {
+            let orig_score = original[i] as f64 / 255.0;
+            let stego_score = stego[i] as f64 / 255.0;
+
+            true_labels.push(false);
+            scores.push(orig_score);
+            cv_data.push((vec![orig_score], false));
+
+            true_labels.push(true);
+            scores.push(stego_score);
+            cv_data.push((vec![stego_score], true));
+        }
+
+        // ROC analysis: use raw normalised byte value as the detection score.
+        let roc = self
+            .performance_analysis
+            .roc_analysis(&true_labels, &scores)
+            .ok();
+
+        // 5-fold cross-validation: trivial linear scorer (feature value = predicted score).
+        let cv_result = if cv_data.len() >= 10 {
+            self.performance_analysis
+                .cross_validation
+                .k_fold_validation(&cv_data, |_train, test| {
+                    Ok(test.iter().map(|(f, _)| f[0]).collect())
+                })
+                .ok()
+        } else {
+            None
+        };
+
+        Ok(PerformanceResults {
+            roc_analysis: roc,
+            cross_validation: cv_result,
+        })
     }
 
     fn run_domain_validation(
         &self,
         _original: &[u8],
-        _stego: &[u8],
-        _format: &DataFormat,
+        stego: &[u8],
+        format: &DataFormat,
     ) -> Result<DomainResults> {
-        // Placeholder for domain-specific validation
-        Ok(DomainResults::default())
+        let mut results = DomainResults::default();
+
+        if format.is_genomics() {
+            // Verify the stego file still looks like valid genomic text (SAM/FASTQ/VCF)
+            // or binary (BAM).  For text-based formats check printable ASCII; for BAM
+            // accept any bytes (it is binary).
+            let genomics_ok = match format {
+                DataFormat::BAM => {
+                    // BAM: binary, only check for the mandatory BAM magic "BAM\1"
+                    stego.len() >= 4 && stego[..4] == [0x42, 0x41, 0x4D, 0x01]
+                }
+                _ => {
+                    // SAM/FASTQ/FASTA/VCF: text-based; verify >95 % of bytes are printable ASCII
+                    let printable = stego
+                        .iter()
+                        .filter(|&&b| b == b'\n' || b == b'\r' || b == b'\t' || (32..127).contains(&b))
+                        .count();
+                    printable * 20 >= stego.len() * 19 // ≥95 % printable
+                }
+            };
+            results.genomics_integrity = Some(genomics_ok);
+        } else if format.is_imagery() {
+            // Medical/imaging formats: verify known magic / structure markers are intact.
+            let medical_ok = match format {
+                DataFormat::DICOM => {
+                    stego.len() >= 132 && &stego[128..132] == b"DICM"
+                }
+                DataFormat::TIFF => {
+                    stego.len() >= 4
+                        && ((&stego[..2] == b"II" && stego[2] == 42)
+                            || (&stego[..2] == b"MM" && stego[2] == 0 && stego[3] == 42))
+                }
+                DataFormat::PNG => {
+                    stego.len() >= 8
+                        && stego[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+                }
+                _ => true, // unknown imaging sub-format — assume OK
+            };
+            results.medical_compliance = Some(medical_ok);
+        } else if matches!(format, DataFormat::WAV | DataFormat::BinarySignal) {
+            // Audio/signal quality: compute normalised RMS of the signal bytes (skipping a
+            // 44-byte WAV header for WAV files).
+            let audio_start = if *format == DataFormat::WAV { 44 } else { 0 };
+            let audio_data = if audio_start < stego.len() {
+                &stego[audio_start..]
+            } else {
+                stego
+            };
+            if !audio_data.is_empty() {
+                let mean = audio_data.iter().map(|&b| b as f64).sum::<f64>()
+                    / audio_data.len() as f64;
+                let rms = (audio_data
+                    .iter()
+                    .map(|&b| (b as f64 - mean).powi(2))
+                    .sum::<f64>()
+                    / audio_data.len() as f64)
+                    .sqrt();
+                // Normalise to [0, 1] against maximum possible RMS of 127.5
+                let quality = (rms / 127.5).min(1.0);
+                results.audio_quality = Some(quality);
+            }
+        }
+
+        Ok(results)
     }
 
     /// Access to classical statistical tests
@@ -2076,5 +2186,87 @@ mod tests {
             "mean AUC should be near 0.5 for non-discriminating model, got {}",
             result.mean_auc
         );
+    }
+
+    #[test]
+    fn test_run_performance_analysis() {
+        let suite = StatisticalValidationSuite::new();
+        // Use enough data for meaningful analysis (> 20 bytes)
+        let original: Vec<u8> = (0u8..200).collect();
+        let stego: Vec<u8> = original.iter().map(|&b| b ^ 1).collect(); // flip LSB
+
+        let results = suite
+            .run_performance_analysis(&original, &stego)
+            .expect("performance analysis should not fail");
+
+        // With 200 bytes we expect both ROC and CV to be populated
+        assert!(
+            results.roc_analysis.is_some(),
+            "ROC analysis should be populated for 200-byte input"
+        );
+        let roc = results.roc_analysis.unwrap();
+        assert!(roc.auc >= 0.0 && roc.auc <= 1.0, "AUC must be in [0,1]");
+
+        assert!(
+            results.cross_validation.is_some(),
+            "Cross-validation should be populated for 200-byte input"
+        );
+        let cv = results.cross_validation.unwrap();
+        assert!(
+            cv.mean_accuracy >= 0.0 && cv.mean_accuracy <= 1.0,
+            "Mean accuracy must be in [0,1]"
+        );
+    }
+
+    #[test]
+    fn test_run_performance_analysis_too_small() {
+        let suite = StatisticalValidationSuite::new();
+        let tiny = vec![0u8; 5]; // fewer than 20 bytes
+        let results = suite
+            .run_performance_analysis(&tiny, &tiny)
+            .expect("should return empty PerformanceResults for tiny input");
+        assert!(results.roc_analysis.is_none());
+        assert!(results.cross_validation.is_none());
+    }
+
+    #[test]
+    fn test_run_domain_validation_genomics() {
+        let suite = StatisticalValidationSuite::new();
+        // A SAM-like text payload: all printable ASCII
+        let original = b"@HD\tVN:1.0\nread1\t0\tchr1\t100\t60\t10M\t*\t0\t0\tACGTACGTAC\tIIIIIIIIII\n";
+        let stego = original; // unchanged
+        let results = suite
+            .run_domain_validation(original, stego, &DataFormat::SAM)
+            .expect("domain validation should not fail");
+        assert_eq!(results.genomics_integrity, Some(true));
+        assert!(results.medical_compliance.is_none());
+        assert!(results.audio_quality.is_none());
+    }
+
+    #[test]
+    fn test_run_domain_validation_dicom() {
+        let suite = StatisticalValidationSuite::new();
+        // Minimal DICOM: 128 zero bytes + "DICM"
+        let mut stego = vec![0u8; 128];
+        stego.extend_from_slice(b"DICM");
+        let results = suite
+            .run_domain_validation(&stego, &stego, &DataFormat::DICOM)
+            .expect("DICOM domain validation should not fail");
+        assert_eq!(results.medical_compliance, Some(true));
+        assert!(results.genomics_integrity.is_none());
+    }
+
+    #[test]
+    fn test_run_domain_validation_wav() {
+        let suite = StatisticalValidationSuite::new();
+        // Minimal WAV-like data: 44-byte header + 100 bytes of audio signal
+        let mut stego = vec![0u8; 44]; // fake header
+        stego.extend_from_slice(&[128u8; 100]); // silent audio
+        let results = suite
+            .run_domain_validation(&stego, &stego, &DataFormat::WAV)
+            .expect("WAV domain validation should not fail");
+        assert!(results.audio_quality.is_some());
+        let q = results.audio_quality.unwrap();
+        assert!(q >= 0.0 && q <= 1.0, "audio quality must be in [0,1]");
     }
 }

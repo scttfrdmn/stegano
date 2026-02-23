@@ -69,7 +69,7 @@ impl FitsHandler {
             if card.starts_with(b"END") && card[3..].iter().all(|&b| b == b' ') {
                 // Advance to next 2880-byte boundary
                 let end_pos = offset + 80;
-                let data_start = (end_pos + 2879) / 2880 * 2880;
+                let data_start = end_pos.div_ceil(2880) * 2880;
                 return if data_start < data.len() {
                     Some(data_start)
                 } else {
@@ -88,7 +88,7 @@ impl FitsHandler {
 
     /// Embed `payload` in LSBs of `image_data[data_start..]`.
     fn lsb_embed(image_data: &mut [u8], data_start: usize, payload: &[u8]) -> Result<()> {
-        let available_bits = (image_data.len() - data_start) * 1; // 1 bit per byte
+        let available_bits = image_data.len() - data_start; // 1 bit per byte
         let needed_bits = payload.len() * 8;
         if needed_bits > available_bits {
             return Err(SteganoError::InsufficientCapacity {

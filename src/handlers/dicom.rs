@@ -191,16 +191,18 @@ pub enum DicomEmbedStrategy {
     /// Embed in pixel data LSB
     PixelDataLSB,
 
-    /// Embed in unused metadata fields.
+    /// Embed in the DICOM preamble (128 unused bytes before the `DICM` prefix).
     ///
-    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
-    /// Use `PrivateDataElements`, `PixelDataLSB`, or `MultiStrategy` instead.
+    /// Maximum payload: 120 bytes (8-byte header: `STEG` magic + 4-byte LE length).
+    /// The preamble is mandated by the DICOM standard to be ignored by conformant readers,
+    /// making it ideal for covert embedding.
     UnusedMetadata,
 
-    /// Embed in sequence item padding.
+    /// Embed in the `(FFFC,FFFC)` Data Set Trailing Padding element.
     ///
-    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
-    /// Use `PrivateDataElements`, `PixelDataLSB`, or `MultiStrategy` instead.
+    /// The DICOM standard defines this tag specifically as padding that applications
+    /// may ignore.  Payload is length-prefixed (4-byte LE u32) and stored as raw `OB` data.
+    /// Capacity is constrained only by available disk space.
     SequencePadding,
 
     /// Multi-strategy embedding
@@ -964,6 +966,147 @@ impl DicomHandler {
         Ok(payload)
     }
 
+    /// Magic bytes written at preamble[0..4] to signal embedded data.
+    const PREAMBLE_MAGIC: &'static [u8; 4] = b"STEG";
+    /// Preamble overhead: 4-byte magic + 4-byte LE length.
+    const PREAMBLE_OVERHEAD: usize = 8;
+    /// Maximum payload storable in the DICOM preamble.
+    const PREAMBLE_MAX_PAYLOAD: usize = DICOM_PREAMBLE_LENGTH - Self::PREAMBLE_OVERHEAD;
+
+    /// Embed payload in the 128-byte DICOM preamble (UnusedMetadata strategy).
+    ///
+    /// Layout: `[STEG][len:u32-LE][payload…][zeros…]`
+    fn embed_unused_metadata(
+        &self,
+        dicom: &mut DicomFile,
+        payload: &[u8],
+    ) -> Result<DicomEmbedResult> {
+        if payload.len() > Self::PREAMBLE_MAX_PAYLOAD {
+            return Err(SteganoError::InsufficientCapacity {
+                needed: payload.len(),
+                available: Self::PREAMBLE_MAX_PAYLOAD,
+            });
+        }
+        // Zero the preamble then write header + payload
+        dicom.preamble.fill(0);
+        dicom.preamble[..4].copy_from_slice(Self::PREAMBLE_MAGIC);
+        let len_bytes = (payload.len() as u32).to_le_bytes();
+        dicom.preamble[4..8].copy_from_slice(&len_bytes);
+        dicom.preamble[8..8 + payload.len()].copy_from_slice(payload);
+        Ok(DicomEmbedResult {
+            success: true,
+            bytes_embedded: payload.len(),
+            strategy_used: DicomEmbedStrategy::UnusedMetadata,
+            elements_modified: 0,
+            pixels_modified: 0,
+            medical_integrity_preserved: true,
+            dicom_compliance_maintained: true,
+        })
+    }
+
+    /// Extract payload from the DICOM preamble (UnusedMetadata strategy).
+    fn extract_unused_metadata(&self, dicom: &DicomFile) -> Result<Vec<u8>> {
+        if dicom.preamble.len() < Self::PREAMBLE_OVERHEAD {
+            return Err(SteganoError::IntegrityError(
+                "DICOM preamble too short".to_string(),
+            ));
+        }
+        if &dicom.preamble[..4] != Self::PREAMBLE_MAGIC.as_ref() {
+            return Err(SteganoError::IntegrityError(
+                "No steganographic data found in DICOM preamble (missing STEG magic)".to_string(),
+            ));
+        }
+        let payload_len = u32::from_le_bytes([
+            dicom.preamble[4],
+            dicom.preamble[5],
+            dicom.preamble[6],
+            dicom.preamble[7],
+        ]) as usize;
+        let end = Self::PREAMBLE_OVERHEAD + payload_len;
+        if end > dicom.preamble.len() {
+            return Err(SteganoError::IntegrityError(
+                "Invalid payload length in DICOM preamble".to_string(),
+            ));
+        }
+        Ok(dicom.preamble[Self::PREAMBLE_OVERHEAD..end].to_vec())
+    }
+
+    /// DICOM tag used for trailing-padding embedding.
+    /// (FFFC,FFFC) Data Set Trailing Padding — ignored by conformant readers.
+    const PADDING_TAG: (u16, u16) = (0xFFFC, 0xFFFC);
+
+    /// Embed payload in the (FFFC,FFFC) Data Set Trailing Padding element (SequencePadding).
+    ///
+    /// Layout inside the element value: `[len:u32-LE][payload…]`
+    fn embed_sequence_padding(
+        &self,
+        dicom: &mut DicomFile,
+        payload: &[u8],
+    ) -> Result<DicomEmbedResult> {
+        // Remove any existing padding element first
+        dicom
+            .data_elements
+            .retain(|e| (e.group, e.element) != Self::PADDING_TAG);
+
+        let mut value = Vec::with_capacity(4 + payload.len());
+        value.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        value.extend_from_slice(payload);
+        // Ensure even length (DICOM requirement)
+        if value.len() % 2 == 1 {
+            value.push(0);
+        }
+        let value_len = value.len() as u32;
+        dicom.data_elements.push(DicomDataElement {
+            group: Self::PADDING_TAG.0,
+            element: Self::PADDING_TAG.1,
+            vr: "OB".to_string(),
+            length: value_len,
+            value,
+            parsed_value: None,
+        });
+        Ok(DicomEmbedResult {
+            success: true,
+            bytes_embedded: payload.len(),
+            strategy_used: DicomEmbedStrategy::SequencePadding,
+            elements_modified: 1,
+            pixels_modified: 0,
+            medical_integrity_preserved: true,
+            dicom_compliance_maintained: true,
+        })
+    }
+
+    /// Extract payload from the (FFFC,FFFC) Data Set Trailing Padding element.
+    fn extract_sequence_padding(&self, dicom: &DicomFile) -> Result<Vec<u8>> {
+        let padding = dicom
+            .data_elements
+            .iter()
+            .find(|e| (e.group, e.element) == Self::PADDING_TAG)
+            .ok_or_else(|| {
+                SteganoError::IntegrityError(
+                    "No steganographic data found in DICOM trailing padding (FFFC,FFFC)"
+                        .to_string(),
+                )
+            })?;
+        if padding.value.len() < 4 {
+            return Err(SteganoError::IntegrityError(
+                "DICOM padding element too short to contain length header".to_string(),
+            ));
+        }
+        let payload_len = u32::from_le_bytes([
+            padding.value[0],
+            padding.value[1],
+            padding.value[2],
+            padding.value[3],
+        ]) as usize;
+        let end = 4 + payload_len;
+        if end > padding.value.len() {
+            return Err(SteganoError::IntegrityError(
+                "Invalid payload length in DICOM padding element".to_string(),
+            ));
+        }
+        Ok(padding.value[4..end].to_vec())
+    }
+
     /// Estimate capacity for DICOM file
     fn estimate_dicom_capacity(
         &self,
@@ -984,9 +1127,13 @@ impl DicomHandler {
                     0
                 }
             }
-            DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
-                // Not implemented — report zero capacity so callers don't attempt to use them
-                0
+            DicomEmbedStrategy::UnusedMetadata => {
+                // Preamble-based: max 120 bytes
+                Self::PREAMBLE_MAX_PAYLOAD
+            }
+            DicomEmbedStrategy::SequencePadding => {
+                // (FFFC,FFFC) trailing padding: large capacity
+                std::cmp::min(data.len(), 1_000_000)
             }
             DicomEmbedStrategy::MultiStrategy => {
                 // Combined capacity of multiple strategies
@@ -1221,10 +1368,11 @@ impl DataHandler for DicomHandler {
                         self.embed_private_data_elements(&mut dicom, &final_payload)
                             .or_else(|_| self.embed_pixel_data_lsb(&mut dicom, &final_payload))?
                     }
-                    DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
-                        return Err(SteganoError::InvalidParameter(format!(
-                            "{strategy:?} embedding is not yet implemented; use PrivateDataElements, PixelDataLSB, or MultiStrategy"
-                        )));
+                    DicomEmbedStrategy::UnusedMetadata => {
+                        self.embed_unused_metadata(&mut dicom, &final_payload)?
+                    }
+                    DicomEmbedStrategy::SequencePadding => {
+                        self.embed_sequence_padding(&mut dicom, &final_payload)?
                     }
                 };
 
@@ -1297,10 +1445,11 @@ impl DataHandler for DicomHandler {
                             self.extract_pixel_data_lsb(&dicom)
                         })
                     }
-                    DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
-                        Err(SteganoError::InvalidParameter(format!(
-                            "{strategy:?} extraction is not yet implemented"
-                        )))
+                    DicomEmbedStrategy::UnusedMetadata => {
+                        self.extract_unused_metadata(&dicom)
+                    }
+                    DicomEmbedStrategy::SequencePadding => {
+                        self.extract_sequence_padding(&dicom)
                     }
                 }?;
 
@@ -1558,7 +1707,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dicom_unused_metadata_embed_error() {
+    async fn test_dicom_unused_metadata_roundtrip() {
         let handler = DicomHandler::new();
         let mut carrier = CarrierData {
             format: DataFormat::DICOM,
@@ -1567,7 +1716,7 @@ mod tests {
             dimensions: None,
             sampling_rate: None,
         };
-        let payload = b"test";
+        let payload = b"preamble steg test";
         let mut params = EmbedParams {
             encryption_key: vec![],
             error_correction_level: ECLevel::None,
@@ -1581,12 +1730,17 @@ mod tests {
             "dicom_strategy".to_string(),
             serde_json::Value::String("metadata".to_string()),
         );
-        let result = handler.embed(&mut carrier, payload, &params).await;
-        assert!(result.is_err(), "UnusedMetadata embed should return error (not yet implemented)");
+        let embed_result = handler.embed(&mut carrier, payload, &params).await;
+        assert!(embed_result.is_ok(), "UnusedMetadata embed should succeed: {embed_result:?}");
+        assert_eq!(embed_result.unwrap().bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await;
+        assert!(extracted.is_ok(), "UnusedMetadata extract should succeed: {extracted:?}");
+        assert_eq!(extracted.unwrap(), payload);
     }
 
     #[tokio::test]
-    async fn test_dicom_sequence_padding_embed_error() {
+    async fn test_dicom_sequence_padding_roundtrip() {
         let handler = DicomHandler::new();
         let mut carrier = CarrierData {
             format: DataFormat::DICOM,
@@ -1595,7 +1749,7 @@ mod tests {
             dimensions: None,
             sampling_rate: None,
         };
-        let payload = b"test";
+        let payload = b"sequence padding steg test payload";
         let mut params = EmbedParams {
             encryption_key: vec![],
             error_correction_level: ECLevel::None,
@@ -1609,12 +1763,18 @@ mod tests {
             "dicom_strategy".to_string(),
             serde_json::Value::String("sequence".to_string()),
         );
-        let result = handler.embed(&mut carrier, payload, &params).await;
-        assert!(result.is_err(), "SequencePadding embed should return error (not yet implemented)");
+        let embed_result = handler.embed(&mut carrier, payload, &params).await;
+        assert!(embed_result.is_ok(), "SequencePadding embed should succeed: {embed_result:?}");
+        assert_eq!(embed_result.unwrap().bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await;
+        assert!(extracted.is_ok(), "SequencePadding extract should succeed: {extracted:?}");
+        assert_eq!(extracted.unwrap(), payload);
     }
 
     #[tokio::test]
-    async fn test_dicom_unused_metadata_extract_error() {
+    async fn test_dicom_unused_metadata_extract_error_when_empty() {
+        // Extracting from a DICOM with no STEG magic in preamble should fail.
         let handler = DicomHandler::new();
         let carrier = CarrierData {
             format: DataFormat::DICOM,
@@ -1637,11 +1797,12 @@ mod tests {
             serde_json::Value::String("metadata".to_string()),
         );
         let result = handler.extract(&carrier, &params).await;
-        assert!(result.is_err(), "UnusedMetadata extract should return error (not yet implemented)");
+        assert!(result.is_err(), "Extract from clean preamble should fail");
     }
 
     #[tokio::test]
-    async fn test_dicom_sequence_padding_extract_error() {
+    async fn test_dicom_sequence_padding_extract_error_when_empty() {
+        // Extracting from a DICOM with no (FFFC,FFFC) element should fail.
         let handler = DicomHandler::new();
         let carrier = CarrierData {
             format: DataFormat::DICOM,
@@ -1664,7 +1825,7 @@ mod tests {
             serde_json::Value::String("sequence".to_string()),
         );
         let result = handler.extract(&carrier, &params).await;
-        assert!(result.is_err(), "SequencePadding extract should return error (not yet implemented)");
+        assert!(result.is_err(), "Extract with no padding element should fail");
     }
 
     #[tokio::test]

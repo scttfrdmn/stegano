@@ -455,7 +455,7 @@ pub unsafe extern "C" fn stegano_free(ptr: *mut c_void) {
 /// Returns: Version string (caller must NOT free)
 #[no_mangle]
 pub extern "C" fn stegano_version() -> *const c_char {
-    static VERSION: &str = "0.4.0\0";
+    static VERSION: &str = "0.5.0\0";
     VERSION.as_ptr() as *const c_char
 }
 
@@ -536,6 +536,6 @@ mod tests {
         assert!(!version_ptr.is_null());
 
         let version_str = unsafe { CStr::from_ptr(version_ptr) };
-        assert_eq!(version_str.to_str().unwrap(), "0.4.0");
+        assert_eq!(version_str.to_str().unwrap(), "0.5.0");
     }
 }

@@ -858,12 +858,28 @@ impl DataHandler for SignalHandler {
         payload: &[u8],
         params: &EmbedParams,
     ) -> Result<EmbedResult> {
-        let strategy = match params.stealth_level {
+        // Check for format-specific override from --strategy flag.
+        let strategy_override = params
+            .format_specific
+            .get("signal_strategy")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "timedomain" | "timedomainlsb" | "lsb" => {
+                    Some(SignalEmbedStrategy::TimeDomainLSB)
+                }
+                "frequency" | "frequencydomain" => Some(SignalEmbedStrategy::FrequencyDomain),
+                "phase" | "phasemodulation" => Some(SignalEmbedStrategy::PhaseModulation),
+                "spread" | "spreadspectrum" => Some(SignalEmbedStrategy::SpreadSpectrum),
+                "echo" | "echohiding" | "echo_hiding" => Some(SignalEmbedStrategy::EchoHiding),
+                _ => None,
+            });
+
+        let strategy = strategy_override.unwrap_or(match params.stealth_level {
             StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
             StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
             StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
             StealthLevel::Maximum => SignalEmbedStrategy::SpreadSpectrum,
-        };
+        });
 
         self.embed_frequency_domain(carrier, payload, params, &strategy)
             .await
@@ -1358,6 +1374,46 @@ mod tests {
             .extract_with_strategy(&carrier, &SignalEmbedStrategy::EchoHiding, &params)
             .await
             .unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    #[tokio::test]
+    async fn test_echo_hiding_via_format_specific_override() {
+        // Verify EchoHiding is reachable through the public embed() API
+        // via format_specific["signal_strategy"] = "echo".
+        // Echo hiding needs ~1.1 MB of noise-like carrier (same as the direct roundtrip test).
+        let handler = SignalHandler::new();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::WAV,
+            raw_data: make_echo_carrier(1_100_000),
+            metadata: std::collections::HashMap::new(),
+            dimensions: None,
+            sampling_rate: Some(44100.0),
+        };
+
+        // Echo hiding capacity is ~15 bytes per 1.1MB carrier — keep payload short.
+        let payload = b"echo";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low, // would normally → TimeDomainLSB
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
+        };
+        // Override to EchoHiding
+        params.format_specific.insert(
+            "signal_strategy".to_string(),
+            serde_json::Value::String("echo".to_string()),
+        );
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+
+        // extract() tries all strategies including EchoHiding, so no override needed
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
         assert_eq!(extracted, payload);
     }
 }

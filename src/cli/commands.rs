@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_embed(
     input: &str,
     payload: &str,

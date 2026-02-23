@@ -13,6 +13,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.5.0] - 2026-02-23
+
+### Added
+- **SAM/BAM `AuxiliaryData` strategy** (`src/handlers/sam_bam.rs`):
+  Embeds payload as hex-encoded `Xs:Z:<chunk>` optional fields across SAM alignment records,
+  using the SAM-spec user-private tag range. Capacity: `alignment_count × 255` bytes.
+  `embed_auxiliary_data` / `extract_auxiliary_data` helper methods.  Resolves
+  [#22](https://github.com/scttfrdmn/stegano/issues/22).
+- **DICOM `UnusedMetadata` strategy** (`src/handlers/dicom.rs`):
+  Embeds up to 120 bytes in the DICOM preamble (128 bytes mandated unused by the spec).
+  Layout: `STEG` magic (4 bytes) + LE length (4 bytes) + payload.  Resolves
+  [#20](https://github.com/scttfrdmn/stegano/issues/20).
+- **DICOM `SequencePadding` strategy** (`src/handlers/dicom.rs`):
+  Embeds payload in a `(FFFC,FFFC)` Data Set Trailing Padding element — a standard DICOM
+  tag that compliant readers are required to ignore.  Large capacity (file-size limited).
+  Resolves [#21](https://github.com/scttfrdmn/stegano/issues/21).
+- **EchoHiding accessible via `format_specific`** (`src/handlers/signals.rs`):
+  `signal_strategy = "echo"` in `EmbedParams::format_specific` selects `EchoHiding`
+  without relying on a `StealthLevel` mapping.  Resolves
+  [#23](https://github.com/scttfrdmn/stegano/issues/23).
+- **`run_performance_analysis`** (`src/validation.rs`):
+  Builds a labeled cover/stego byte dataset from `original` vs `stego`, computes ROC
+  analysis (AUC, Youden's index) and 5-fold cross-validation metrics.  Resolves
+  [#24](https://github.com/scttfrdmn/stegano/issues/24).
+- **`run_domain_validation`** (`src/validation.rs`):
+  Format-aware validation: genomics (printable-ASCII ratio for SAM/FASTQ/VCF; BAM magic),
+  imagery/medical (DICOM `DICM` prefix, TIFF/PNG magic), audio (normalised RMS quality
+  score for WAV/BinarySignal).  Resolves [#24](https://github.com/scttfrdmn/stegano/issues/24).
+- **Criterion benchmark suite** (`benches/`):
+  Enabled `[[bench]]` entries for `embedding_performance`, `statistical_validation_benchmarks`,
+  and `ml_optimization_benchmarks`.  Compile with `--features benchmarks`.  Resolves
+  [#27](https://github.com/scttfrdmn/stegano/issues/27).
+
+### Changed
+- `DicomEmbedStrategy::UnusedMetadata` and `SequencePadding` are now fully implemented
+  (previously returned `InvalidParameter` errors).
+- `SamBamEmbedStrategy::AuxiliaryData` is now fully implemented for SAM format.
+- Capacity estimate for `SamBamEmbedStrategy::AuxiliaryData` on SAM: returns
+  `alignment_count × MAX_OPTIONAL_FIELD_SIZE` (was 0).
+
+### Fixed
+- Clippy: removed `* 1` no-op multiplier in `fits.rs`, replaced manual `div_ceil`,
+  replaced loop-index patterns with iterator `enumerate()`, removed redundant `usize`
+  casts, replaced `map().flatten()` with `and_then()`, replaced `unwrap_or_else(||…)` with
+  `unwrap_or(…)` where the value is `Copy`, added `Range::contains` for range checks.
+- 416 tests passing (up from 346 in v0.3.13, 411 in v0.4.0).
+
 ## [0.4.0] - 2026-02-23
 
 ### Added

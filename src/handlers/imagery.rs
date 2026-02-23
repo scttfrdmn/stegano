@@ -68,9 +68,9 @@ impl ImageEmbedStrategy {
 fn dct8(input: &[f64; 8]) -> [f64; 8] {
     use std::f64::consts::PI;
     let mut out = [0f64; 8];
-    for k in 0..8usize {
+    for (k, out_k) in out.iter_mut().enumerate() {
         let alpha = if k == 0 { (1.0f64 / 8.0).sqrt() } else { (2.0f64 / 8.0).sqrt() };
-        out[k] = alpha
+        *out_k = alpha
             * (0..8usize)
                 .map(|j| input[j] * (PI * (2 * j + 1) as f64 * k as f64 / 16.0).cos())
                 .sum::<f64>();
@@ -81,8 +81,8 @@ fn dct8(input: &[f64; 8]) -> [f64; 8] {
 fn idct8(input: &[f64; 8]) -> [f64; 8] {
     use std::f64::consts::PI;
     let mut out = [0f64; 8];
-    for j in 0..8usize {
-        out[j] = (0..8usize)
+    for (j, out_j) in out.iter_mut().enumerate() {
+        *out_j = (0..8usize)
             .map(|k| {
                 let alpha = if k == 0 { (1.0f64 / 8.0).sqrt() } else { (2.0f64 / 8.0).sqrt() };
                 alpha * input[k] * (PI * (2 * j + 1) as f64 * k as f64 / 16.0).cos()
@@ -108,7 +108,7 @@ const DCT_COEFF_INDICES: [usize; 4] = [2, 3, 4, 5];
 /// 4 mid-frequency coefficients (indices 2–5) are quantised to encode 1 bit
 /// each, and the block is IDCT-transformed back.  Pixel values are clamped to
 /// [0, 255] and rounded to the nearest integer.
-fn embed_dct(image_data: &mut Vec<u8>, payload: &[u8]) -> crate::core::Result<()> {
+fn embed_dct(image_data: &mut [u8], payload: &[u8]) -> crate::core::Result<()> {
     let payload_bits: Vec<u8> = payload
         .iter()
         .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
@@ -278,7 +278,7 @@ impl ImageryHandler {
         };
 
         let recommended_bits = capacity_bits.saturating_sub(overhead);
-        let mut info = CapacityInfo::new(capacity_bits as usize, recommended_bits as usize);
+        let mut info = CapacityInfo::new(capacity_bits, recommended_bits);
         info.format_specific_info.insert(
             "overhead_bytes".to_string(),
             serde_json::Value::Number(serde_json::Number::from(overhead / 8)),
@@ -765,16 +765,15 @@ impl DataHandler for ImageryHandler {
             .format_specific
             .get("imagery_strategy")
             .and_then(|v| v.as_str())
-            .map(|s| match s.to_lowercase().as_str() {
+            .and_then(|s| match s.to_lowercase().as_str() {
                 "lsb" | "simplelSB" | "simplelSb" => Some(ImageEmbedStrategy::SimpleLSB),
                 "adaptive" | "adaptivelSB" | "adaptivelsb" => Some(ImageEmbedStrategy::AdaptiveLSB),
                 "dct" | "dctfrequency" => Some(ImageEmbedStrategy::DCTFrequency),
                 "edge" | "edgebased" => Some(ImageEmbedStrategy::EdgeBased),
                 _ => None,
-            })
-            .flatten();
+            });
 
-        let strategy = strategy_override.unwrap_or_else(|| match params.stealth_level {
+        let strategy = strategy_override.unwrap_or(match params.stealth_level {
             StealthLevel::Low => ImageEmbedStrategy::SimpleLSB,
             StealthLevel::Medium => ImageEmbedStrategy::AdaptiveLSB,
             StealthLevel::High => ImageEmbedStrategy::EdgeBased,

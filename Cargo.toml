@@ -1,6 +1,6 @@
 [package]
 name = "stegano"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Scott Friedman <scttfrdmn@gmail.com>"]
 description = "High-performance scientific data steganography system"
@@ -106,10 +106,20 @@ panic = "abort"
 [profile.bench]
 debug = true
 
-# [[bench]]
-# name = "embedding_performance"
-# harness = false
-# required-features = ["benchmarks"]
+[[bench]]
+name = "embedding_performance"
+harness = false
+required-features = ["benchmarks"]
+
+[[bench]]
+name = "statistical_validation_benchmarks"
+harness = false
+required-features = ["benchmarks"]
+
+[[bench]]
+name = "ml_optimization_benchmarks"
+harness = false
+required-features = ["benchmarks"]
 
 [[example]]
 name = "basic_demo"

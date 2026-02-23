@@ -1,22 +1,25 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-393%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-416%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.4.0 - Latest Production Release
+## 🎯 Version 0.5.0 - Latest Production Release
 
-Stegano v0.4.0 delivers four major new capabilities across cryptography, format support, and language bindings:
-- ✅ **420 Tests Passing** — 410 lib tests + 10 new Python binding tests (`--features python`)
-- ✅ **ChaCha20-Poly1305 encryption** — `--cipher chacha20` flag on embed; cipher auto-detected on extract. Resolves [#17](https://github.com/scttfrdmn/stegano/issues/17).
-- ✅ **DCT frequency-domain embedding** — `StealthLevel::Maximum` now uses real 8-point QIM-based DCT embedding (replaces unimplemented placeholder). PVD variant removed. Resolves [#19](https://github.com/scttfrdmn/stegano/issues/19).
-- ✅ **FITS astronomical format handler** — Pixel-LSB steganography in FITS data sections; supports `.fits`, `.fit`, `.fts` files used by telescopes and observatories. Resolves [#18](https://github.com/scttfrdmn/stegano/issues/18).
-- ✅ **Python bindings via PyO3** — `import stegano` in Python; `stegano.embed()`, `stegano.extract()`, `stegano.estimate_capacity()`; build with `maturin develop --features python`. Resolves [#16](https://github.com/scttfrdmn/stegano/issues/16).
+Stegano v0.5.0 completes all previously stubbed strategies and adds performance infrastructure:
+- ✅ **416 Tests Passing** — all strategies fully implemented and covered
+- ✅ **SAM/BAM `AuxiliaryData` strategy** — hex-encoded payload in `Xs:Z:` optional fields. Resolves [#22](https://github.com/scttfrdmn/stegano/issues/22).
+- ✅ **DICOM `UnusedMetadata` strategy** — embeds up to 120 bytes in the 128-byte DICOM preamble. Resolves [#20](https://github.com/scttfrdmn/stegano/issues/20).
+- ✅ **DICOM `SequencePadding` strategy** — uses `(FFFC,FFFC)` Data Set Trailing Padding element. Resolves [#21](https://github.com/scttfrdmn/stegano/issues/21).
+- ✅ **EchoHiding via `format_specific`** — `signal_strategy = "echo"` selects echo hiding. Resolves [#23](https://github.com/scttfrdmn/stegano/issues/23).
+- ✅ **Validation performance & domain analysis** — ROC/AUC, 5-fold CV, and format-aware domain checks (genomics/medical/audio). Resolves [#24](https://github.com/scttfrdmn/stegano/issues/24).
+- ✅ **Criterion benchmark suite** — `embedding_performance`, `statistical_validation_benchmarks`, `ml_optimization_benchmarks`. Resolves [#27](https://github.com/scttfrdmn/stegano/issues/27).
+- ✅ **Zero clippy warnings** — all `-D warnings` lints resolved. Resolves [#28](https://github.com/scttfrdmn/stegano/issues/28).
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

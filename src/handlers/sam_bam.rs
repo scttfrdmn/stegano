@@ -964,6 +964,83 @@ impl SamBamHandler {
         ))
     }
 
+    /// Embed payload in SAM auxiliary optional fields using the user-private `Xs:Z:` tag.
+    ///
+    /// The entire payload is hex-encoded and distributed across alignment records, one
+    /// `Xs:Z:<hex-chunk>` optional field per record.  `Xs` is in the user-private range
+    /// (`X[A-Z]`, `Y[A-Z]`, `Z[A-Z]`) reserved by the SAM specification for end-user use.
+    fn embed_auxiliary_data(
+        &self,
+        sam: &mut SamFile,
+        payload: &[u8],
+    ) -> Result<SamBamEmbedResult> {
+        let hex_payload = hex::encode(payload);
+
+        // Chunk the hex string so each record gets at most MAX_OPTIONAL_FIELD_SIZE*2 hex chars.
+        let max_hex_per_record = MAX_OPTIONAL_FIELD_SIZE * 2;
+        let chunks: Vec<&str> = hex_payload
+            .as_bytes()
+            .chunks(max_hex_per_record)
+            .map(|c| std::str::from_utf8(c).unwrap_or(""))
+            .collect();
+
+        if chunks.len() > sam.alignments.len() {
+            return Err(SteganoError::InsufficientCapacity {
+                needed: chunks.len(),
+                available: sam.alignments.len(),
+            });
+        }
+
+        let mut records_modified = 0usize;
+        for (i, chunk) in chunks.iter().enumerate() {
+            if !chunk.is_empty() {
+                sam.alignments[i].optional_fields.push(SamOptionalField {
+                    tag: "Xs".to_string(), // user-private SAM tag
+                    field_type: 'Z',
+                    value: chunk.to_string(),
+                });
+                records_modified += 1;
+            }
+        }
+
+        Ok(SamBamEmbedResult {
+            success: true,
+            bytes_embedded: payload.len(),
+            strategy_used: SamBamEmbedStrategy::AuxiliaryData,
+            records_modified,
+            fields_added: records_modified,
+            biological_integrity_preserved: true,
+        })
+    }
+
+    /// Extract payload previously embedded via `embed_auxiliary_data`.
+    ///
+    /// Reads `Xs:Z:` optional fields from every alignment record in order,
+    /// concatenates the hex chunks, and decodes to bytes.
+    fn extract_auxiliary_data(&self, sam: &SamFile) -> Result<Vec<u8>> {
+        let mut hex_combined = String::new();
+
+        for alignment in &sam.alignments {
+            for field in &alignment.optional_fields {
+                if field.tag == "Xs" && field.field_type == 'Z' {
+                    hex_combined.push_str(&field.value);
+                }
+            }
+        }
+
+        if hex_combined.is_empty() {
+            return Err(SteganoError::IntegrityError(
+                "No auxiliary steganographic data found (tag Xs:Z)".to_string(),
+            ));
+        }
+
+        hex::decode(&hex_combined).map_err(|_| {
+            SteganoError::IntegrityError(
+                "Invalid hex data in Xs:Z auxiliary fields".to_string(),
+            )
+        })
+    }
+
     /// Estimate capacity for SAM/BAM file (internal helper)
     fn estimate_capacity_internal(
         &self,
@@ -999,7 +1076,8 @@ impl SamBamHandler {
                     // BAM auxiliary data capacity
                     alignment_count * 50 // Conservative estimate
                 } else {
-                    0 // Not applicable to SAM
+                    // Each SAM alignment record can hold one Xs:Z:<hex> field
+                    alignment_count * MAX_OPTIONAL_FIELD_SIZE
                 }
             }
             SamBamEmbedStrategy::MultiStrategy => {
@@ -1295,9 +1373,7 @@ impl DataHandler for SamBamHandler {
                             .or_else(|_| self.embed_comment_lines(&mut sam, &final_payload))?
                     }
                     SamBamEmbedStrategy::AuxiliaryData => {
-                        return Err(SteganoError::InvalidParameter(
-                            "AuxiliaryData strategy is not yet implemented".to_string(),
-                        ));
+                        self.embed_auxiliary_data(&mut sam, &final_payload)?
                     }
                 };
 
@@ -1389,9 +1465,7 @@ impl DataHandler for SamBamHandler {
                         self.extract_sam_optional_fields(&sam)
                             .or_else(|_| self.extract_comment_lines(&sam))
                     }
-                    SamBamEmbedStrategy::AuxiliaryData => Err(SteganoError::InvalidParameter(
-                        "AuxiliaryData strategy is not yet implemented".to_string(),
-                    )),
+                    SamBamEmbedStrategy::AuxiliaryData => self.extract_auxiliary_data(&sam),
                 }?;
 
                 // Decode codec (encryption / error correction) when it was applied
@@ -1656,7 +1730,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
     }
 
     #[tokio::test]
-    async fn test_sam_auxiliary_data_embed_error() {
+    async fn test_sam_auxiliary_data_roundtrip() {
         let handler = SamBamHandler::new();
         let sam_data = create_minimal_sam();
 
@@ -1668,7 +1742,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             sampling_rate: None,
         };
 
-        let payload = b"test";
+        let payload = b"aux_data_test";
         let mut params = EmbedParams {
             encryption_key: vec![],
             error_correction_level: ECLevel::None,
@@ -1683,12 +1757,18 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             serde_json::Value::String("auxiliary".to_string()),
         );
 
-        let result = handler.embed(&mut carrier, payload, &params).await;
-        assert!(result.is_err(), "AuxiliaryData embed should return error (not yet implemented)");
+        let embed_result = handler.embed(&mut carrier, payload, &params).await;
+        assert!(embed_result.is_ok(), "AuxiliaryData embed should succeed: {:?}", embed_result);
+        assert_eq!(embed_result.unwrap().bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await;
+        assert!(extracted.is_ok(), "AuxiliaryData extract should succeed: {:?}", extracted);
+        assert_eq!(extracted.unwrap(), payload);
     }
 
     #[tokio::test]
-    async fn test_sam_auxiliary_data_extract_error() {
+    async fn test_sam_auxiliary_data_extract_error_when_empty() {
+        // Extracting from a SAM with no Xs:Z: tags should return an error.
         let handler = SamBamHandler::new();
         let sam_data = create_minimal_sam();
 
@@ -1715,7 +1795,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
         );
 
         let result = handler.extract(&carrier, &params).await;
-        assert!(result.is_err(), "AuxiliaryData extract should return error (not yet implemented)");
+        assert!(result.is_err(), "Extract with no embedded data should return an error");
     }
 
     #[tokio::test]
