@@ -13,6 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.19] - 2026-02-23
+
+### Fixed
+- **Imagery extraction: strategy tag never validated** (`src/handlers/imagery.rs`):
+  `embed()` serializes the embedding strategy as a single byte at header offset 8
+  (`strategy.to_u8()`), but `extract_with_strategy()` never read it back — there was
+  no `from_u8()` method and the byte was silently ignored. The try-all-strategies loop
+  in `extract()` relied purely on the 4-byte `"IMSJ"` magic to discriminate between
+  strategies, leaving a theoretical (probability ~1/2^32) window where the wrong
+  strategy could decode a false-positive magic match and return corrupt payload data
+  with no error.
+
+  Fix: added `ImageEmbedStrategy::from_u8(v: u8) -> Option<Self>` and inserted a
+  strategy-tag validation step in `extract_with_strategy` immediately after the magic
+  check. If `header_bytes[8] != strategy.to_u8()` the probe returns an error, ensuring
+  the try-all loop advances to the correct strategy.
+
+### Removed
+- **`src/main.rs`** dead-code placeholder (`println!("Hello, world!")`). The real CLI
+  entry point is `src/bin/stegano.rs`; the placeholder was never compiled because the
+  explicit `[[bin]]` declaration in `Cargo.toml` takes precedence over Cargo's default
+  `src/main.rs` auto-discovery.
+
 ## [0.3.18] - 2026-02-23
 
 ### Fixed

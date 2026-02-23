@@ -1,7 +1,7 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.18-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.19-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
@@ -9,12 +9,12 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.18 - Latest Production Release
+## 🎯 Version 0.3.19 - Latest Production Release
 
-Stegano v0.3.18 fixes the CLI image/audio dimension bug so that image and audio steganography work correctly from the command line:
-- ✅ **378 Tests Passing** — 27 new unit tests for CLI format/dimension detection
-- ✅ **CLI image-dimension fix** — The `embed`, `extract`, and `analyze` subcommands now correctly populate `CarrierData.dimensions` (PNG/TIFF) and `CarrierData.sampling_rate` (WAV) so imagery and signal handlers no longer fail with "Missing image dimensions" or "Missing sample rate" errors. Format detection now uses file extension first (fast path) with magic-byte fallback, and also recognises `.dcm`/`.dicom` files.
-- ✅ **27 new unit tests** covering format-extension detection, magic-byte detection (PNG, TIFF LE/BE, WAV, FASTA, FASTQ, SAM, VCF), PNG IHDR parsing, TIFF IFD parsing (little-endian), WAV fmt-chunk sample-rate parsing, and stealth-level parsing.
+Stegano v0.3.19 hardens imagery extraction against false-positive strategy detection and removes a dead-code placeholder:
+- ✅ **378 Tests Passing**
+- ✅ **Imagery extraction: strategy byte validated** — `extract_with_strategy` now reads the strategy tag stored in the embedded header and rejects any probe that decodes a valid `"IMSJ"` magic but mismatched strategy byte. This eliminates the theoretical (1/2^32 probability) false-positive where the wrong strategy could silently return corrupt data. The stored byte was written during embed via `strategy.to_u8()` but was never previously read back — `from_u8()` has been added to enable this.
+- ✅ **Removed dead `src/main.rs`** — placeholder `println!("Hello, world!")` binary that was never compiled (the real entry point is `src/bin/stegano.rs`).
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

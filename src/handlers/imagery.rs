@@ -41,6 +41,16 @@ impl ImageEmbedStrategy {
         }
     }
 
+    fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(ImageEmbedStrategy::SimpleLSB),
+            1 => Some(ImageEmbedStrategy::AdaptiveLSB),
+            2 => Some(ImageEmbedStrategy::DCTFrequency),
+            3 => Some(ImageEmbedStrategy::PVD),
+            4 => Some(ImageEmbedStrategy::EdgeBased),
+            _ => None,
+        }
+    }
 }
 
 impl ImageryHandler {
@@ -419,6 +429,17 @@ impl ImageryHandler {
             return Err(SteganoError::InvalidParameter(
                 "Invalid header magic".to_string(),
             ));
+        }
+
+        // Validate the stored strategy tag matches what we probed with.
+        // This guards against false-positive "IMSJ" matches when the wrong
+        // strategy is tried first in the try-all loop in extract().
+        if header_bytes[8] != strategy.to_u8() {
+            return Err(SteganoError::InvalidParameter(format!(
+                "Strategy mismatch: header tag {} does not match probing strategy {}",
+                header_bytes[8],
+                strategy.to_u8()
+            )));
         }
 
         let payload_size = u32::from_le_bytes([
