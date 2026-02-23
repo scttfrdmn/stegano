@@ -403,6 +403,12 @@ impl EmbedParams {
         self.enable_validation = true;
         self
     }
+
+    /// Set error-correction level (builder-style, chainable)
+    pub fn with_ec_level(mut self, level: ECLevel) -> Self {
+        self.error_correction_level = level;
+        self
+    }
 }
 
 /// Error correction levels for protecting embedded data against corruption.

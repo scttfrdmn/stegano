@@ -1,21 +1,21 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.20-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.21-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-378%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-393%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.20 - Latest Production Release
+## 🎯 Version 0.3.21 - Latest Production Release
 
-Stegano v0.3.20 fixes three correctness issues in the signals, genomics, and SAM/BAM+VCF handlers:
-- ✅ **380 Tests Passing** — 2 new MultiStrategy roundtrip tests
-- ✅ **Signals extraction: now self-describing** — Like imagery (fixed in v0.3.19), the signals handler now uses a try-all-strategies loop with stored-strategy-byte validation. Previously extraction dispatched from `stealth_level`, so embedding with `--stealth high` and extracting without specifying stealth used the wrong strategy. Added `SignalEmbedStrategy::from_u8()` to support the stored-byte validation.
-- ✅ **FASTQ partial embedding now surfaces an error** — `embed_fastq_qualities()` can silently succeed with `result.success = false` when some quality chars near ASCII 33 are unembeddable (their LSB modification would push below the valid range 33–126). The caller never checked this flag and always returned `Ok`. Now returns `Err(InsufficientCapacity)` when partial embedding is detected.
-- ✅ **VCF + SAM/BAM MultiStrategy roundtrip tests** — first ever coverage of the `"multi"` strategy path for both handlers.
+Stegano v0.3.21 adds the three v0.4.0 CLI features (preview ahead of the full v0.4.0 minor release):
+- ✅ **393 Tests Passing** — 13 new unit tests for `parse_ec_level` and `apply_strategy`
+- ✅ **`--ec-level` flag** — Control Reed-Solomon error-correction level per embed: `none`, `low`, `medium`, `high`, `maximum`. Resolves [#13](https://github.com/scttfrdmn/stegano/issues/13).
+- ✅ **`--strategy` flag** — Select format-specific embedding strategy at the CLI (`--strategy adaptive` for imagery, `--strategy frequency` for WAV, etc.). Resolves [#14](https://github.com/scttfrdmn/stegano/issues/14).
+- ✅ **`detect` subcommand** — `stegano detect -i file.png` checks for hidden data and exits 0 (found) or 1 (not found) — scriptable. Resolves [#15](https://github.com/scttfrdmn/stegano/issues/15).
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

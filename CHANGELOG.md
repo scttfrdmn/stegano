@@ -13,6 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.21] - 2026-02-23
+
+### Added
+- **`--ec-level` CLI flag** (`src/cli/mod.rs`, `src/cli/commands.rs`, `src/core.rs`):
+  New `--ec-level <none|low|medium|high|maximum>` flag on the `embed` subcommand controls
+  Reed-Solomon error-correction strength. Default is `none` (no RS overhead). Warns when
+  `ECLevel::Low` is used with a payload smaller than ~200 bytes (RS block is always 255
+  bytes). Implemented via new `EmbedParams::with_ec_level()` builder method. Resolves
+  [#13](https://github.com/scttfrdmn/stegano/issues/13).
+- **`--strategy` CLI flag** (`src/cli/mod.rs`, `src/cli/commands.rs`):
+  New `--strategy <name>` flag on both `embed` and `extract` subcommands selects the
+  format-specific embedding strategy. Valid values per format:
+  - VCF: `info`, `quality`, `sample`, `id`, `multi`
+  - SAM/BAM: `optional`, `comment`, `quality`, `multi`
+  - PNG/TIFF/MICROSCOPY/DICOM: `lsb`, `adaptive`, `edge`
+  - WAV: `timedomain`, `frequency`, `phase`, `spread`
+  - FASTA/FASTQ: `codon`, `quality`, `composition`
+  Resolves [#14](https://github.com/scttfrdmn/stegano/issues/14).
+- **`detect` subcommand** (`src/cli/mod.rs`, `src/cli/commands.rs`, `src/bin/stegano.rs`):
+  New `stegano detect -i <file> [--validate]` subcommand checks for embedded data.
+  Exits 0 if hidden data is detected, 1 if not — designed for shell scripting.
+  `--validate` runs the full statistical validation suite on the carrier first.
+  Resolves [#15](https://github.com/scttfrdmn/stegano/issues/15).
+- **13 new unit tests** for `parse_ec_level` (all variants + case-insensitivity + defaults)
+  and `apply_strategy` (all mapped formats + overwrite behaviour + unmapped noop).
+
+### Fixed
+- `#[allow(dead_code)]` on `SignalEmbedStrategy::from_u8` and `ImageEmbedStrategy::from_u8`
+  (both added in v0.3.19/v0.3.20) — `pub(crate)` alone does not suppress the warning for
+  associated functions; explicit allow attribute is required.
+
 ## [0.3.20] - 2026-02-23
 
 ### Fixed

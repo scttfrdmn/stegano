@@ -41,7 +41,8 @@ impl SignalEmbedStrategy {
         }
     }
 
-    fn from_u8(v: u8) -> Option<Self> {
+    #[allow(dead_code)]
+    pub(crate) fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(SignalEmbedStrategy::TimeDomainLSB),
             1 => Some(SignalEmbedStrategy::FrequencyDomain),

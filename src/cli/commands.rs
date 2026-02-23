@@ -12,6 +12,8 @@ pub async fn handle_embed(
     validate: bool,
     gpu: bool,
     stealth: &str,
+    ec_level: &str,
+    strategy: Option<&str>,
 ) -> Result<()> {
     println!("🔐 Embedding {payload} into {input} -> {output}");
 
@@ -23,15 +25,28 @@ pub async fn handle_embed(
     let mut carrier = build_carrier(input, carrier_data);
 
     let stealth_level = parse_stealth_level(stealth);
+    let ec = parse_ec_level(ec_level);
+
+    // Warn when ECLevel::Low is chosen with a small payload (RS block is always 255 bytes).
+    if matches!(ec, ECLevel::Low) && payload_data.len() < 200 {
+        println!("⚠️  ECLevel::Low uses a 255-byte RS block regardless of payload size.");
+        println!("   Consider --ec-level medium for payloads smaller than ~200 bytes.");
+    }
 
     let key = password.map(|p| p.as_bytes().to_vec()).unwrap_or_default();
-    let mut params = EmbedParams::new(key).with_stealth_level(stealth_level);
+    let mut params = EmbedParams::new(key)
+        .with_stealth_level(stealth_level)
+        .with_ec_level(ec);
 
     if gpu {
         params = params.with_gpu();
     }
     if validate {
         params = params.with_validation();
+    }
+
+    if let Some(s) = strategy {
+        apply_strategy(&mut params, &carrier.format, s);
     }
 
     let embedder = SteganoEmbedder::new();
@@ -88,6 +103,7 @@ pub async fn handle_extract(
     output: &str,
     password: Option<&str>,
     gpu: bool,
+    strategy: Option<&str>,
 ) -> Result<()> {
     println!("🔍 Extracting from {input} -> {output}");
 
@@ -101,6 +117,10 @@ pub async fn handle_extract(
 
     if gpu {
         params = params.with_gpu();
+    }
+
+    if let Some(s) = strategy {
+        apply_strategy(&mut params, &carrier.format, s);
     }
 
     let embedder = SteganoEmbedder::new();
@@ -194,6 +214,87 @@ pub async fn handle_analyze(input: &str, validate: bool) -> Result<()> {
         for (key, value) in &capacity.format_specific_info {
             println!("    {key}: {value}");
         }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_detect(input: &str, validate: bool) -> Result<()> {
+    println!("🔍 Detecting hidden data in {input}");
+
+    let carrier_data = fs::read(input)
+        .map_err(|e| SteganoError::InvalidParameter(format!("Failed to read input file: {e}")))?;
+
+    let carrier = build_carrier(input, carrier_data);
+
+    println!("   Format: {:?}", carrier.format);
+    if let Some(ref dims) = carrier.dimensions {
+        println!("   Dimensions: {}×{}", dims.width, dims.height);
+    }
+    if let Some(rate) = carrier.sampling_rate {
+        println!("   Sample rate: {} Hz", rate as u32);
+    }
+
+    let embedder = SteganoEmbedder::new();
+    let has_data = embedder.verify_integrity(&carrier)?;
+
+    if has_data {
+        println!("   Contains hidden data: Yes");
+    } else {
+        println!("   Contains hidden data: No");
+    }
+
+    if validate {
+        println!("\n🔬 Statistical Analysis:");
+
+        use crate::validation::StatisticalValidationSuite;
+        let validation_suite = StatisticalValidationSuite::new();
+
+        let mut frequencies = vec![0.0; 256];
+        for &byte in &carrier.raw_data {
+            frequencies[byte as usize] += 1.0;
+        }
+
+        if let Ok(chi_square_result) = validation_suite.classical_tests().chi_square_test(
+            &frequencies,
+            &vec![carrier.raw_data.len() as f64 / 256.0; 256],
+        ) {
+            println!(
+                "   Chi-square p-value: {:.6}  ({})",
+                chi_square_result.p_value,
+                if chi_square_result.is_significant {
+                    "significant — possible steganographic content"
+                } else {
+                    "not significant"
+                }
+            );
+        }
+
+        let median = 127.5;
+        let bool_sequence: Vec<bool> =
+            carrier.raw_data.iter().map(|&b| b as f64 > median).collect();
+        if let Ok(runs_result) = validation_suite.classical_tests().runs_test(&bool_sequence) {
+            println!(
+                "   Runs test p-value: {:.6}  ({})",
+                runs_result.p_value,
+                if runs_result.is_random {
+                    "random"
+                } else {
+                    "non-random — possible steganographic content"
+                }
+            );
+        }
+
+        if has_data {
+            println!("   ⚠️  Steganographic header detected — statistical tests may reflect embedded content");
+        } else {
+            println!("   ✅ No steganographic indicators detected");
+        }
+    }
+
+    // Exit with code 1 when no hidden data found (enables shell scripting).
+    if !has_data {
+        std::process::exit(1);
     }
 
     Ok(())
@@ -449,6 +550,36 @@ fn parse_stealth_level(s: &str) -> StealthLevel {
         "low" => StealthLevel::Low,
         _ => StealthLevel::High,
     }
+}
+
+fn parse_ec_level(s: &str) -> ECLevel {
+    match s.to_lowercase().as_str() {
+        "none" => ECLevel::None,
+        "low" => ECLevel::Low,
+        "medium" => ECLevel::Medium,
+        "high" => ECLevel::High,
+        "maximum" => ECLevel::Maximum,
+        _ => ECLevel::None,
+    }
+}
+
+/// Insert the strategy string into `params.format_specific` under the key
+/// appropriate for the given `format`.  Unknown formats are silently ignored
+/// (the handlers will use their own defaults).
+fn apply_strategy(params: &mut EmbedParams, format: &DataFormat, strategy: &str) {
+    let key = match format {
+        DataFormat::VCF => "vcf_strategy",
+        DataFormat::SAM | DataFormat::BAM => "sam_strategy",
+        DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY | DataFormat::DICOM => {
+            "imagery_strategy"
+        }
+        DataFormat::WAV => "signal_strategy",
+        DataFormat::FASTA | DataFormat::FASTQ => "genomics_strategy",
+        _ => return,
+    };
+    params
+        .format_specific
+        .insert(key.to_string(), serde_json::Value::String(strategy.to_string()));
 }
 
 // ---------------------------------------------------------------------------
@@ -752,5 +883,136 @@ mod tests {
         assert!(matches!(parse_stealth_level("low"), StealthLevel::Low));
         // default
         assert!(matches!(parse_stealth_level("unknown"), StealthLevel::High));
+    }
+
+    // ---- EC level parsing ----
+
+    #[test]
+    fn test_parse_ec_level_all_variants() {
+        assert!(matches!(parse_ec_level("none"), ECLevel::None));
+        assert!(matches!(parse_ec_level("low"), ECLevel::Low));
+        assert!(matches!(parse_ec_level("medium"), ECLevel::Medium));
+        assert!(matches!(parse_ec_level("high"), ECLevel::High));
+        assert!(matches!(parse_ec_level("maximum"), ECLevel::Maximum));
+    }
+
+    #[test]
+    fn test_parse_ec_level_case_insensitive() {
+        assert!(matches!(parse_ec_level("NONE"), ECLevel::None));
+        assert!(matches!(parse_ec_level("Medium"), ECLevel::Medium));
+        assert!(matches!(parse_ec_level("HIGH"), ECLevel::High));
+    }
+
+    #[test]
+    fn test_parse_ec_level_default() {
+        // Unknown strings fall back to ECLevel::None
+        assert!(matches!(parse_ec_level(""), ECLevel::None));
+        assert!(matches!(parse_ec_level("unknown"), ECLevel::None));
+        assert!(matches!(parse_ec_level("42"), ECLevel::None));
+    }
+
+    // ---- apply_strategy ----
+
+    fn make_params() -> EmbedParams {
+        EmbedParams::new(vec![])
+    }
+
+    #[test]
+    fn test_apply_strategy_vcf() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::VCF, "multi");
+        assert_eq!(
+            p.format_specific.get("vcf_strategy").and_then(|v| v.as_str()),
+            Some("multi")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_sam() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::SAM, "optional");
+        assert_eq!(
+            p.format_specific.get("sam_strategy").and_then(|v| v.as_str()),
+            Some("optional")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_bam() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::BAM, "comment");
+        assert_eq!(
+            p.format_specific.get("sam_strategy").and_then(|v| v.as_str()),
+            Some("comment")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_png() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::PNG, "adaptive");
+        assert_eq!(
+            p.format_specific.get("imagery_strategy").and_then(|v| v.as_str()),
+            Some("adaptive")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_tiff() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::TIFF, "lsb");
+        assert_eq!(
+            p.format_specific.get("imagery_strategy").and_then(|v| v.as_str()),
+            Some("lsb")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_wav() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::WAV, "frequency");
+        assert_eq!(
+            p.format_specific.get("signal_strategy").and_then(|v| v.as_str()),
+            Some("frequency")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_fasta() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::FASTA, "codon");
+        assert_eq!(
+            p.format_specific.get("genomics_strategy").and_then(|v| v.as_str()),
+            Some("codon")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_fastq() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::FASTQ, "quality");
+        assert_eq!(
+            p.format_specific.get("genomics_strategy").and_then(|v| v.as_str()),
+            Some("quality")
+        );
+    }
+
+    #[test]
+    fn test_apply_strategy_unmapped_format_noop() {
+        // Formats without a mapped strategy key (e.g. BINARY, TEXT) are silently ignored
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::BINARY, "anything");
+        assert!(p.format_specific.is_empty());
+    }
+
+    #[test]
+    fn test_apply_strategy_overwrites_previous() {
+        let mut p = make_params();
+        apply_strategy(&mut p, &DataFormat::PNG, "lsb");
+        apply_strategy(&mut p, &DataFormat::PNG, "adaptive");
+        assert_eq!(
+            p.format_specific.get("imagery_strategy").and_then(|v| v.as_str()),
+            Some("adaptive")
+        );
     }
 }

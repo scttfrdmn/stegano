@@ -33,6 +33,16 @@ pub enum Commands {
         /// Stealth level (maximum, high, medium, low)
         #[arg(long, default_value = "high")]
         stealth: String,
+        /// Error-correction level (none, low, medium, high, maximum)
+        #[arg(long, default_value = "none")]
+        ec_level: String,
+        /// Format-specific embedding strategy.
+        /// VCF: info|quality|sample|id|multi
+        /// SAM/BAM: optional|comment|quality|multi
+        /// PNG/TIFF: lsb|adaptive|edge
+        /// WAV: timedomain|frequency|phase|spread
+        #[arg(long)]
+        strategy: Option<String>,
     },
     /// Extract secret data from carrier file
     Extract {
@@ -48,6 +58,11 @@ pub enum Commands {
         /// Enable GPU acceleration
         #[arg(long)]
         gpu: bool,
+        /// Format-specific extraction strategy (must match the strategy used during embed).
+        /// VCF: info|quality|sample|id|multi
+        /// SAM/BAM: optional|comment|quality|multi
+        #[arg(long)]
+        strategy: Option<String>,
     },
     /// Analyze carrier capacity
     Analyze {
@@ -55,6 +70,15 @@ pub enum Commands {
         #[arg(short, long)]
         input: String,
         /// Run statistical validation analysis
+        #[arg(long)]
+        validate: bool,
+    },
+    /// Detect whether a carrier file contains hidden data
+    Detect {
+        /// Input carrier file to inspect
+        #[arg(short, long)]
+        input: String,
+        /// Also run statistical validation analysis
         #[arg(long)]
         validate: bool,
     },
