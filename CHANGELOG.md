@@ -13,6 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.18] - 2026-02-23
+
+### Fixed
+- **CLI image/audio carrier construction** (`src/cli/commands.rs`):
+  All three command handlers (`embed`, `extract`, `analyze`) previously constructed
+  `CarrierData` with `dimensions: None` and `sampling_rate: None`. Imagery handlers
+  (`PNG`, `TIFF`) require `dimensions` to be set and will return
+  `SteganoError::InvalidParameter("Missing image dimensions")` when it is absent;
+  audio handlers (`WAV`) similarly require `sampling_rate`. The CLI was therefore
+  entirely non-functional for image and audio file types despite the library itself
+  working correctly.
+
+  Fix: introduced a `build_carrier(path, raw_data) -> CarrierData` shared helper
+  that detects the file format (extension-first, magic-byte fallback) and then
+  parses the relevant file header to populate `dimensions` (PNG IHDR, TIFF IFD)
+  and `sampling_rate` (WAV fmt chunk). All three handler functions now call
+  `build_carrier` instead of constructing `CarrierData` directly. Format detection
+  also gained support for `.dcm` / `.dicom` → `DataFormat::DICOM`.
+
+### Tests
+- 27 new unit tests in `src/cli/commands.rs` (`cli::commands::tests` module):
+  - `test_format_from_extension_*` — extension detection for PNG, TIFF (.tiff/.tif),
+    DICOM (.dcm/.dicom), WAV, and all genomics formats (FASTA/FA, FASTQ/FQ, VCF, SAM, BAM)
+  - `test_magic_*` — magic-byte detection for PNG, TIFF LE, TIFF BE, WAV, FASTA,
+    FASTQ, SAM header, VCF header, and unknown data
+  - `test_png_dimensions_*` — PNG IHDR parsing (basic, too-short, wrong magic, zero rejected)
+  - `test_tiff_dimensions_*` — TIFF IFD parsing (little-endian, too-short, wrong magic)
+  - `test_wav_sample_rate_*` — WAV fmt-chunk parsing (44100, 48000, non-WAV format ignored,
+    too-short data)
+  - `test_parse_stealth_level` — all stealth levels including case-insensitivity and default
+
 ## [0.3.17] - 2026-02-22
 
 ### Fixed

@@ -1,19 +1,20 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.17-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.18-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-351%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-378%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.17 - Latest Production Release
+## 🎯 Version 0.3.18 - Latest Production Release
 
-Stegano v0.3.17 fixes imagery capacity estimation for non-RGB images:
-- ✅ **351 Tests Passing** — new regression test for capacity bound
-- ✅ **Imagery Capacity Estimation Fixed** - `estimate_image_capacity()` now caps all estimates by `carrier.raw_data.len()` bits. Previously, dimension-based formulas (e.g. `total_pixels * 3` for SimpleLSB) could report 3× the true capacity for grayscale images (1 byte/pixel). An inflated estimate would pass the capacity check but `embed_lsb_pixels` would silently truncate the write — returning `Ok` while embedding only a partial payload.
+Stegano v0.3.18 fixes the CLI image/audio dimension bug so that image and audio steganography work correctly from the command line:
+- ✅ **378 Tests Passing** — 27 new unit tests for CLI format/dimension detection
+- ✅ **CLI image-dimension fix** — The `embed`, `extract`, and `analyze` subcommands now correctly populate `CarrierData.dimensions` (PNG/TIFF) and `CarrierData.sampling_rate` (WAV) so imagery and signal handlers no longer fail with "Missing image dimensions" or "Missing sample rate" errors. Format detection now uses file extension first (fast path) with magic-byte fallback, and also recognises `.dcm`/`.dicom` files.
+- ✅ **27 new unit tests** covering format-extension detection, magic-byte detection (PNG, TIFF LE/BE, WAV, FASTA, FASTQ, SAM, VCF), PNG IHDR parsing, TIFF IFD parsing (little-endian), WAV fmt-chunk sample-rate parsing, and stealth-level parsing.
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis
