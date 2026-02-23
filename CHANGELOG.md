@@ -8,7 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Nothing yet
+- **WebAssembly bindings** (`src/wasm.rs`, feature `wasm`):
+  `stegano_embed`, `stegano_extract`, `stegano_estimate_capacity`, and `stegano_version`
+  exported via wasm-bindgen.  `WasmCapacityInfo` struct carries capacity metadata.  All
+  internal helpers are tested natively; WASM exports are `async fn` that resolve as JS
+  Promises.  Build with `wasm-pack build --target web --no-default-features --features wasm`.
+  12 new tests — 428 total.  Resolves
+  [#25](https://github.com/scttfrdmn/stegano/issues/25).
 
 ### Changed
 - Nothing yet
