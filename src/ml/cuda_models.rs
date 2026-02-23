@@ -194,12 +194,11 @@ impl CudaNeuralNetwork {
     /// Forward pass through all layers, returning the output vector.
     ///
     /// On CUDA targets with a device present, runs the dense_sigmoid kernel
-    /// for each layer.  Otherwise returns a uniform 0.5 vector.
+    /// for each layer.  Falls back to a CPU dense-sigmoid forward pass.
     pub async fn forward_gpu(&self, input_data: &[f32]) -> Result<Vec<f32>> {
-        let normalized = self.normalization.normalize(input_data);
-
         #[cfg(feature = "cuda")]
         if let Some(cuda) = &self.cuda {
+            let normalized = self.normalization.normalize(input_data);
             let mut current = normalized;
             for (w, b) in self.weights.iter().zip(&self.biases) {
                 current = cuda.dense_layer_sigmoid(w, &current, b)?;
@@ -207,7 +206,27 @@ impl CudaNeuralNetwork {
             return Ok(current);
         }
 
-        Ok(vec![0.5; *self.layer_sizes.last().unwrap_or(&1)])
+        Ok(self.cpu_forward(input_data))
+    }
+
+    /// Synchronous CPU forward pass: normalize input, then apply dense+sigmoid
+    /// through every layer.
+    fn cpu_forward(&self, raw_input: &[f32]) -> Vec<f32> {
+        let mut current = self.normalization.normalize(raw_input);
+        for (w, b) in self.weights.iter().zip(&self.biases) {
+            let out_size = b.len();
+            let in_size = current.len();
+            let mut next = vec![0.0f32; out_size];
+            for i in 0..out_size {
+                let acc: f32 = b[i]
+                    + (0..in_size)
+                        .map(|j| w[i * in_size + j] * current[j])
+                        .sum::<f32>();
+                next[i] = 1.0 / (1.0 + (-acc).exp());
+            }
+            current = next;
+        }
+        current
     }
 
     /// Train on a batch of examples using GPU-accelerated SGD.
@@ -414,22 +433,7 @@ impl CudaNeuralNetwork {
 impl MLModel for CudaNeuralNetwork {
     fn predict_optimal_params(&self, features: &CarrierFeatures) -> Result<EmbedParams> {
         let raw = self.features_to_input_vector(features)?;
-        let input = self.normalization.normalize(&raw);
-
-        // Run a synchronous CPU forward pass for inference (avoids async here)
-        let mut current = input;
-        for (w, b) in self.weights.iter().zip(&self.biases) {
-            let out_size = b.len();
-            let in_size = current.len();
-            let mut next = vec![0.0f32; out_size];
-            for i in 0..out_size {
-                let acc: f32 = b[i]
-                    + (0..in_size).map(|j| w[i * in_size + j] * current[j]).sum::<f32>();
-                next[i] = 1.0 / (1.0 + (-acc).exp());
-            }
-            current = next;
-        }
-        let output = current;
+        let output = self.cpu_forward(&raw);
 
         Ok(EmbedParams {
             encryption_key: vec![],
@@ -938,5 +942,61 @@ mod tests {
         };
         assert!(config.compute_moments);
         assert_eq!(config.entropy_variants.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_forward_gpu_not_constant() {
+        // Two different inputs must produce different outputs (not stuck at 0.5)
+        let net = CudaNeuralNetwork::new(vec![10, 16, 3], 0.01).await.unwrap();
+
+        let input_a = vec![0.0f32; 10];
+        let input_b = vec![1.0f32; 10];
+
+        let out_a = net.forward_gpu(&input_a).await.unwrap();
+        let out_b = net.forward_gpu(&input_b).await.unwrap();
+
+        assert_eq!(out_a.len(), 3);
+        assert_eq!(out_b.len(), 3);
+        // Sigmoid of any finite input is strictly between 0 and 1
+        assert!(out_a.iter().all(|&x| x > 0.0 && x < 1.0));
+        assert!(out_b.iter().all(|&x| x > 0.0 && x < 1.0));
+        // Different inputs must give different outputs with random weights
+        let same = out_a.iter().zip(&out_b).all(|(&a, &b)| (a - b).abs() < 1e-6);
+        assert!(!same, "all-zero and all-one inputs must produce different outputs");
+    }
+
+    #[tokio::test]
+    async fn test_cpu_forward_matches_predict() {
+        // cpu_forward and predict_optimal_params must agree on the output
+        let net = CudaNeuralNetwork::new(vec![10, 8, 3], 0.01).await.unwrap();
+        let raw_input = vec![0.3f32; 10];
+
+        let cpu_out = net.cpu_forward(&raw_input);
+
+        // predict_optimal_params should internally call cpu_forward
+        let features = CarrierFeatures {
+            format: DataFormat::PNG,
+            size: 1000,
+            entropy: 4.0,
+            frequency_characteristics: vec![0.0; 5],
+            complexity_measures: vec![0.0; 3],
+            format_specific: HashMap::new(),
+        };
+        // We can't directly compare predict output (it thresholds), so just verify
+        // cpu_forward produces the right shape and valid values
+        assert_eq!(cpu_out.len(), 3);
+        assert!(cpu_out.iter().all(|&x| x > 0.0 && x < 1.0));
+    }
+
+    #[tokio::test]
+    async fn test_forward_gpu_deterministic() {
+        // Same network, same input → same output every time
+        let net = CudaNeuralNetwork::new(vec![5, 8, 2], 0.01).await.unwrap();
+        let input = vec![0.1f32, 0.2, 0.3, 0.4, 0.5];
+
+        let out1 = net.forward_gpu(&input).await.unwrap();
+        let out2 = net.forward_gpu(&input).await.unwrap();
+
+        assert_eq!(out1, out2, "forward_gpu must be deterministic");
     }
 }

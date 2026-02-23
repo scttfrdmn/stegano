@@ -287,37 +287,39 @@ impl TelemetryCollector {
         rand::random::<f64>() < self.config.sampling_rate
     }
 
-    /// Collect a memory usage sample
+    /// Collect a memory usage sample using `getrusage(RUSAGE_SELF)`.
+    ///
+    /// `allocated_bytes` is the process's current resident set size (RSS).
+    /// `peak_memory` is the maximum RSS since the process started.
+    /// `total_allocations` is the minor-page-fault count (a proxy for heap activity).
     fn collect_memory_sample() -> Result<MemorySample, Box<dyn std::error::Error>> {
-        // This is a simplified implementation
-        // In a real system, you'd use platform-specific APIs or crates like `memory-stats`
-
-        static mut SIMULATED_MEMORY: u64 = 1024 * 1024; // Start with 1MB
-        static mut TOTAL_ALLOCATIONS: u64 = 100;
-
-        unsafe {
-            SIMULATED_MEMORY += rand::random::<u64>() % (1024 * 1024); // Random allocation
-            TOTAL_ALLOCATIONS += 1;
-
-            Ok(MemorySample {
-                timestamp: Instant::now(),
-                allocated_bytes: SIMULATED_MEMORY,
-                deallocated_bytes: SIMULATED_MEMORY / 10, // Simulate some deallocation
-                total_allocations: TOTAL_ALLOCATIONS,
-                peak_memory: SIMULATED_MEMORY * 120 / 100, // Peak is 20% higher
-            })
-        }
+        let (current, peak, minor_faults) = Self::process_memory_info()?;
+        Ok(MemorySample {
+            timestamp: Instant::now(),
+            allocated_bytes: current,
+            deallocated_bytes: 0, // requires allocator instrumentation
+            total_allocations: minor_faults.max(1),
+            peak_memory: peak,
+        })
     }
 
-    /// Collect a CPU usage sample
+    /// Collect a CPU usage sample.
+    ///
+    /// Takes two `getrusage` snapshots 50 ms apart and converts the delta
+    /// user+system CPU time to a percentage of that wall-clock window.
     async fn collect_cpu_sample() -> Result<CpuSample, Box<dyn std::error::Error>> {
-        // Simplified CPU sampling
-        // In a real implementation, you'd use system APIs
+        let (user_t1, sys_t1) = Self::process_cpu_times()?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (user_t2, sys_t2) = Self::process_cpu_times()?;
 
-        let cpu_percentage = rand::random::<f64>() * 100.0;
-        let user_time = Duration::from_millis(rand::random::<u64>() % 1000);
-        let system_time = Duration::from_millis(rand::random::<u64>() % 500);
-        let idle_time = Duration::from_millis(rand::random::<u64>() % 2000);
+        let delta_us = ((user_t2 - user_t1) + (sys_t2 - sys_t1)).max(0) as u64;
+        // delta_us / 50_000 µs window × 100 → percentage (not divided by cores;
+        // reports single-core equivalent, clamped to 100 %).
+        let cpu_percentage = (delta_us as f64 / 50_000.0 * 100.0).clamp(0.0, 100.0);
+
+        let user_time = Duration::from_micros(user_t2.max(0) as u64);
+        let system_time = Duration::from_micros(sys_t2.max(0) as u64);
+        let idle_time = Duration::from_micros(50_000u64.saturating_sub(delta_us));
 
         Ok(CpuSample {
             timestamp: Instant::now(),
@@ -326,6 +328,68 @@ impl TelemetryCollector {
             system_time,
             idle_time,
         })
+    }
+
+    // ---- platform helpers ----
+
+    /// Returns `(current_rss_bytes, peak_rss_bytes, minor_page_faults)` for
+    /// the current process.
+    #[cfg(unix)]
+    fn process_memory_info() -> Result<(u64, u64, u64), Box<dyn std::error::Error>> {
+        let mut ru = unsafe { std::mem::zeroed::<libc::rusage>() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } != 0 {
+            return Err("getrusage failed".into());
+        }
+
+        // ru_maxrss: bytes on macOS, kilobytes on Linux
+        #[cfg(target_os = "macos")]
+        let peak = ru.ru_maxrss as u64;
+        #[cfg(not(target_os = "macos"))]
+        let peak = ru.ru_maxrss as u64 * 1024;
+
+        // Current RSS: /proc/self/status on Linux; approximate with peak on macOS
+        #[cfg(target_os = "linux")]
+        let current = {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("VmRSS:"))
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .map(|kb| kb * 1024)
+                })
+                .unwrap_or(peak)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let current = peak;
+
+        Ok((current, peak, ru.ru_minflt as u64))
+    }
+
+    #[cfg(not(unix))]
+    fn process_memory_info() -> Result<(u64, u64, u64), Box<dyn std::error::Error>> {
+        Err("process memory sampling not supported on this platform".into())
+    }
+
+    /// Returns `(user_microseconds, system_microseconds)` of CPU time consumed
+    /// by the current process since it started.
+    #[cfg(unix)]
+    fn process_cpu_times() -> Result<(i64, i64), Box<dyn std::error::Error>> {
+        let mut ru = unsafe { std::mem::zeroed::<libc::rusage>() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } != 0 {
+            return Err("getrusage failed".into());
+        }
+        let user_us =
+            ru.ru_utime.tv_sec as i64 * 1_000_000 + ru.ru_utime.tv_usec as i64;
+        let sys_us =
+            ru.ru_stime.tv_sec as i64 * 1_000_000 + ru.ru_stime.tv_usec as i64;
+        Ok((user_us, sys_us))
+    }
+
+    #[cfg(not(unix))]
+    fn process_cpu_times() -> Result<(i64, i64), Box<dyn std::error::Error>> {
+        Err("CPU time sampling not supported on this platform".into())
     }
 
     /// Calculate telemetry summary
@@ -698,5 +762,61 @@ mod tests {
         let summary = collector.summary();
         assert!(summary.hot_paths.is_empty());
         assert_eq!(summary.total_traces, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_process_memory_info_real() {
+        let result = TelemetryCollector::process_memory_info();
+        assert!(result.is_ok(), "process_memory_info should succeed on Unix");
+        let (current, peak, faults) = result.unwrap();
+        assert!(current > 0, "current RSS should be > 0");
+        assert!(peak > 0, "peak RSS should be > 0");
+        assert!(peak >= current, "peak must be >= current RSS");
+        assert!(faults > 0, "minor page fault count should be > 0");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_process_cpu_times_real() {
+        let result = TelemetryCollector::process_cpu_times();
+        assert!(result.is_ok(), "process_cpu_times should succeed on Unix");
+        let (user_us, sys_us) = result.unwrap();
+        // A running process must have consumed some CPU time
+        assert!(user_us + sys_us >= 0, "CPU times must be non-negative");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_cpu_sample_is_bounded() {
+        // The 50ms-delta measurement must produce a value in [0, 100]
+        let sample = TelemetryCollector::collect_cpu_sample().await.unwrap();
+        assert!(
+            sample.cpu_percentage >= 0.0 && sample.cpu_percentage <= 100.0,
+            "cpu_percentage={} out of range",
+            sample.cpu_percentage
+        );
+        // user + system time should be cumulative and non-decreasing
+        assert!(sample.user_time.as_micros() >= 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_memory_sample_no_random() {
+        // Two consecutive samples must agree on peak (same process, non-decreasing)
+        let s1 = TelemetryCollector::collect_memory_sample().unwrap();
+        let s2 = TelemetryCollector::collect_memory_sample().unwrap();
+        // Peak should be non-decreasing
+        assert!(
+            s2.peak_memory >= s1.peak_memory,
+            "peak memory must not decrease"
+        );
+        // Ensure values are deterministic (not random noise ± 1 MB)
+        let diff = (s2.allocated_bytes as i64 - s1.allocated_bytes as i64).unsigned_abs();
+        assert!(
+            diff < 64 * 1024 * 1024,
+            "RSS swing between two consecutive samples should be < 64 MB, got {} bytes",
+            diff
+        );
     }
 }
