@@ -13,6 +13,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.3] - 2026-02-22
+
+### Fixed
+- **Statistical tests** (`src/validation.rs`): Chi-square p-value corrected to one-tailed Fisher
+  approximation — removed erroneous `.abs()` and `2.0 *` that were converting small chi-square
+  values to incorrectly small p-values. O(n²) naive DFT in `simple_fft()` replaced with
+  `rustfft` O(n log n). K-fold cross-validation closure signature changed from `-> Result<f64>`
+  (accuracy) to `-> Result<Vec<f64>>` (predicted scores); fold AUC now computed via Mann-Whitney
+  U statistic rather than a 0.5-threshold accuracy proxy.
+- **Distribution and outlier analysis** (`src/ml/analysis.rs`): Replaced five stub
+  implementations with real algorithms:
+  - `calculate_descriptive_stats()` now computes mean, std_dev, min, max, median, Q1/Q3,
+    skewness, and kurtosis for all four tracked metrics
+  - `DistributionAnalyzer::analyze()` performs KS goodness-of-fit against Normal, Exponential,
+    and Uniform distributions; best fit is the distribution with the smallest KS statistic
+  - `OutlierAnalyzer::analyze()` dispatches to IQR-fence, Z-score (|z|>threshold), or
+    modified Z-score (MAD-based) detection depending on `self.method`
+  - `SamplePairsDetector::evaluate()` implements the SP (Sample Pairs) histogram analysis
+    used in classic LSB steganalysis
+  - `HistogramDetector::evaluate()` computes Total Variation Distance (TVD = L₁/2) between
+    original and stego byte-frequency histograms
+- **Process telemetry** (`src/monitoring/telemetry.rs`): Replaced `rand::random` fakes with
+  real `libc::getrusage(RUSAGE_SELF)` calls. `collect_memory_sample()` reads current and peak
+  RSS; `collect_cpu_sample()` computes delta CPU% from two snapshots 50 ms apart. Handles
+  macOS (`ru_maxrss` in bytes) and Linux (`ru_maxrss` in KiB, VmRSS from `/proc/self/status`)
+  differences. `#[cfg(not(unix))]` stubs return errors on non-Unix targets.
+- **GPU model CPU fallback** (`src/ml/cuda_models.rs`): `forward_gpu()` CPU path previously
+  returned `vec![0.5; output_size]` regardless of input. Now calls `cpu_forward()`, a real
+  dense+sigmoid forward pass through all model layers. `predict_optimal_params()` refactored
+  to reuse `cpu_forward()` rather than duplicating the same loop inline.
+
+### Changed
+- Test count increased from 261 to 309 (+48 tests covering all fixed implementations)
+
 ## [0.3.2] - 2026-02-21
 
 ### Added

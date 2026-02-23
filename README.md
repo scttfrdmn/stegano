@@ -1,34 +1,34 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-261%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-309%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.2 - Latest Production Release
+## 🎯 Version 0.3.3 - Latest Production Release
 
-Stegano v0.3.2 adds NVIDIA CUDA acceleration and fixes cross-platform Linux builds:
-- ✅ **261 Tests Passing** - Comprehensive coverage across all modules (264 with `--features cuda`)
+Stegano v0.3.3 replaces all stub/placeholder implementations with production-quality algorithms:
+- ✅ **309 Tests Passing** - Comprehensive coverage across all modules (312 with `--features cuda`)
+- ✅ **Real Algorithm Implementations** - All stub/placeholder code replaced with production-quality algorithms
+- ✅ **Statistical Analysis** - Real KS goodness-of-fit, IQR/Z-score/MAD outlier detection, SP and histogram steganalysis
+- ✅ **Real Telemetry** - `getrusage(RUSAGE_SELF)` based memory/CPU sampling (no more random fakes)
 - ✅ **CUDA Acceleration** - NVRTC-compiled LSB kernels, JIT to native GPU arch (RTX 5090 / Blackwell tested)
-- ✅ **Linux Cross-Platform Fix** - TOML scoping bug resolved; all non-macOS targets now build cleanly
 - ✅ **Validation Dashboard** - Human-readable `fmt::Display` output for `ValidationReport`
 - ✅ **Parallel Validation** - Classical statistical tests run concurrently via Rayon
 - ✅ **JSON Export** - `to_json_string()` for machine-readable report output
-- ✅ **Validation Summary API** - Compact `summary()` for quick status checks
 - ✅ **Statistical Validation Framework** - Chi-square, KS, Runs, Anderson-Darling, autocorrelation
 - ✅ **High-Level Embedding API** - `SteganoEmbedder` with integrated validation pipeline
 - ✅ **Enterprise Security** - AES-256-GCM with BLAKE3 integrity verification
 
-### 🆕 New in v0.3.1
-- **Validation Dashboard**: `ValidationReport` now implements `fmt::Display` — print a full text dashboard with test results and recommendations
-- **Parallel Statistical Tests**: Five classical tests (chi-square, KS, runs, Anderson-Darling, autocorrelation) now run concurrently using `rayon::join`
-- **JSON Report Export**: `ValidationReport::to_json_string()` for structured logging and downstream tooling
-- **Validation Summary**: `ValidationReport::summary()` returns a compact `ValidationSummary` with pass/fail counts and overall status
-- **Community Infrastructure**: GitHub issue templates for bugs and feature requests
+### 🆕 New in v0.3.3
+- **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis
+- **Real Process Telemetry** (`monitoring/telemetry.rs`): Memory and CPU sampling via `libc::getrusage(RUSAGE_SELF)` — no more random-number fakes; delta CPU% computed from 50ms snapshots
+- **Real Neural Network Inference** (`ml/cuda_models.rs`): CPU fallback `forward_gpu()` now runs a real dense+sigmoid forward pass instead of returning constant 0.5
+- **Correct Statistical Tests** (`validation.rs`): Chi-square p-value fixed to one-tailed Fisher approximation; O(n²) DFT replaced with `rustfft` O(n log n); k-fold CV now computes Mann-Whitney AUC
 
 ## Overview
 
