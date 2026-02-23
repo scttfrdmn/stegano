@@ -120,14 +120,9 @@ impl ImageryHandler {
                 // Variable bits per pixel based on local complexity
                 (total_pixels * 2, 96) // Conservative estimate with larger header
             }
-            ImageEmbedStrategy::DCTFrequency => {
-                // DCT blocks (8x8), embedding in mid-frequency coefficients
-                let blocks = (dimensions.width / 8) * (dimensions.height / 8);
-                (blocks * 12, 128) // 12 coefficients per block usable
-            }
-            ImageEmbedStrategy::PVD => {
-                // Pixel value differencing
-                (total_pixels / 2, 96) // Pairs of pixels
+            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
+                // Not implemented — report zero capacity so callers don't attempt to use them
+                (0, 0)
             }
             ImageEmbedStrategy::EdgeBased => {
                 // Only embed in edge regions (estimate 30% of image)

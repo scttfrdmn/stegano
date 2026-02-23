@@ -978,13 +978,9 @@ impl DicomHandler {
                     0
                 }
             }
-            DicomEmbedStrategy::UnusedMetadata => {
-                // Can add custom metadata fields
-                data.len() / 100 // Conservative 1% estimate
-            }
-            DicomEmbedStrategy::SequencePadding => {
-                // Padding in sequence items
-                data.len() / 200 // Very conservative estimate
+            DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
+                // Not implemented — report zero capacity so callers don't attempt to use them
+                0
             }
             DicomEmbedStrategy::MultiStrategy => {
                 // Combined capacity of multiple strategies

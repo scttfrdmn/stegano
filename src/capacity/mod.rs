@@ -20,11 +20,11 @@ impl CapacityEstimator {
 
     /// Estimate capacity for frequency domain embedding
     pub fn estimate_frequency_capacity(&self, signal_length: usize) -> usize {
-        // Conservative estimate: use middle frequency bins
+        // Use half the frequency bins (positive-frequency spectrum, middle 50%)
         if signal_length <= 64 {
             0
         } else {
-            signal_length / 4
+            signal_length / 2
         }
     }
 }
@@ -72,9 +72,9 @@ mod tests {
         assert_eq!(estimator.estimate_frequency_capacity(32), 0);
         assert_eq!(estimator.estimate_frequency_capacity(64), 0);
 
-        // Larger signals use 1/4 of frequency bins
-        assert_eq!(estimator.estimate_frequency_capacity(256), 64);
-        assert_eq!(estimator.estimate_frequency_capacity(1024), 256);
+        // Larger signals use 1/2 of frequency bins
+        assert_eq!(estimator.estimate_frequency_capacity(256), 128);
+        assert_eq!(estimator.estimate_frequency_capacity(1024), 512);
     }
 
     #[test]

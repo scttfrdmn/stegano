@@ -13,6 +13,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.10] - 2026-02-22
+
+### Fixed
+- **FFT Hermitian symmetry** (`src/handlers/signals.rs`): `embed_fft_magnitude` and
+  `embed_fft_phase` previously modified both a frequency bin and its conjugate independently,
+  breaking Hermitian symmetry. The IFFT real part then produced `(Z[k] + conj(Z[N-k])) / 2`
+  instead of `Z[k]`, scrambling the embedded parity. Both functions now only modify
+  positive-frequency bins (`[N/4..N/2)` for magnitude, `[N/8..N/4)` for phase) and explicitly
+  set the conjugate bin to `conj(X[k])`, ensuring the IFFT output is real and extraction
+  faithfully recovers the encoded bits.
+- **FFT capacity accounting** (`src/handlers/signals.rs`): `estimate_signal_capacity` for
+  `FrequencyDomain` now correctly counts `chunk_size / 4` usable bits per chunk (the
+  positive-frequency half only) instead of `chunk_size / 2`.
+- **Quality-score valid range** (`src/handlers/sam_bam.rs`): `extract_quality_scores` now
+  filters to characters in `34..=126` (was `33..=126`). ASCII 33 (`!`) with its LSB cleared
+  becomes 32 (space), an invalid PHRED character; excluding it prevents corrupt quality strings.
+- **Imagery DCT/PVD capacity** (`src/handlers/imagery.rs`): `estimate_image_capacity` for
+  `DCTFrequency` and `PVD` strategies now returns `(0, 0)` instead of a bogus non-zero estimate,
+  correctly reflecting that these strategies are not yet implemented.
+- **DICOM UnusedMetadata/SequencePadding capacity** (`src/handlers/dicom.rs`): Same fix —
+  `estimate_dicom_capacity` returns `0` for these unimplemented strategies.
+- **FFI version string** (`src/ffi.rs`): `stegano_version()` now returns `"0.3.10"` (was stale
+  `"0.2.2"`).
+- **FFI error mapping** (`src/ffi.rs`): `SteganoError::SerializationError` now maps to
+  `SteganoErrorCode::DataCorrupted` instead of `InvalidParameter`.
+- **Frequency capacity formula** (`src/capacity/mod.rs`): `estimate_frequency_capacity` now
+  uses `signal_length / 2` (was `/4`), correctly reflecting that half the frequency bins are
+  usable. Test assertions updated accordingly.
+
+### Added
+- **VCF sample-FORMAT roundtrip test** (`src/handlers/vcf.rs`): New
+  `test_vcf_sample_format_embedding_roundtrip` covers the `format` strategy end-to-end.
+- **Signal FFT roundtrip tests** (`src/handlers/signals.rs`): New
+  `test_frequency_domain_embedding_roundtrip` and `test_phase_modulation_embedding_roundtrip`
+  verify the FFT magnitude and phase strategies produce correct roundtrips.
+
 ## [0.3.9] - 2026-02-22
 
 ### Fixed

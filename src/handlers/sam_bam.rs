@@ -805,11 +805,12 @@ impl SamBamHandler {
             }
         }
 
-        // Count available quality score positions (only valid ASCII 33–126)
+        // Count available quality score positions (34–126 only: clearing the LSB of 33→32
+        // would push it outside the valid PHRED-encoded range 33–126)
         let total_quals: usize = sam
             .alignments
             .iter()
-            .map(|a| a.qual.chars().filter(|&c| (33u8..=126u8).contains(&(c as u8))).count())
+            .map(|a| a.qual.chars().filter(|&c| (34u8..=126u8).contains(&(c as u8))).count())
             .sum();
 
         if payload_bits.len() > total_quals {
@@ -835,8 +836,9 @@ impl SamBamHandler {
                 if bit_index < payload_bits.len() {
                     let ascii_val = c as u8;
 
-                    // Ensure quality score is in valid range (33-126)
-                    if (33..=126).contains(&ascii_val) {
+                    // Only embed in 34–126: clearing the LSB of 33 would produce 32
+                    // (outside the valid PHRED range 33–126), breaking extraction.
+                    if (34..=126).contains(&ascii_val) {
                         // Modify LSB
                         let new_val = (ascii_val & 0xFE) | payload_bits[bit_index];
                         modified_qual.push(new_val as char);
@@ -873,7 +875,7 @@ impl SamBamHandler {
             .alignments
             .iter()
             .flat_map(|a| a.qual.chars())
-            .filter(|&c| (33u8..=126u8).contains(&(c as u8)))
+            .filter(|&c| (34u8..=126u8).contains(&(c as u8)))
             .map(|c| c as u8 & 1)
             .collect();
 

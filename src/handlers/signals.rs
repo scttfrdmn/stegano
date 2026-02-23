@@ -105,16 +105,19 @@ impl SignalHandler {
                 (sample_count, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
             }
             SignalEmbedStrategy::FrequencyDomain => {
-                // Use middle frequency bins (avoid DC and high freq)
-                let fft_size = 1024.min(sample_count);
-                let usable_bins = fft_size / 4; // Middle 25% of spectrum
-                (usable_bins * 8, 256) // 8 bits per bin, larger header
+                // Only positive-frequency bins [chunk/4 .. chunk/2) = 256 bins per chunk.
+                // Conjugate bins are mirrored for Hermitian symmetry but carry no extra bits.
+                let chunk_size = 1024;
+                let num_chunks = (sample_count / chunk_size).max(1);
+                let usable_bins_per_chunk = chunk_size / 4; // [256..512) = 256 bins
+                (num_chunks * usable_bins_per_chunk, 256)
             }
             SignalEmbedStrategy::PhaseModulation => {
-                // Phase modulation in frequency domain
-                let fft_size = 1024.min(sample_count);
-                let usable_bins = fft_size / 4; // Less conservative estimate
-                (usable_bins * 4, 80) // 4 bits per bin, reduced overhead
+                // Only positive-frequency bins [chunk/8 .. chunk/4) = 128 bins per chunk.
+                let chunk_size = 1024;
+                let num_chunks = (sample_count / chunk_size).max(1);
+                let phase_bins_per_chunk = chunk_size / 8; // [128..256) = 128 bins
+                (num_chunks * phase_bins_per_chunk, 80)
             }
             SignalEmbedStrategy::SpreadSpectrum => {
                 // Spread across entire spectrum
@@ -284,10 +287,16 @@ impl SignalHandler {
     ///
     /// Encodes each bit by forcing the quantised magnitude of a frequency-domain
     /// coefficient to an even (bit=0) or odd (bit=1) multiple of `MAG_STEP`.
-    /// The same quantisation is applied in `extract_fft_magnitude_bits` so the
-    /// operation is invertible after the i16 round-trip.
+    ///
+    /// Only the positive-frequency bins `[chunk/4 .. chunk/2]` are modified.
+    /// After each modification the conjugate bin `N-k` is set to `conj(X[k])`
+    /// so the IFFT output is purely real — if we modified both halves
+    /// independently the IFFT real part would be the average of the two,
+    /// destroying the parity encoding.
     fn embed_fft_magnitude(&self, samples: &mut [f32], payload_bits: &[u8]) -> Result<()> {
-        const MAG_STEP: f32 = 0.01; // quantisation step large enough to survive i16 noise
+        // MAG_STEP must satisfy: MAG_STEP/2 > i16 round-trip noise per bin.
+        // Worst-case noise ≈ 1024 * 1/(2*32767) ≈ 0.016.  MAG_STEP=0.5 gives 15× margin.
+        const MAG_STEP: f32 = 0.5;
         let chunk_size = 1024;
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(chunk_size);
@@ -309,29 +318,31 @@ impl SignalHandler {
 
             fft.process(&mut buffer);
 
-            let start_bin = chunk_size / 4;
-            let end_bin = 3 * chunk_size / 4;
+            // Only touch positive-frequency bins [chunk/4 .. chunk/2).
+            // Conjugate bins [chunk/2+1 .. 3*chunk/4] are written separately below.
+            let start_bin = chunk_size / 4; // 256
+            let end_bin = chunk_size / 2; // 512
 
-            for elem in &mut buffer[start_bin..end_bin] {
+            for bin_k in start_bin..end_bin {
                 if bit_index >= payload_bits.len() {
                     break;
                 }
 
-                let magnitude = elem.norm();
-                if magnitude > MAG_STEP {
-                    let bit = payload_bits[bit_index];
-                    let phase = elem.arg();
-                    // Quantise magnitude to even/odd multiples of MAG_STEP
-                    let units = (magnitude / MAG_STEP).round() as u64;
-                    let new_units = if units % 2 == bit as u64 {
-                        units
-                    } else {
-                        units + 1
-                    };
-                    let new_mag = new_units as f32 * MAG_STEP;
-                    *elem = Complex::from_polar(new_mag, phase);
-                    bit_index += 1;
-                }
+                let bit = payload_bits[bit_index];
+                let phase = buffer[bin_k].arg();
+                // Use max(magnitude, MAG_STEP) so near-zero bins still carry a reliable bit.
+                let magnitude = buffer[bin_k].norm().max(MAG_STEP);
+                let units = (magnitude / MAG_STEP).round() as u64;
+                let new_units = if units % 2 == bit as u64 {
+                    units
+                } else {
+                    units + 1
+                };
+                let new_mag = new_units as f32 * MAG_STEP;
+                buffer[bin_k] = Complex::from_polar(new_mag, phase);
+                // Enforce Hermitian symmetry: X[N-k] = conj(X[k])
+                buffer[chunk_size - bin_k] = Complex::from_polar(new_mag, -phase);
+                bit_index += 1;
             }
 
             ifft.process(&mut buffer);
@@ -344,9 +355,11 @@ impl SignalHandler {
         Ok(())
     }
 
-    /// Extract bits embedded by `embed_fft_magnitude` (parity quantisation)
+    /// Extract bits embedded by `embed_fft_magnitude` (parity quantisation).
+    ///
+    /// Reads only the positive-frequency bins `[chunk/4 .. chunk/2)` to match embed.
     fn extract_fft_magnitude_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
-        const MAG_STEP: f32 = 0.01;
+        const MAG_STEP: f32 = 0.5;
         let chunk_size = 1024;
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(chunk_size);
@@ -362,19 +375,18 @@ impl SignalHandler {
                 chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
             fft.process(&mut buffer);
 
-            let start_bin = chunk_size / 4;
-            let end_bin = 3 * chunk_size / 4;
+            // Read the same positive-frequency bins as embed.
+            let start_bin = chunk_size / 4; // 256
+            let end_bin = chunk_size / 2; // 512
 
             for elem in &buffer[start_bin..end_bin] {
                 if bits.len() >= bits_needed {
                     break;
                 }
 
-                let magnitude = elem.norm();
-                if magnitude > MAG_STEP {
-                    let units = (magnitude / MAG_STEP).round() as u64;
-                    bits.push((units % 2) as u8);
-                }
+                let magnitude = elem.norm().max(MAG_STEP);
+                let units = (magnitude / MAG_STEP).round() as u64;
+                bits.push((units % 2) as u8);
             }
         }
 
@@ -382,8 +394,19 @@ impl SignalHandler {
         Ok(bits)
     }
 
-    /// FFT-based phase modulation
+    /// FFT-based phase modulation using parity quantisation.
+    ///
+    /// Encodes each bit by forcing the quantised phase (offset by π) to an even
+    /// (bit=0) or odd (bit=1) multiple of `PHASE_STEP`.  Only positive-frequency
+    /// bins `[chunk/8 .. chunk/4)` are modified; conjugate bins are set to
+    /// `conj(X[k])` so the IFFT output stays real.
     fn embed_fft_phase(&self, samples: &mut [f32], payload_bits: &[u8]) -> Result<()> {
+        // Worst-case phase error per bin ≈ 0.016 / NORM_MIN. With NORM_MIN=0.5,
+        // error ≤ 0.032 rad << PHASE_STEP/2=0.05. Safe.
+        const PHASE_STEP: f32 = 0.1;
+        // Maximum integer index such that max_units * PHASE_STEP < 2π.
+        let max_units = (2.0 * std::f32::consts::PI / PHASE_STEP).floor() as u64 - 1;
+        const NORM_MIN: f32 = 0.5;
         let chunk_size = 1024;
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(chunk_size);
@@ -392,7 +415,10 @@ impl SignalHandler {
         let mut bit_index = 0;
 
         for chunk in samples.chunks_mut(chunk_size) {
-            if bit_index >= payload_bits.len() || chunk.len() < chunk_size {
+            if bit_index >= payload_bits.len() {
+                break;
+            }
+            if chunk.len() < chunk_size {
                 continue;
             }
 
@@ -401,26 +427,35 @@ impl SignalHandler {
 
             fft.process(&mut buffer);
 
-            // Modify phase in middle frequencies
-            let start_bin = chunk_size / 8;
-            let end_bin = chunk_size / 4;
+            // Only touch positive-frequency bins [chunk/8 .. chunk/4).
+            let start_bin = chunk_size / 8; // 128
+            let end_bin = chunk_size / 4; // 256
 
-            for elem in &mut buffer[start_bin..end_bin] {
+            for bin_k in start_bin..end_bin {
                 if bit_index >= payload_bits.len() {
                     break;
                 }
 
-                if elem.norm() > 0.001 {
-                    let current_phase = elem.arg();
-                    let bit = payload_bits[bit_index];
-
-                    // Small phase shift based on bit
-                    let phase_shift = if bit == 1 { 0.1 } else { -0.1 };
-                    let new_magnitude = elem.norm();
-                    *elem = Complex::from_polar(new_magnitude, current_phase + phase_shift);
-
-                    bit_index += 1;
-                }
+                let bit = payload_bits[bit_index];
+                // rem_euclid maps arg() ∈ (-π, π] to [0, 2π).
+                let phase_offset = (buffer[bin_k].arg() + std::f32::consts::PI)
+                    .rem_euclid(2.0 * std::f32::consts::PI);
+                let units = (phase_offset / PHASE_STEP).round() as u64;
+                let units = units.min(max_units);
+                let new_units = if units % 2 == bit as u64 {
+                    units
+                } else if units < max_units {
+                    units + 1
+                } else {
+                    // At ceiling: step DOWN to avoid wrapping past π.
+                    units - 1
+                };
+                let new_phase = new_units as f32 * PHASE_STEP - std::f32::consts::PI;
+                let norm = buffer[bin_k].norm().max(NORM_MIN);
+                buffer[bin_k] = Complex::from_polar(norm, new_phase);
+                // Enforce Hermitian symmetry: X[N-k] = conj(X[k])
+                buffer[chunk_size - bin_k] = Complex::from_polar(norm, -new_phase);
+                bit_index += 1;
             }
 
             ifft.process(&mut buffer);
@@ -433,10 +468,12 @@ impl SignalHandler {
         Ok(())
     }
 
-    /// Extract bits embedded by `embed_fft_phase`.
+    /// Extract bits embedded by `embed_fft_phase` (parity quantisation).
     ///
-    /// A positive phase shift encodes bit=1; negative encodes bit=0.
+    /// Reads only the positive-frequency bins `[chunk/8 .. chunk/4)` to match embed.
     fn extract_fft_phase_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
+        const PHASE_STEP: f32 = 0.1;
+        let max_units = (2.0 * std::f32::consts::PI / PHASE_STEP).floor() as u64 - 1;
         let chunk_size = 1024;
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(chunk_size);
@@ -452,21 +489,20 @@ impl SignalHandler {
                 chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
             fft.process(&mut buffer);
 
-            let start_bin = chunk_size / 8;
-            let end_bin = chunk_size / 4;
+            // Read the same positive-frequency bins as embed.
+            let start_bin = chunk_size / 8; // 128
+            let end_bin = chunk_size / 4; // 256
 
             for elem in &buffer[start_bin..end_bin] {
                 if bits.len() >= bits_needed {
                     break;
                 }
 
-                if elem.norm() > 0.001 {
-                    // Positive phase shift → bit=1; negative → bit=0
-                    // We detect the residual: if phase mod (2*π) is closer to +0.1 than to -0.1
-                    // A simple heuristic: check if sin(phase) > 0 as proxy (works for small shifts)
-                    let phase = elem.arg();
-                    bits.push(if phase >= 0.0 { 1 } else { 0 });
-                }
+                let phase_offset = (elem.arg() + std::f32::consts::PI)
+                    .rem_euclid(2.0 * std::f32::consts::PI);
+                let units = (phase_offset / PHASE_STEP).round() as u64;
+                let units = units.min(max_units);
+                bits.push((units % 2) as u8);
             }
         }
 
@@ -789,22 +825,15 @@ impl DataHandler for SignalHandler {
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        // Try different strategies in order of likelihood
-        let strategies = [
-            SignalEmbedStrategy::TimeDomainLSB,
-            SignalEmbedStrategy::FrequencyDomain,
-            SignalEmbedStrategy::PhaseModulation,
-        ];
-
-        for strategy in &strategies {
-            if let Ok(result) = self.extract_with_strategy(carrier, strategy, params).await {
-                return Ok(result);
-            }
-        }
-
-        Err(SteganoError::InvalidParameter(
-            "No valid extraction strategy found".to_string(),
-        ))
+        // Dispatch to the same strategy that embed() uses for this stealth_level,
+        // so extract is always the exact inverse of embed.
+        let strategy = match params.stealth_level {
+            StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
+            StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
+            StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
+            StealthLevel::Maximum => SignalEmbedStrategy::PhaseModulation,
+        };
+        self.extract_with_strategy(carrier, &strategy, params).await
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {
@@ -1088,5 +1117,75 @@ mod tests {
         let bits = handler.extract_time_domain_bits(&test_samples, 4).unwrap();
         assert_eq!(bits.len(), 4);
         // Each bit is the LSB of the 16-bit integer representation
+    }
+
+    /// Generate a pseudo-random carrier with frequency content across the spectrum.
+    /// Using a simple linear congruential sequence to produce varied byte values.
+    fn make_varied_carrier(len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| ((i as u32).wrapping_mul(1664525).wrapping_add(1013904223) >> 8) as u8)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_frequency_domain_embedding_roundtrip() {
+        let handler = SignalHandler::new();
+        let payload = b"frequency domain test";
+
+        let mut carrier = CarrierData {
+            format: DataFormat::WAV,
+            raw_data: make_varied_carrier(40960), // 20 full 1024-sample chunks
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: Some(44100.0),
+        };
+
+        // ECLevel::None: no RS overhead, verifies the raw FFT magnitude round-trip.
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Medium, // FrequencyDomain
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    #[tokio::test]
+    async fn test_phase_modulation_embedding_roundtrip() {
+        let handler = SignalHandler::new();
+        let payload = b"phase modulation test";
+
+        let mut carrier = CarrierData {
+            format: DataFormat::WAV,
+            raw_data: make_varied_carrier(40960), // 20 full 1024-sample chunks
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: Some(44100.0),
+        };
+
+        // ECLevel::None: no RS overhead, verifies the raw FFT phase round-trip.
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::High, // PhaseModulation
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
     }
 }

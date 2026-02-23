@@ -1199,4 +1199,38 @@ mod tests {
         let invalid_vcf = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tX\tY\t30.0\tPASS\t.\n";
         assert!(!handler.verify_vcf_integrity(invalid_vcf).unwrap());
     }
+
+    #[tokio::test]
+    async fn test_vcf_sample_format_embedding_roundtrip() {
+        let handler = VcfHandler::new();
+        // VCF with FORMAT and sample columns so SampleFormat strategy can embed.
+        // payload "Hello!" = 6 bytes = 12 hex chars (fits in a single 16-char chunk, 1 variant needed).
+        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE1\nchr1\t100\t.\tA\tT\t30\tPASS\t.\tGT\t0/1\nchr1\t200\t.\tG\tC\t45\tPASS\t.\tGT\t0/0\n";
+
+        let mut carrier = CarrierData {
+            format: DataFormat::VCF,
+            raw_data: vcf_data.to_vec(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"Hello!";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "vcf_strategy".to_string(),
+            serde_json::Value::String("format".to_string()),
+        );
+
+        handler.embed(&mut carrier, payload, &params).await.unwrap();
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(&extracted, payload);
+    }
 }
