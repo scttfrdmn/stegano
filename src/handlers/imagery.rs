@@ -39,17 +39,6 @@ impl ImageEmbedStrategy {
         }
     }
 
-    #[allow(dead_code)]
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(ImageEmbedStrategy::SimpleLSB),
-            1 => Some(ImageEmbedStrategy::AdaptiveLSB),
-            2 => Some(ImageEmbedStrategy::DCTFrequency),
-            3 => Some(ImageEmbedStrategy::PVD),
-            4 => Some(ImageEmbedStrategy::EdgeBased),
-            _ => None,
-        }
-    }
 }
 
 impl ImageryHandler {
@@ -542,8 +531,35 @@ impl DataHandler for ImageryHandler {
     }
 
     fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo> {
-        // Use adaptive LSB as default strategy for capacity estimation
-        self.estimate_image_capacity(carrier, &ImageEmbedStrategy::AdaptiveLSB)
+        // Main value: Medium stealth (AdaptiveLSB, 2 bits/pixel).
+        // Per-stealth-level breakdowns are in format_specific_info because
+        // the trait method doesn't take EmbedParams. Callers should check
+        // capacity_high_stealth_bits when using StealthLevel::High or Maximum.
+        let mut info = self.estimate_image_capacity(carrier, &ImageEmbedStrategy::AdaptiveLSB)?;
+        // Low stealth (SimpleLSB) has higher capacity: 3 bits/pixel.
+        if let Ok(low) = self.estimate_image_capacity(carrier, &ImageEmbedStrategy::SimpleLSB) {
+            info.format_specific_info.insert(
+                "capacity_low_stealth_bits".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(low.recommended_bits)),
+            );
+        }
+        // Medium stealth (AdaptiveLSB) = main value; add it for clarity.
+        info.format_specific_info.insert(
+            "capacity_medium_stealth_bits".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(info.recommended_bits)),
+        );
+        // High and Maximum stealth both use EdgeBased (~30% of pixels), much lower capacity.
+        if let Ok(edge) = self.estimate_image_capacity(carrier, &ImageEmbedStrategy::EdgeBased) {
+            info.format_specific_info.insert(
+                "capacity_high_stealth_bits".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(edge.recommended_bits)),
+            );
+            info.format_specific_info.insert(
+                "capacity_maximum_stealth_bits".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(edge.recommended_bits)),
+            );
+        }
+        Ok(info)
     }
 
     async fn embed(
@@ -671,6 +687,17 @@ mod tests {
         assert!(capacity.total_bits > 0);
         assert!(capacity.recommended_bits > 0);
         assert!(capacity.steganographic_ratio > 0.0);
+
+        // Per-stealth estimates must be present and ordered: low ≥ medium ≥ high
+        let low = capacity.format_specific_info["capacity_low_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        let med = capacity.format_specific_info["capacity_medium_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        let high = capacity.format_specific_info["capacity_high_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        assert!(low >= med, "SimpleLSB should have >= capacity than AdaptiveLSB");
+        assert!(med >= high, "AdaptiveLSB should have >= capacity than EdgeBased");
+        assert!(high > 0, "EdgeBased capacity should be positive for a valid image");
     }
 
     #[tokio::test]

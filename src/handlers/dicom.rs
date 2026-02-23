@@ -191,10 +191,16 @@ pub enum DicomEmbedStrategy {
     /// Embed in pixel data LSB
     PixelDataLSB,
 
-    /// Embed in unused metadata fields
+    /// Embed in unused metadata fields.
+    ///
+    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
+    /// Use `PrivateDataElements`, `PixelDataLSB`, or `MultiStrategy` instead.
     UnusedMetadata,
 
-    /// Embed in sequence item padding
+    /// Embed in sequence item padding.
+    ///
+    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
+    /// Use `PrivateDataElements`, `PixelDataLSB`, or `MultiStrategy` instead.
     SequencePadding,
 
     /// Multi-strategy embedding

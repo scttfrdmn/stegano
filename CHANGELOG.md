@@ -13,6 +13,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.14] - 2026-02-22
+
+### Fixed
+- **Capacity estimation mismatch for imagery** (`src/handlers/imagery.rs`):
+  `estimate_capacity()` always reported `AdaptiveLSB` (2 bits/pixel, Medium stealth) regardless
+  of the strategy that `embed()` would actually use. Selecting `StealthLevel::High` or `Maximum`
+  invokes `EdgeBased` (~0.3 bits/pixel), which has only 15% of AdaptiveLSB's capacity.
+  Users relying on the estimate would receive `InsufficientCapacity` errors at embed time.
+  Fix: `format_specific_info` now includes `capacity_{low,medium,high,maximum}_stealth_bits`
+  so callers can check capacity for their intended stealth level.
+- **Capacity estimation mismatch for signals** (`src/handlers/signals.rs`):
+  Same issue — `estimate_capacity()` always reported `FrequencyDomain` (Medium stealth).
+  `SpreadSpectrum` (Maximum stealth) can have 40× less capacity. All four stealth-level
+  estimates now present in `format_specific_info`.
+
+### Removed
+- **Dead code** (`src/handlers/imagery.rs`): Removed `ImageEmbedStrategy::from_u8()`.
+  The strategy byte is written into the embedded header by `to_u8()` but was never read back
+  during extraction, so the round-trip deserialization this function implied never existed.
+
+### Documentation
+- `DicomEmbedStrategy::UnusedMetadata` and `SequencePadding` now carry doc comments
+  explicitly stating they are not yet implemented and will return an error at runtime.
+
+### Tests
+- Extended `test_capacity_estimation` in both imagery and signals to assert:
+  - All per-stealth-level capacity entries are present in `format_specific_info`
+  - Capacities are ordered correctly (low ≥ medium ≥ high ≥ maximum)
+
 ## [0.3.13] - 2026-02-22
 
 ### Fixed

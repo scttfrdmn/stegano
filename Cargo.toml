@@ -1,6 +1,6 @@
 [package]
 name = "stegano"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2021"
 authors = ["Scott Friedman <scttfrdmn@gmail.com>"]
 description = "High-performance scientific data steganography system"

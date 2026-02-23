@@ -1,7 +1,7 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.13-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.14-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
@@ -9,14 +9,14 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.13 - Latest Production Release
+## 🎯 Version 0.3.14 - Latest Production Release
 
-Stegano v0.3.13 delivers API correctness fixes, new test coverage for all code paths, and dependency cleanup:
-- ✅ **346 Tests Passing** - Added roundtrip tests for AdaptiveLSB, VariantIdSteganography, empty payloads at all EC levels; error path tests for AuxiliaryData (SAM/BAM), UnusedMetadata and SequencePadding (DICOM)
-- ✅ **StealthLevel::Maximum Now Uses SpreadSpectrum** - Previously mapped to PhaseModulation (same as High); now correctly routes to SpreadSpectrum in both `embed()` and `extract()`
-- ✅ **DICOM Test Helper Fixed** - `create_minimal_dicom()` claimed Transfer Syntax UID length of 26 bytes but wrote 18; parser over-read and corrupted subsequent element headers
-- ✅ **SAM/BAM AuxiliaryData Reachable** - "auxiliary" key added to `sam_strategy` dispatch; strategy was previously unreachable via public API
-- ✅ **Dead Code Removed** - `SignalEmbedStrategy::from_u8()` and `cargo-tarpaulin`/`coverage-helper` dev-dependencies removed
+Stegano v0.3.14 fixes misleading capacity estimates and removes remaining dead code:
+- ✅ **346 Tests Passing** — capacity estimation tests extended to verify per-stealth-level ordering
+- ✅ **Capacity Estimation Fixed (Imagery)** - `estimate_capacity()` now reports `capacity_{low,medium,high,maximum}_stealth_bits` in `format_specific_info`; High/Maximum (EdgeBased, ~0.3 bits/pixel) had no separate entry from Medium (AdaptiveLSB, 2 bits/pixel), causing `InsufficientCapacity` surprises at embed time
+- ✅ **Capacity Estimation Fixed (Signals)** - Same fix for signals; Maximum stealth (SpreadSpectrum) can have 40× less capacity than Low (TimeDomainLSB); all four levels now reported separately
+- ✅ **Dead Code Removed** - `ImageEmbedStrategy::from_u8()` removed; the strategy byte written to embedded headers was never read back during extraction
+- ✅ **DICOM API Clarified** - `UnusedMetadata` and `SequencePadding` enum variants now carry doc comments warning they return errors at runtime
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

@@ -792,8 +792,42 @@ impl DataHandler for SignalHandler {
     }
 
     fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo> {
-        // Use frequency domain as default strategy
-        self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::FrequencyDomain)
+        // Main value: Medium stealth (FrequencyDomain).
+        // Per-stealth-level breakdowns are in format_specific_info because
+        // the trait method doesn't take EmbedParams. Callers should check
+        // capacity_maximum_stealth_bits when using StealthLevel::Maximum (SpreadSpectrum),
+        // as its capacity can be 40× lower than TimeDomainLSB.
+        let mut info =
+            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::FrequencyDomain)?;
+        if let Ok(low) =
+            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::TimeDomainLSB)
+        {
+            info.format_specific_info.insert(
+                "capacity_low_stealth_bits".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(low.recommended_bits)),
+            );
+        }
+        info.format_specific_info.insert(
+            "capacity_medium_stealth_bits".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(info.recommended_bits)),
+        );
+        if let Ok(high) =
+            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::PhaseModulation)
+        {
+            info.format_specific_info.insert(
+                "capacity_high_stealth_bits".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(high.recommended_bits)),
+            );
+        }
+        if let Ok(max) =
+            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::SpreadSpectrum)
+        {
+            info.format_specific_info.insert(
+                "capacity_maximum_stealth_bits".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(max.recommended_bits)),
+            );
+        }
+        Ok(info)
     }
 
     async fn embed(
@@ -947,6 +981,20 @@ mod tests {
         assert!(capacity.total_bits > 0);
         assert!(capacity.recommended_bits > 0);
         assert!(capacity.steganographic_ratio > 0.0);
+
+        // Per-stealth estimates must be present and ordered: low ≥ medium ≥ high ≥ maximum
+        let low = capacity.format_specific_info["capacity_low_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        let med = capacity.format_specific_info["capacity_medium_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        let high = capacity.format_specific_info["capacity_high_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        let max = capacity.format_specific_info["capacity_maximum_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        assert!(low >= med, "TimeDomainLSB should have >= capacity than FrequencyDomain");
+        assert!(med >= high, "FrequencyDomain should have >= capacity than PhaseModulation");
+        assert!(high >= max, "PhaseModulation should have >= capacity than SpreadSpectrum");
+        assert!(max > 0, "SpreadSpectrum capacity should be positive");
     }
 
     #[tokio::test]
