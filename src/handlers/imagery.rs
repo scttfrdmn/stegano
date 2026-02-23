@@ -346,12 +346,29 @@ impl ImageryHandler {
         let header_bytes_needed = 10; // 4 magic + 4 size + 1 strategy + 1 encryption
 
         match strategy {
-            ImageEmbedStrategy::SimpleLSB | ImageEmbedStrategy::AdaptiveLSB => {
+            ImageEmbedStrategy::SimpleLSB => {
                 for i in 0..header_bytes_needed * 8 {
                     if i >= carrier.raw_data.len() {
                         break;
                     }
                     header_bits.push(carrier.raw_data[i] & 1);
+                }
+            }
+            ImageEmbedStrategy::AdaptiveLSB => {
+                // Mirror embed_lsb_pixels: only read from bytes with local variation > 10
+                let mut i = 0;
+                while header_bits.len() < header_bytes_needed * 8
+                    && i + 2 < carrier.raw_data.len()
+                {
+                    let variation =
+                        (carrier.raw_data[i] as i16 - carrier.raw_data[i + 1] as i16).abs()
+                            + (carrier.raw_data[i + 1] as i16
+                                - carrier.raw_data[i + 2] as i16)
+                                .abs();
+                    if variation > 10 {
+                        header_bits.push(carrier.raw_data[i] & 1);
+                    }
+                    i += 1;
                 }
             }
             ImageEmbedStrategy::EdgeBased => {
@@ -407,9 +424,24 @@ impl ImageryHandler {
         let mut all_bits = Vec::new();
 
         match strategy {
-            ImageEmbedStrategy::SimpleLSB | ImageEmbedStrategy::AdaptiveLSB => {
+            ImageEmbedStrategy::SimpleLSB => {
                 for i in 0..total_bits_needed.min(carrier.raw_data.len()) {
                     all_bits.push(carrier.raw_data[i] & 1);
+                }
+            }
+            ImageEmbedStrategy::AdaptiveLSB => {
+                // Mirror embed_lsb_pixels: only read from bytes with local variation > 10
+                let mut i = 0;
+                while all_bits.len() < total_bits_needed && i + 2 < carrier.raw_data.len() {
+                    let variation =
+                        (carrier.raw_data[i] as i16 - carrier.raw_data[i + 1] as i16).abs()
+                            + (carrier.raw_data[i + 1] as i16
+                                - carrier.raw_data[i + 2] as i16)
+                                .abs();
+                    if variation > 10 {
+                        all_bits.push(carrier.raw_data[i] & 1);
+                    }
+                    i += 1;
                 }
             }
             ImageEmbedStrategy::EdgeBased => {
@@ -579,10 +611,11 @@ impl DataHandler for ImageryHandler {
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        // Try different strategies in order of likelihood
+        // Try strategies in order matching embed()'s stealth_level dispatch:
+        // Low→SimpleLSB, Medium→AdaptiveLSB, High/Maximum→EdgeBased.
         let strategies = [
-            ImageEmbedStrategy::AdaptiveLSB,
             ImageEmbedStrategy::SimpleLSB,
+            ImageEmbedStrategy::AdaptiveLSB,
             ImageEmbedStrategy::EdgeBased,
         ];
 
@@ -879,6 +912,45 @@ mod tests {
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
         assert!(result.success);
         assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    #[tokio::test]
+    async fn test_adaptive_lsb_roundtrip_with_smooth_patches() {
+        // Verifies the AdaptiveLSB extract fix: prior to the fix, extract read from every
+        // byte sequentially even though embed only wrote to high-variation (>10) bytes.
+        // This test uses an image with 50% smooth (constant) pixels that embed skips,
+        // which would cause the old extract code to read wrong bits.
+        let handler = ImageryHandler::new();
+        let payload = b"nat";
+
+        // Build a 60×60 RGB image (10,800 bytes): first half is flat (all 128),
+        // second half is high-variation LCG data. AdaptiveLSB embed only writes to
+        // the LCG section; extract must use the same threshold to recover correctly.
+        let mut image_data = vec![128u8; 5400]; // 5400 bytes of flat data (variation = 0 ≤ 10)
+        image_data.extend(make_lcg_image(5400)); // 5400 bytes of high-variation LCG data
+
+        let mut carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: image_data,
+            metadata: HashMap::new(),
+            dimensions: Some(Dimensions::new_2d(60, 60)),
+            sampling_rate: None,
+        };
+
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Medium, // → AdaptiveLSB
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
 
         let extracted = handler.extract(&carrier, &params).await.unwrap();
         assert_eq!(extracted, payload);

@@ -925,6 +925,15 @@ impl DataHandler for VcfHandler {
     ) -> Result<EmbedResult> {
         let start_time = Instant::now();
 
+        // Apply codec (encryption / error correction) when requested
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != crate::core::ECLevel::None;
+        let final_payload: Vec<u8> = if use_codec {
+            crate::codec::encode_payload(payload, params)?
+        } else {
+            payload.to_vec()
+        };
+
         match carrier.format {
             DataFormat::VCF => {
                 let mut vcf = self.parse_vcf(&carrier.raw_data)?;
@@ -946,22 +955,26 @@ impl DataHandler for VcfHandler {
 
                 let embed_result = match strategy {
                     VcfEmbedStrategy::InfoFieldSteganography => {
-                        self.embed_info_field_strategy(&mut vcf, payload)?
+                        self.embed_info_field_strategy(&mut vcf, &final_payload)?
                     }
                     VcfEmbedStrategy::QualityScoreSteganography => {
-                        self.embed_quality_strategy(&mut vcf, payload)?
+                        self.embed_quality_strategy(&mut vcf, &final_payload)?
                     }
                     VcfEmbedStrategy::SampleFormatSteganography => {
-                        self.embed_sample_format_strategy(&mut vcf, payload)?
+                        self.embed_sample_format_strategy(&mut vcf, &final_payload)?
                     }
                     VcfEmbedStrategy::VariantIdSteganography => {
-                        self.embed_variant_id_strategy(&mut vcf, payload)?
+                        self.embed_variant_id_strategy(&mut vcf, &final_payload)?
                     }
                     VcfEmbedStrategy::MultiStrategy => {
                         // Try multiple strategies in order of preference
-                        self.embed_info_field_strategy(&mut vcf, payload)
-                            .or_else(|_| self.embed_sample_format_strategy(&mut vcf, payload))
-                            .or_else(|_| self.embed_variant_id_strategy(&mut vcf, payload))?
+                        self.embed_info_field_strategy(&mut vcf, &final_payload)
+                            .or_else(|_| {
+                                self.embed_sample_format_strategy(&mut vcf, &final_payload)
+                            })
+                            .or_else(|_| {
+                                self.embed_variant_id_strategy(&mut vcf, &final_payload)
+                            })?
                     }
                 };
 
@@ -1008,7 +1021,7 @@ impl DataHandler for VcfHandler {
                     })
                     .unwrap_or(VcfEmbedStrategy::InfoFieldSteganography);
 
-                match strategy {
+                let raw = match strategy {
                     VcfEmbedStrategy::InfoFieldSteganography => {
                         self.extract_info_field_strategy(&vcf)
                     }
@@ -1028,6 +1041,15 @@ impl DataHandler for VcfHandler {
                             .or_else(|_| self.extract_variant_id_strategy(&vcf))
                             .or_else(|_| self.extract_quality_strategy(&vcf))
                     }
+                }?;
+
+                // Decode codec (encryption / error correction) when it was applied
+                let use_codec = !params.encryption_key.is_empty()
+                    || params.error_correction_level != crate::core::ECLevel::None;
+                if use_codec {
+                    crate::codec::decode_payload(&raw, params)
+                } else {
+                    Ok(raw)
                 }
             }
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
@@ -1266,4 +1288,45 @@ mod tests {
         let extracted = handler.extract(&carrier, &params).await.unwrap();
         assert_eq!(&extracted, payload);
     }
+
+    #[tokio::test]
+    async fn test_vcf_info_embedding_with_encryption_roundtrip() {
+        // Verifies that encryption_key and error_correction_level are correctly applied
+        // to VCF embed/extract (previously they were silently ignored).
+        let handler = VcfHandler::new();
+        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30\tPASS\t.\nchr1\t200\t.\tG\tC\t45\tPASS\t.\nchr1\t300\t.\tC\tT\t50\tPASS\t.\nchr1\t400\t.\tT\tA\t60\tPASS\t.\nchr1\t500\t.\tA\tG\t70\tPASS\t.\n";
+
+        let mut carrier = CarrierData {
+            format: DataFormat::VCF,
+            raw_data: vcf_data.to_vec(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"enc";
+        let mut params = EmbedParams {
+            encryption_key: b"test key for vcf encryption!!!!".to_vec(), // 32 bytes
+            error_correction_level: ECLevel::None, // ECLevel::Low would require ~17 variants (RS block = 255 bytes)
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "vcf_strategy".to_string(),
+            serde_json::Value::String("info".to_string()),
+        );
+
+        handler.embed(&mut carrier, payload, &params).await.unwrap();
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(&extracted, payload);
+
+        // Extracting with a wrong key should fail
+        let mut wrong_params = params.clone();
+        wrong_params.encryption_key = b"wrong key for vcf encryption!!!!".to_vec();
+        let wrong_result = handler.extract(&carrier, &wrong_params).await;
+        assert!(wrong_result.is_err(), "Wrong key should fail to extract");
+    }
+
 }

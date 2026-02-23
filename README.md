@@ -1,22 +1,22 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.14-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.15-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-346%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-349%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.14 - Latest Production Release
+## 🎯 Version 0.3.15 - Latest Production Release
 
-Stegano v0.3.14 fixes misleading capacity estimates and removes remaining dead code:
-- ✅ **346 Tests Passing** — capacity estimation tests extended to verify per-stealth-level ordering
-- ✅ **Capacity Estimation Fixed (Imagery)** - `estimate_capacity()` now reports `capacity_{low,medium,high,maximum}_stealth_bits` in `format_specific_info`; High/Maximum (EdgeBased, ~0.3 bits/pixel) had no separate entry from Medium (AdaptiveLSB, 2 bits/pixel), causing `InsufficientCapacity` surprises at embed time
-- ✅ **Capacity Estimation Fixed (Signals)** - Same fix for signals; Maximum stealth (SpreadSpectrum) can have 40× less capacity than Low (TimeDomainLSB); all four levels now reported separately
-- ✅ **Dead Code Removed** - `ImageEmbedStrategy::from_u8()` removed; the strategy byte written to embedded headers was never read back during extraction
-- ✅ **DICOM API Clarified** - `UnusedMetadata` and `SequencePadding` enum variants now carry doc comments warning they return errors at runtime
+Stegano v0.3.15 fixes correctness bugs in AdaptiveLSB extraction and codec integration for genomics handlers:
+- ✅ **349 Tests Passing** — 3 new roundtrip tests for AdaptiveLSB, VCF encryption, and SAM encryption
+- ✅ **AdaptiveLSB Extract Fixed** - `extract_with_strategy()` now applies the same `variation > 10` threshold used during embed; previously it read every pixel byte sequentially (like SimpleLSB), causing silent data corruption on images with smooth regions
+- ✅ **Extract Strategy Order Fixed** - `extract()` now tries `[SimpleLSB, AdaptiveLSB, EdgeBased]` matching the embed order for `Low → Medium → High/Max` stealth levels
+- ✅ **VCF Codec Integration Fixed** - `embed()`/`extract()` now apply `codec::encode_payload`/`decode_payload` when `encryption_key` or `error_correction_level` are set; previously these parameters were silently ignored for VCF files
+- ✅ **SAM/BAM Codec Integration Fixed** - Same fix for SAM and BAM handlers; encryption and error correction now correctly applied
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

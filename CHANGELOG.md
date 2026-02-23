@@ -13,6 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.15] - 2026-02-22
+
+### Fixed
+- **AdaptiveLSB extract/embed asymmetry** (`src/handlers/imagery.rs`):
+  `extract_with_strategy()` read every byte sequentially (identical to SimpleLSB) while
+  `embed_lsb_pixels()` only writes to bytes where local variation > 10. Roundtrip would
+  silently corrupt any image with smooth regions (variation ≤ 10), because the extractor
+  consumed bits from positions the embedder had skipped. Both header and payload reading
+  blocks now apply the same threshold check.
+- **Extract strategy order fixed** (`src/handlers/imagery.rs`):
+  `extract()` tried `[AdaptiveLSB, SimpleLSB, EdgeBased]` but `embed()` maps
+  `Low → SimpleLSB`, `Medium → AdaptiveLSB`, `High/Max → EdgeBased`. Reversed to
+  `[SimpleLSB, AdaptiveLSB, EdgeBased]` to avoid an unnecessary failed AdaptiveLSB attempt
+  on the common case (Low stealth = SimpleLSB).
+- **VCF codec integration** (`src/handlers/vcf.rs`):
+  `embed()` passed `payload` directly to strategy functions without calling
+  `codec::encode_payload()`; `extract()` returned raw bytes without calling
+  `codec::decode_payload()`. Both `encryption_key` and `error_correction_level` in
+  `EmbedParams` were silently ignored for all VCF embedding strategies. Now guarded by
+  `use_codec` (non-empty key or non-None EC level), matching the pattern in imagery.rs.
+- **SAM/BAM codec integration** (`src/handlers/sam_bam.rs`):
+  Same bug — `encryption_key` and `error_correction_level` were ignored for SAM and BAM
+  embed/extract. Both handlers now apply `codec::encode_payload`/`decode_payload` when the
+  codec parameters are non-default.
+
+### Tests
+- `test_adaptive_lsb_roundtrip_with_smooth_patches`: image with 50% flat bytes (variation=0)
+  and 50% LCG-random bytes; verifies roundtrip with `StealthLevel::Medium` (AdaptiveLSB).
+- `test_vcf_info_embedding_with_encryption_roundtrip`: embed+extract with AES-256-GCM key
+  in VCF INFO fields; also verifies a wrong key returns an error.
+- `test_sam_optional_fields_with_encryption_roundtrip`: same for SAM optional fields.
+
 ## [0.3.14] - 2026-02-22
 
 ### Fixed

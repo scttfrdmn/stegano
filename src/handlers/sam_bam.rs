@@ -1251,6 +1251,15 @@ impl DataHandler for SamBamHandler {
     ) -> Result<EmbedResult> {
         let start_time = Instant::now();
 
+        // Apply codec (encryption / error correction) when requested
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != crate::core::ECLevel::None;
+        let final_payload: Vec<u8> = if use_codec {
+            crate::codec::encode_payload(payload, params)?
+        } else {
+            payload.to_vec()
+        };
+
         match carrier.format {
             DataFormat::SAM => {
                 let mut sam = self.parse_sam(&carrier.raw_data)?;
@@ -1272,18 +1281,18 @@ impl DataHandler for SamBamHandler {
 
                 let embed_result = match strategy {
                     SamBamEmbedStrategy::OptionalFields => {
-                        self.embed_sam_optional_fields(&mut sam, payload)?
+                        self.embed_sam_optional_fields(&mut sam, &final_payload)?
                     }
                     SamBamEmbedStrategy::QualityScores => {
-                        self.embed_quality_scores(&mut sam, payload)?
+                        self.embed_quality_scores(&mut sam, &final_payload)?
                     }
                     SamBamEmbedStrategy::CommentLines => {
-                        self.embed_comment_lines(&mut sam, payload)?
+                        self.embed_comment_lines(&mut sam, &final_payload)?
                     }
                     SamBamEmbedStrategy::MultiStrategy => {
                         // Try strategies in order of preference
-                        self.embed_sam_optional_fields(&mut sam, payload)
-                            .or_else(|_| self.embed_comment_lines(&mut sam, payload))?
+                        self.embed_sam_optional_fields(&mut sam, &final_payload)
+                            .or_else(|_| self.embed_comment_lines(&mut sam, &final_payload))?
                     }
                     SamBamEmbedStrategy::AuxiliaryData => {
                         return Err(SteganoError::InvalidParameter(
@@ -1314,7 +1323,7 @@ impl DataHandler for SamBamHandler {
                 let mut bam = self.parse_bam(&carrier.raw_data)?;
 
                 // Embed in header text using STEGANO_DATA comment line
-                let hex_payload = hex::encode(payload);
+                let hex_payload = hex::encode(&final_payload);
                 let comment_line = format!("@CO\tSTEGANO_DATA:{hex_payload}\n");
                 bam.header.text.push_str(&comment_line);
                 bam.header.l_text = bam.header.text.len() as u32;
@@ -1369,7 +1378,7 @@ impl DataHandler for SamBamHandler {
                     })
                     .unwrap_or(SamBamEmbedStrategy::OptionalFields);
 
-                match strategy {
+                let raw = match strategy {
                     SamBamEmbedStrategy::OptionalFields => self.extract_sam_optional_fields(&sam),
                     SamBamEmbedStrategy::QualityScores => {
                         self.extract_quality_scores(&sam)
@@ -1383,12 +1392,21 @@ impl DataHandler for SamBamHandler {
                     SamBamEmbedStrategy::AuxiliaryData => Err(SteganoError::InvalidParameter(
                         "AuxiliaryData strategy is not yet implemented".to_string(),
                     )),
+                }?;
+
+                // Decode codec (encryption / error correction) when it was applied
+                let use_codec = !params.encryption_key.is_empty()
+                    || params.error_correction_level != crate::core::ECLevel::None;
+                if use_codec {
+                    crate::codec::decode_payload(&raw, params)
+                } else {
+                    Ok(raw)
                 }
             }
             DataFormat::BAM => {
                 let bam = self.parse_bam(&carrier.raw_data)?;
                 // Search for STEGANO_DATA in header text
-                if let Some(data_start) = bam.header.text.find("STEGANO_DATA:") {
+                let raw = if let Some(data_start) = bam.header.text.find("STEGANO_DATA:") {
                     let hex_start = data_start + "STEGANO_DATA:".len();
                     let hex_end = bam.header.text[hex_start..]
                         .find('\n')
@@ -1404,6 +1422,15 @@ impl DataHandler for SamBamHandler {
                     Err(SteganoError::IntegrityError(
                         "No steganographic data found in BAM header".to_string(),
                     ))
+                }?;
+
+                // Decode codec (encryption / error correction) when it was applied
+                let use_codec = !params.encryption_key.is_empty()
+                    || params.error_correction_level != crate::core::ECLevel::None;
+                if use_codec {
+                    crate::codec::decode_payload(&raw, params)
+                } else {
+                    Ok(raw)
                 }
             }
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
@@ -1684,5 +1711,52 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
 
         let result = handler.extract(&carrier, &params).await;
         assert!(result.is_err(), "AuxiliaryData extract should return error (not yet implemented)");
+    }
+
+    #[tokio::test]
+    async fn test_sam_optional_fields_with_encryption_roundtrip() {
+        // Verifies that encryption_key is correctly applied to SAM embed/extract
+        // (previously codec params were silently ignored).
+        // 3 alignments needed: encrypted b"hi" → 71 bytes → 142 hex chars → 3 chunks of 64.
+        let handler = SamBamHandler::new();
+        let sam_data = b"@HD\tVN:1.0\tSO:coordinate\n\
+@SQ\tSN:chr1\tLN:248956422\n\
+@PG\tID:test\tPN:test_program\tVN:1.0\n\
+read1\t0\tchr1\t100\t60\t50M\t*\t0\t0\tATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGA\tIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n\
+read2\t0\tchr1\t200\t60\t50M\t*\t0\t0\tGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA\tJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ\n\
+read3\t0\tchr1\t300\t60\t50M\t*\t0\t0\tTTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG\tKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK\n"
+            .to_vec();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::SAM,
+            raw_data: sam_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"hi";
+        let mut params = EmbedParams {
+            encryption_key: b"test key for sam encryption!!!!".to_vec(), // 32 bytes
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "sam_strategy".to_string(),
+            serde_json::Value::String("optional".to_string()),
+        );
+
+        handler.embed(&mut carrier, payload, &params).await.unwrap();
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(&extracted, payload);
+
+        // Extracting with a wrong key should fail
+        let mut wrong_params = params.clone();
+        wrong_params.encryption_key = b"wrong key for sam encryption!!!!".to_vec();
+        let wrong_result = handler.extract(&carrier, &wrong_params).await;
+        assert!(wrong_result.is_err(), "Wrong key should fail to extract");
     }
 }
