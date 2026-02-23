@@ -425,7 +425,7 @@ impl NeuralNetworkModel {
     ///   3. For each layer from last to first:
     ///      a. Update W and b using δ and the layer's input activations.
     ///      b. Back-propagate δ through the weight matrix and apply the activation
-    ///         derivative of the preceding layer to get the next δ.
+    ///      derivative of the preceding layer to get the next δ.
     fn backpropagate(&mut self, input: &[f32], _output: &[f32], target: &[f32], _loss: f32) {
         let lr = self.learning_rate;
         let n = self.layers.len();

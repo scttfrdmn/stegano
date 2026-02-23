@@ -13,6 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.11] - 2026-02-22
+
+### Fixed
+- **FFI version string** (`src/ffi.rs`): Updated from `"0.3.9"` to `"0.3.11"`.
+- **CLI hardcoded default key** (`src/cli/commands.rs`): `handle_embed` and `handle_extract`
+  previously fell back to `b"default_key"` when no `--password` was supplied, silently
+  encrypting with a known key. Now falls back to an empty key (no encryption) so the
+  behaviour is honest and non-deceptive.
+- **SAM/BAM `AuxiliaryData` silent fallback** (`src/handlers/sam_bam.rs`): Both the embed
+  and extract dispatch arms previously caught `AuxiliaryData` with a wildcard and silently
+  used `OptionalFields`. They now return `InvalidParameter` explicitly, consistent with the
+  other unimplemented strategies.
+
+### Added
+- **SAM/BAM `QualityScores` roundtrip test** (`src/handlers/sam_bam.rs`):
+  `test_sam_quality_scores_embedding_roundtrip` verifies the quality-score strategy
+  end-to-end, including biological-integrity check after embedding.
+
+### Changed (Clippy / code quality)
+- `src/handlers/vcf.rs`: Removed unused constant `CUSTOM_ID_PREFIX`.
+- `src/codec.rs`: Replaced `% 255 != 0` with `.is_multiple_of(255)`.
+- `src/handlers/sam_bam.rs`: Replaced `repeat(0u8).take(n)` with `repeat_n(0u8, n)`;
+  replaced manual `(x + 1) / 2` with `.div_ceil(2)`.
+- `src/ml/models.rs`: Fixed over-indented doc list item.
+- `src/monitoring/telemetry.rs`: Removed redundant `as i64` casts on `tv_sec` fields.
+- `src/monitoring/mod.rs`: Added `#[allow(clippy::await_holding_lock)]` on `start`/`stop`
+  (sequential single-task calls; deadlock risk is accepted and documented).
+- `src/validation.rs`: Replaced four `.max(0.0).min(1.0)` chains with `.clamp(0.0, 1.0)`;
+  replaced `% 2 != 0` with `.is_multiple_of(2)`; added `Default` impls for
+  `PerformanceAnalysis`, `ValidationReport`, and `TestDatasetManager`.
+- `README.md`: Updated test badge to `333+`.
+
 ## [0.3.10] - 2026-02-22
 
 ### Fixed

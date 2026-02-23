@@ -377,7 +377,7 @@ impl ClassicalStatisticalTests {
         } else {
             // Fisher approximation: z ≈ √(2χ²) - √(2k-1), p = 1 - Φ(z) (one-tailed right tail)
             let z = (2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt();
-            (1.0 - self.standard_normal_cdf(z)).max(0.0).min(1.0)
+            (1.0 - self.standard_normal_cdf(z)).clamp(0.0, 1.0)
         }
     }
 
@@ -442,7 +442,7 @@ impl ClassicalStatisticalTests {
 
         // Kolmogorov distribution approximation (clamped to valid range)
         let p = 2.0 * (-2.0 * z * z).exp();
-        p.max(0.0).min(1.0)
+        p.clamp(0.0, 1.0)
     }
 
     fn anderson_darling_p_value(&self, ad_stat: f64) -> f64 {
@@ -707,7 +707,7 @@ impl AdvancedSteganalysis {
     // Helper methods for wavelet and audio analysis
 
     fn haar_wavelet_transform(&self, data: &[f64]) -> Result<(Vec<f64>, Vec<f64>)> {
-        if data.len() % 2 != 0 {
+        if !data.len().is_multiple_of(2) {
             return Err(SteganoError::InvalidParameter(
                 "Data length must be even for Haar wavelet".to_string(),
             ));
@@ -755,7 +755,7 @@ impl AdvancedSteganalysis {
         let high_freq_ratio = high_freq_energy / total_energy;
 
         // Anomaly score based on unexpected high-frequency content
-        Ok((high_freq_ratio - 0.1).max(0.0).min(1.0)) // Expected ratio ~0.1 for speech
+        Ok((high_freq_ratio - 0.1).clamp(0.0, 1.0)) // Expected ratio ~0.1 for speech
     }
 
     fn phase_coherence_analysis(&self, audio_data: &[f32]) -> Result<f64> {
@@ -867,7 +867,7 @@ impl AdvancedSteganalysis {
         } else {
             // Fisher approximation: z ≈ √(2χ²) - √(2k-1), p = 1 - Φ(z) (one-tailed)
             let z = (2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt();
-            (1.0 - self.standard_normal_cdf(z)).max(0.0).min(1.0)
+            (1.0 - self.standard_normal_cdf(z)).clamp(0.0, 1.0)
         }
     }
 
@@ -1077,6 +1077,12 @@ impl PerformanceAnalysis {
             best_specificity,
             best_youden,
         )
+    }
+}
+
+impl Default for PerformanceAnalysis {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1646,6 +1652,12 @@ impl ValidationReport {
     }
 }
 
+impl Default for ValidationReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl fmt::Display for ValidationReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let summary = self.summary();
@@ -1820,6 +1832,12 @@ impl TestDatasetManager {
     /// List available datasets
     pub fn list_datasets(&self) -> Vec<String> {
         self.datasets.keys().cloned().collect()
+    }
+}
+
+impl Default for TestDatasetManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -98,7 +98,6 @@ const VCF_MAGIC_HEADER: &str = "##fileformat=VCF";
 const STEGANO_INFO_PREFIX: &str = "STEG";
 #[allow(dead_code)]
 const MAX_QUAL_PRECISION: u32 = 3; // Maximum decimal places for quality scores
-const CUSTOM_ID_PREFIX: &str = "var";
 
 impl Default for VcfHandler {
     fn default() -> Self {

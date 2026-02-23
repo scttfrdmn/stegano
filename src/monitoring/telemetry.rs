@@ -381,9 +381,9 @@ impl TelemetryCollector {
             return Err("getrusage failed".into());
         }
         let user_us =
-            ru.ru_utime.tv_sec as i64 * 1_000_000 + ru.ru_utime.tv_usec as i64;
+            ru.ru_utime.tv_sec * 1_000_000 + ru.ru_utime.tv_usec as i64;
         let sys_us =
-            ru.ru_stime.tv_sec as i64 * 1_000_000 + ru.ru_stime.tv_usec as i64;
+            ru.ru_stime.tv_sec * 1_000_000 + ru.ru_stime.tv_usec as i64;
         Ok((user_us, sys_us))
     }
 

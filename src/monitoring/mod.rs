@@ -105,6 +105,7 @@ impl MonitoringSystem {
     }
 
     /// Start the monitoring system background tasks
+    #[allow(clippy::await_holding_lock)]
     pub async fn start(&self) -> Result<()> {
         log::info!("Starting monitoring system...");
 
@@ -131,6 +132,7 @@ impl MonitoringSystem {
     }
 
     /// Stop the monitoring system
+    #[allow(clippy::await_holding_lock)]
     pub async fn stop(&self) -> Result<()> {
         log::info!("Stopping monitoring system...");
 

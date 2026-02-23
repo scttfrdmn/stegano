@@ -1065,7 +1065,7 @@ impl SamBamHandler {
             out.extend_from_slice(r.name.as_bytes());
             // pad with nulls to match original l_name
             let null_count = r.l_name as usize - r.name.len();
-            out.extend(std::iter::repeat(0u8).take(null_count));
+            out.extend(std::iter::repeat_n(0u8, null_count));
             out.extend_from_slice(&r.l_ref.to_le_bytes());
         }
 
@@ -1073,7 +1073,7 @@ impl SamBamHandler {
         for a in &bam.alignments {
             let read_name_bytes = a.read_name.as_bytes();
             // l_read_name includes null terminator
-            let seq_bytes = (a.l_seq as usize + 1) / 2;
+            let seq_bytes = (a.l_seq as usize).div_ceil(2);
             // block_size = fixed 32 bytes + variable fields
             let block_size: u32 = (32u32)
                 + a.l_read_name as u32
@@ -1097,7 +1097,7 @@ impl SamBamHandler {
             out.extend_from_slice(read_name_bytes);
             // null-pad to match l_read_name
             let null_count = a.l_read_name as usize - read_name_bytes.len();
-            out.extend(std::iter::repeat(0u8).take(null_count));
+            out.extend(std::iter::repeat_n(0u8, null_count));
             for &cigar_op in &a.cigar {
                 out.extend_from_slice(&cigar_op.to_le_bytes());
             }
@@ -1284,7 +1284,11 @@ impl DataHandler for SamBamHandler {
                         self.embed_sam_optional_fields(&mut sam, payload)
                             .or_else(|_| self.embed_comment_lines(&mut sam, payload))?
                     }
-                    _ => self.embed_sam_optional_fields(&mut sam, payload)?,
+                    SamBamEmbedStrategy::AuxiliaryData => {
+                        return Err(SteganoError::InvalidParameter(
+                            "AuxiliaryData strategy is not yet implemented".to_string(),
+                        ));
+                    }
                 };
 
                 // Serialize modified SAM back to data
@@ -1374,7 +1378,9 @@ impl DataHandler for SamBamHandler {
                         self.extract_sam_optional_fields(&sam)
                             .or_else(|_| self.extract_comment_lines(&sam))
                     }
-                    _ => self.extract_sam_optional_fields(&sam),
+                    SamBamEmbedStrategy::AuxiliaryData => Err(SteganoError::InvalidParameter(
+                        "AuxiliaryData strategy is not yet implemented".to_string(),
+                    )),
                 }
             }
             DataFormat::BAM => {
@@ -1571,5 +1577,49 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
         // Invalid SAM (sequence/quality length mismatch)
         let invalid_sam = b"@HD\tVN:1.0\nread1\t0\tchr1\t100\t60\t10M\t*\t0\t0\tATCG\tIIIIII\n";
         assert!(!handler.verify_integrity(invalid_sam, false).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_sam_quality_scores_embedding_roundtrip() {
+        let handler = SamBamHandler::new();
+
+        // Build a SAM with enough quality characters (≥ payload_bytes + 4 header bytes)
+        // Each alignment provides 100 quality chars; two alignments = 200 bits capacity.
+        // Payload "quality ok" (10 bytes) + 4-byte header = 14 bytes = 112 bits — fits.
+        let sam_data = create_minimal_sam();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::SAM,
+            raw_data: sam_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"quality ok";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        };
+        params.format_specific.insert(
+            "sam_strategy".to_string(),
+            serde_json::Value::String("quality".to_string()),
+        );
+
+        // Embed
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        // Extract
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+
+        // Biological integrity preserved: seq/qual lengths still match
+        assert!(handler.verify_integrity(&carrier.raw_data, false).unwrap());
     }
 }

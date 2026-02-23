@@ -42,7 +42,7 @@ pub async fn handle_embed(
     // Setup parameters
     let key = password
         .map(|p| p.as_bytes().to_vec())
-        .unwrap_or_else(|| b"default_key".to_vec());
+        .unwrap_or_default();
     let mut params = EmbedParams::new(key).with_stealth_level(stealth_level);
 
     if gpu {
@@ -129,7 +129,7 @@ pub async fn handle_extract(
     // Setup parameters
     let key = password
         .map(|p| p.as_bytes().to_vec())
-        .unwrap_or_else(|| b"default_key".to_vec());
+        .unwrap_or_default();
     let mut params = EmbedParams::new(key);
 
     if gpu {

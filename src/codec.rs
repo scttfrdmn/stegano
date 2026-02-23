@@ -171,7 +171,7 @@ fn rs_decode(data: &[u8], ecc_len: usize) -> crate::core::Result<Vec<u8>> {
     let orig_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
     let encoded_data = &data[4..];
 
-    if encoded_data.len() % 255 != 0 {
+    if !encoded_data.len().is_multiple_of(255) {
         return Err(SteganoError::IntegrityError(format!(
             "RS encoded data length {} is not a multiple of 255",
             encoded_data.len()
