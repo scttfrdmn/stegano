@@ -118,7 +118,7 @@ impl ImageryHandler {
             }
             ImageEmbedStrategy::AdaptiveLSB => {
                 // Variable bits per pixel based on local complexity
-                (total_pixels * 2, 96) // Conservative estimate with larger header
+                (total_pixels * 2, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
             }
             ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
                 // Not implemented — report zero capacity so callers don't attempt to use them
@@ -126,7 +126,7 @@ impl ImageryHandler {
             }
             ImageEmbedStrategy::EdgeBased => {
                 // Only embed in edge regions (estimate 30% of image)
-                (total_pixels * 3 / 10, 128)
+                (total_pixels * 3 / 10, 80) // 80 bits for 10-byte header
             }
         };
 
@@ -323,11 +323,11 @@ impl ImageryHandler {
                     continue;
                 }
 
-                // Calculate gradient magnitude for edge detection
-                let gx = (image_data[pixel_idx + channels] as i16)
-                    - (image_data[pixel_idx - channels] as i16);
-                let gy = (image_data[pixel_idx + width * channels] as i16)
-                    - (image_data[pixel_idx - width * channels] as i16);
+                // Calculate gradient magnitude for edge detection (use i32 to avoid overflow)
+                let gx = (image_data[pixel_idx + channels] as i32)
+                    - (image_data[pixel_idx - channels] as i32);
+                let gy = (image_data[pixel_idx + width * channels] as i32)
+                    - (image_data[pixel_idx - width * channels] as i32);
                 let gradient = ((gx * gx + gy * gy) as f64).sqrt();
 
                 // Only embed in edge regions (high gradient)
@@ -516,10 +516,10 @@ impl ImageryHandler {
                     continue;
                 }
 
-                let gx = (image_data[pixel_idx + channels] as i16)
-                    - (image_data[pixel_idx - channels] as i16);
-                let gy = (image_data[pixel_idx + width * channels] as i16)
-                    - (image_data[pixel_idx - width * channels] as i16);
+                let gx = (image_data[pixel_idx + channels] as i32)
+                    - (image_data[pixel_idx - channels] as i32);
+                let gy = (image_data[pixel_idx + width * channels] as i32)
+                    - (image_data[pixel_idx - width * channels] as i32);
                 let gradient = ((gx * gx + gy * gy) as f64).sqrt();
 
                 if gradient > 20.0 {
@@ -814,5 +814,46 @@ mod tests {
             result,
             Err(SteganoError::InsufficientCapacity { .. })
         ));
+    }
+
+    /// LCG-based pseudo-random image data: adjacent bytes differ widely → nearly
+    /// every interior pixel exceeds the gradient-20 threshold used by EdgeBased.
+    fn make_lcg_image(len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| ((i as u32).wrapping_mul(1664525).wrapping_add(1013904223) >> 8) as u8)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_edge_based_embedding_roundtrip() {
+        let handler = ImageryHandler::new();
+        let payload = b"edge";
+
+        // 100×100 RGB image (30,000 bytes); LCG values produce large pixel gradients
+        // so virtually every interior pixel qualifies as an edge pixel.
+        let mut carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: make_lcg_image(30000),
+            metadata: HashMap::new(),
+            dimensions: Some(Dimensions::new_2d(100, 100)),
+            sampling_rate: None,
+        };
+
+        // ECLevel::None: no RS overhead; verifies the raw EdgeBased round-trip.
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::High, // → EdgeBased
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
     }
 }

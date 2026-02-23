@@ -120,14 +120,14 @@ impl SignalHandler {
                 (num_chunks * phase_bins_per_chunk, 80)
             }
             SignalEmbedStrategy::SpreadSpectrum => {
-                // Spread across entire spectrum
-                let duration_seconds = sample_count / sampling_rate;
-                (duration_seconds * 100, 512) // 100 bits per second
+                // 1 bit per chip; chip_length = sample_rate / 1000 (1ms chips at 44.1kHz = 44 samples)
+                let chip_length = (sampling_rate / 1000).max(1);
+                (sample_count / chip_length, 80) // 80 bits for 10-byte header
             }
             SignalEmbedStrategy::EchoHiding => {
-                // Echo-based embedding
-                let duration_seconds = sample_count / sampling_rate;
-                (duration_seconds * 50, 256) // 50 bits per second
+                // 1 bit per 100ms segment; segment_length = sample_rate / 10
+                let segment_length = (sampling_rate / 10).max(1);
+                (sample_count / segment_length, 80) // 80 bits for 10-byte header
             }
         };
 
@@ -1186,6 +1186,102 @@ mod tests {
         assert_eq!(result.bytes_embedded, payload.len());
 
         let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    #[tokio::test]
+    async fn test_spread_spectrum_embedding_roundtrip() {
+        let handler = SignalHandler::new();
+        let payload = b"ss";
+
+        // Silent (all-zero) carrier: ensures the PN-correlation SNR is sufficient
+        // for reliable 1-bit-per-chip extraction (amplitude=0.001, chip_length=44 at
+        // 44.1 kHz → correlation magnitude ≈ 0.044, well above zero noise floor).
+        let sample_rate = 44100u32;
+        let chip_length = sample_rate as usize / 1000; // 44 samples per bit
+        let total_bits = (10 + payload.len()) * 8; // header + payload bits
+        let carrier_samples = (total_bits + 10) * chip_length; // generous headroom
+        let carrier_bytes = carrier_samples * 2; // 16-bit samples
+
+        let mut carrier = CarrierData {
+            format: DataFormat::WAV,
+            raw_data: vec![0u8; carrier_bytes],
+            metadata: std::collections::HashMap::new(),
+            dimensions: None,
+            sampling_rate: Some(sample_rate as f64),
+        };
+
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low, // will be overridden by direct strategy call
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        handler
+            .embed_frequency_domain(&mut carrier, payload, &params, &SignalEmbedStrategy::SpreadSpectrum)
+            .await
+            .unwrap();
+
+        let extracted = handler
+            .extract_with_strategy(&carrier, &SignalEmbedStrategy::SpreadSpectrum, &params)
+            .await
+            .unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    /// Generate white-noise-like i16 samples using a Xorshift32 PRNG (iterative state
+    /// update, not index-based).  Adjacent samples are nearly uncorrelated, giving
+    /// echo hiding the low-baseline-autocorrelation carrier it needs.
+    fn make_echo_carrier(len: usize) -> Vec<u8> {
+        let mut state: u32 = 2463534242; // Xorshift seed
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_echo_hiding_embedding_roundtrip() {
+        let handler = SignalHandler::new();
+        let payload = b"echo";
+
+        // Echo hiding encodes 1 bit per 100ms segment (segment_length = 4410 samples at
+        // 44.1 kHz).  Total bits = (10 + 4) * 8 = 112.  Need ≥ 112 * 4410 * 2 ≈ 988 KB.
+        // Use 1.1 MB of white-noise-like i16 samples (Xorshift32) so the echo at
+        // delay_0 / delay_1 is detectable against a near-zero autocorrelation baseline.
+        let mut carrier = CarrierData {
+            format: DataFormat::WAV,
+            raw_data: make_echo_carrier(1_100_000),
+            metadata: std::collections::HashMap::new(),
+            dimensions: None,
+            sampling_rate: Some(44100.0),
+        };
+
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        handler
+            .embed_frequency_domain(&mut carrier, payload, &params, &SignalEmbedStrategy::EchoHiding)
+            .await
+            .unwrap();
+
+        let extracted = handler
+            .extract_with_strategy(&carrier, &SignalEmbedStrategy::EchoHiding, &params)
+            .await
+            .unwrap();
         assert_eq!(extracted, payload);
     }
 }

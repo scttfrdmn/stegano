@@ -1,29 +1,26 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.11-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.12-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-332%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-337%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.7 - Latest Production Release
+## 🎯 Version 0.3.12 - Latest Production Release
 
-Stegano v0.3.7 completes the security pipeline by wiring encryption and Reed-Solomon error correction end-to-end:
-- ✅ **329 Tests Passing** - Comprehensive coverage across all modules
-- ✅ **Functional Encryption** - `EmbedParams::encryption_key` now drives real AES-256-GCM in all four handler families
-- ✅ **Functional Error Correction** - `EmbedParams::error_correction_level` wires to Reed-Solomon RS(255,k) for all handlers
-- ✅ **Self-Framing Codec** - `src/codec.rs` encode/decode pipeline; identical params produce identical round-trips
-- ✅ **Accurate Capacity Estimates** - Fixed 64→80 bit header overhead in imagery; 128→80 bits in signals
-- ✅ **Leaner Dependencies** - 7 unused crates removed (image, tiff, bio, csv, wav, wide, ndarray)
-- ✅ **Real Algorithm Implementations** - All stub/placeholder code replaced with production-quality algorithms
-- ✅ **Statistical Analysis** - Real KS goodness-of-fit, IQR/Z-score/MAD outlier detection, SP and histogram steganalysis
-- ✅ **Real Telemetry** - `getrusage(RUSAGE_SELF)` based memory/CPU sampling (no more random fakes)
-- ✅ **Validation Dashboard** - Human-readable `fmt::Display` output for `ValidationReport`
-- ✅ **Parallel Validation** - Classical statistical tests run concurrently via Rayon
-- ✅ **Enterprise Security** - AES-256-GCM with BLAKE3 integrity verification
+Stegano v0.3.12 delivers comprehensive correctness fixes and new roundtrip test coverage:
+- ✅ **337 Tests Passing** - Full roundtrip coverage for all five signal strategies, all imagery strategies, and all DICOM strategies
+- ✅ **DICOM PixelDataLSB Fixed** - Serialisation now syncs modified pixel bytes back to the data element before writing; embed/extract roundtrip verified
+- ✅ **Signal Capacity Estimates Fixed** - SpreadSpectrum and EchoHiding capacity formulas corrected to match actual algorithm bitrates
+- ✅ **Imagery Header Overhead Fixed** - AdaptiveLSB and EdgeBased overhead corrected to 80 bits (matching actual 10-byte header)
+- ✅ **VCF Extraction O(n) Performance** - INFO-field extraction no longer iterates 10,000 candidate keys per variant; direct key filtering via strip_prefix
+- ✅ **CLI Security** - Removed hardcoded `default_key` fallback; empty key now means no encryption
+- ✅ **Zero Clippy Warnings** - All warnings resolved: clamp(), is_multiple_of(), repeat_n(), div_ceil(), Default impls
+- ✅ **FFT Hermitian Symmetry** - Frequency-domain embedding correctly mirrors conjugate bins; no more round-trip drift
+- ✅ **SAM/BAM Strict Errors** - AuxiliaryData strategy now returns explicit errors instead of silently falling through
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

@@ -13,6 +13,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.12] - 2026-02-22
+
+### Fixed
+- **DICOM PixelDataLSB serialisation bug** (`src/handlers/dicom.rs`): `embed_pixel_data_lsb`
+  modified `dicom.pixel_data.pixel_data` in memory but `serialize_dicom` only serialised
+  the original `element.value` from `data_elements`. After any embed call, the modified
+  pixel bytes are now synced back to the matching data element before serialisation, so
+  extract round-trips correctly.
+- **Signal capacity estimates** (`src/handlers/signals.rs`): `SpreadSpectrum` incorrectly
+  used `duration_seconds * 100` (bits) with 512-bit overhead; corrected to
+  `sample_count / chip_length` where `chip_length = sampling_rate / 1000`.
+  `EchoHiding` incorrectly used `duration_seconds * 50` with 256-bit overhead; corrected
+  to `sample_count / segment_length` where `segment_length = sampling_rate / 10`.
+  Both now use the correct 80-bit header overhead.
+- **Imagery header overhead** (`src/handlers/imagery.rs`): `AdaptiveLSB` overhead was 96 bits
+  (should be 80); `EdgeBased` overhead was 128 bits (should be 80). All strategies now
+  correctly report the actual 10-byte (80-bit) header.
+- **Imagery gradient overflow** (`src/handlers/imagery.rs`): `embed_edge_based` and
+  `extract_edge_bits` computed `gx * gx + gy * gy` using `i16` arithmetic, which overflows
+  when pixel differences exceed ±181. Now uses `i32` before squaring.
+- **VCF O(n×10000) extraction** (`src/handlers/vcf.rs`): `extract_info_field_strategy`
+  iterated 0..10000 candidate keys per variant to find steganographic INFO fields.
+  Replaced with direct key filtering using `strip_prefix`, making extraction O(fields).
+- **FFI version string** (`src/ffi.rs`): Updated from `"0.3.11"` to `"0.3.12"`.
+
+### Added
+- **SpreadSpectrum roundtrip test** (`src/handlers/signals.rs`):
+  `test_spread_spectrum_embedding_roundtrip` verifies the full embed→extract cycle using
+  a silent (zero) carrier, ensuring the PN-correlation SNR is deterministically sufficient.
+- **EchoHiding roundtrip test** (`src/handlers/signals.rs`):
+  `test_echo_hiding_embedding_roundtrip` verifies the full embed→extract cycle using a
+  white-noise-like carrier (Xorshift32 PRNG) with negligible baseline autocorrelation.
+- **EdgeBased imagery roundtrip test** (`src/handlers/imagery.rs`):
+  `test_edge_based_embedding_roundtrip` verifies the full embed→extract cycle using a
+  pseudo-random LCG carrier that produces very high pixel gradients (nearly every interior
+  pixel exceeds the 20.0 threshold).
+- **DICOM PixelDataLSB roundtrip test** (`src/handlers/dicom.rs`):
+  `test_dicom_pixel_lsb_roundtrip` verifies the full embed→extract cycle; also served as
+  the regression test that caught the serialisation bug above.
+
 ## [0.3.11] - 2026-02-22
 
 ### Fixed

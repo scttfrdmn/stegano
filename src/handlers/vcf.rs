@@ -315,13 +315,14 @@ impl VcfHandler {
     fn extract_info_field_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
         let mut hex_chunks = Vec::new();
 
-        // Collect steganographic INFO fields in order
+        // Collect steganographic INFO fields in order by filtering keys directly
+        let prefix_with_sep = format!("{STEGANO_INFO_PREFIX}_");
         for variant in &vcf.variants {
-            for i in 0..10000 {
-                // Reasonable limit
-                let info_key = format!("{STEGANO_INFO_PREFIX}_{i:04}");
-                if let Some(chunk) = variant.info.get(&info_key) {
-                    hex_chunks.push((i, chunk.clone()));
+            for (key, chunk) in &variant.info {
+                if let Some(suffix) = key.strip_prefix(&prefix_with_sep) {
+                    if let Ok(index) = suffix.parse::<usize>() {
+                        hex_chunks.push((index, chunk.clone()));
+                    }
                 }
             }
         }

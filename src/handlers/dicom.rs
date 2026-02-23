@@ -1208,6 +1208,20 @@ impl DataHandler for DicomHandler {
                     }
                 };
 
+                // If pixel data was modified, sync the updated bytes back into the matching
+                // data element so serialize_dicom writes the embedded content (not the
+                // original element.value that was captured at parse time).
+                if let Some(ref pixel_data) = dicom.pixel_data {
+                    let updated = pixel_data.pixel_data.clone();
+                    for elem in &mut dicom.data_elements {
+                        if (elem.group, elem.element) == PIXEL_DATA_TAG {
+                            elem.length = updated.len() as u32;
+                            elem.value = updated;
+                            break;
+                        }
+                    }
+                }
+
                 // Serialize modified DICOM back to data
                 carrier.raw_data = self.serialize_dicom(&dicom);
 
@@ -1420,5 +1434,96 @@ mod tests {
         let mut invalid_dicom = valid_dicom.clone();
         invalid_dicom[130] = b'X'; // Corrupt the 'D' in "DICM"
         assert!(!handler.verify_dicom_integrity(&invalid_dicom).unwrap());
+    }
+
+    /// Build a self-contained DICOM with a pixel-data element so PixelDataLSB can embed.
+    /// Created from scratch (not based on create_minimal_dicom) to guarantee correct
+    /// element lengths and parseable structure.
+    /// Includes ROWS (0028,0010)=10, COLUMNS (0028,0011)=50, and
+    /// PixelData (7FE0,0010) with 500 varied bytes.
+    fn create_dicom_with_pixel_data() -> Vec<u8> {
+        let mut data = Vec::new();
+
+        // Preamble: 128 bytes of zeros
+        data.extend_from_slice(&[0u8; 128]);
+
+        // DICOM prefix
+        data.extend_from_slice(b"DICM");
+
+        // (0002,0000) Meta Group Length: UL, length=4, value=4
+        data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // tag
+        data.extend_from_slice(b"UL");                       // VR
+        data.extend_from_slice(&4u16.to_le_bytes());         // length (u16)
+        data.extend_from_slice(&[0x00, 0x00]);               // reserved
+        data.extend_from_slice(&4u32.to_le_bytes());         // value
+
+        // (0002,0010) Transfer Syntax UID: UI, length=18
+        // "1.2.840.10008.1.2\0" is exactly 18 bytes (even, no padding needed)
+        let ts_uid = b"1.2.840.10008.1.2\0";
+        data.extend_from_slice(&[0x02, 0x00, 0x10, 0x00]); // tag
+        data.extend_from_slice(b"UI");                       // VR
+        data.extend_from_slice(&(ts_uid.len() as u16).to_le_bytes()); // length=18
+        data.extend_from_slice(&[0x00, 0x00]);               // reserved
+        data.extend_from_slice(ts_uid);                      // value
+
+        // (0028,0010) Rows: US, value=10
+        data.extend_from_slice(&[0x28, 0x00, 0x10, 0x00]); // tag
+        data.extend_from_slice(b"US");                       // VR
+        data.extend_from_slice(&2u16.to_le_bytes());         // length
+        data.extend_from_slice(&[0x00, 0x00]);               // reserved
+        data.extend_from_slice(&10u16.to_le_bytes());        // value
+
+        // (0028,0011) Columns: US, value=50
+        data.extend_from_slice(&[0x28, 0x00, 0x11, 0x00]); // tag
+        data.extend_from_slice(b"US");                       // VR
+        data.extend_from_slice(&2u16.to_le_bytes());         // length
+        data.extend_from_slice(&[0x00, 0x00]);               // reserved
+        data.extend_from_slice(&50u16.to_le_bytes());        // value
+
+        // (7FE0,0010) Pixel Data: OW, 500 bytes of varied data
+        // has_explicit_length("OW") = true → 4-byte length, no reserved bytes
+        let pixel_bytes: Vec<u8> = (0u32..500)
+            .map(|i| i.wrapping_mul(37).wrapping_add(107) as u8)
+            .collect();
+        data.extend_from_slice(&[0xE0, 0x7F, 0x10, 0x00]); // tag
+        data.extend_from_slice(b"OW");                       // VR
+        data.extend_from_slice(&500u32.to_le_bytes());       // length (u32, explicit for OW)
+        data.extend_from_slice(&pixel_bytes);                // value
+
+        data
+    }
+
+    #[tokio::test]
+    async fn test_dicom_pixel_lsb_roundtrip() {
+        let handler = DicomHandler::new();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::DICOM,
+            raw_data: create_dicom_with_pixel_data(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"px";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "dicom_strategy".to_string(),
+            serde_json::Value::String("pixel_lsb".to_string()),
+        );
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
     }
 }
