@@ -817,11 +817,44 @@ mod tests {
     }
 
     /// LCG-based pseudo-random image data: adjacent bytes differ widely → nearly
-    /// every interior pixel exceeds the gradient-20 threshold used by EdgeBased.
+    /// every interior pixel exceeds the gradient-20 threshold used by EdgeBased,
+    /// and every pixel has variation > 10 required by AdaptiveLSB.
     fn make_lcg_image(len: usize) -> Vec<u8> {
         (0..len)
             .map(|i| ((i as u32).wrapping_mul(1664525).wrapping_add(1013904223) >> 8) as u8)
             .collect()
+    }
+
+    #[tokio::test]
+    async fn test_adaptive_lsb_embedding_roundtrip() {
+        let handler = ImageryHandler::new();
+        let payload = b"adapt";
+
+        // 100×100 RGB image (30,000 bytes); LCG values produce large pixel variation
+        // so every pixel qualifies for AdaptiveLSB embedding (variation > 10).
+        let mut carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: make_lcg_image(30000),
+            metadata: HashMap::new(),
+            dimensions: Some(Dimensions::new_2d(100, 100)),
+            sampling_rate: None,
+        };
+
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Medium, // → AdaptiveLSB
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+        };
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
     }
 
     #[tokio::test]

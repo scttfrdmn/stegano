@@ -13,6 +13,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.13] - 2026-02-22
+
+### Fixed
+- **StealthLevel::Maximum now uses SpreadSpectrum** (`src/handlers/signals.rs`): Both
+  `embed()` and `extract()` mapped `StealthLevel::Maximum` to `PhaseModulation`, making
+  it identical to `StealthLevel::High`. Now correctly maps to `SpreadSpectrum`.
+- **DICOM `create_minimal_dicom()` corrupt Transfer Syntax UID length** (`src/handlers/dicom.rs`):
+  The helper claimed length `0x1A` (26 bytes) for a Transfer Syntax UID value that is
+  18 bytes. The DICOM parser over-read 8 extra bytes, consuming the next element's tag
+  header and breaking subsequent element parsing. Fixed to `0x12` (18 bytes).
+- **SAM/BAM `AuxiliaryData` unreachable via public API** (`src/handlers/sam_bam.rs`):
+  The `sam_strategy` string dispatch had no entry for `"auxiliary"`. Added
+  `"auxiliary" => SamBamEmbedStrategy::AuxiliaryData` to both embed and extract dispatch.
+
+### Removed
+- **Dead code** (`src/handlers/signals.rs`): Removed unused `SignalEmbedStrategy::from_u8()`
+  method (annotated `#[allow(dead_code)]`).
+- **Unused dev-dependencies** (`Cargo.toml`): Removed `cargo-tarpaulin = "0.27"` and
+  `coverage-helper = "0.2"` from `[dev-dependencies]` — neither is used in any test.
+
+### Tests
+- Added `test_adaptive_lsb_embedding_roundtrip` (imagery): verifies AdaptiveLSB embed/extract round-trip
+- Added `test_vcf_variant_id_embedding_roundtrip` (vcf): verifies VariantIdSteganography ("id" strategy)
+- Added `test_empty_payload_all_ec_levels` (codec): empty payload round-trips for ECLevel::None/Medium/High/Maximum
+- Added `test_sam_auxiliary_data_embed_error` and `test_sam_auxiliary_data_extract_error` (sam_bam)
+- Added `test_dicom_unused_metadata_embed_error`, `test_dicom_unused_metadata_extract_error` (dicom)
+- Added `test_dicom_sequence_padding_embed_error`, `test_dicom_sequence_padding_extract_error` (dicom)
+- Total: **346 tests passing** (up from 337)
+
 ## [0.3.12] - 2026-02-22
 
 ### Fixed

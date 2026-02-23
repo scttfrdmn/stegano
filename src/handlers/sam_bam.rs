@@ -1265,6 +1265,7 @@ impl DataHandler for SamBamHandler {
                         "quality" => SamBamEmbedStrategy::QualityScores,
                         "comment" => SamBamEmbedStrategy::CommentLines,
                         "multi" => SamBamEmbedStrategy::MultiStrategy,
+                        "auxiliary" => SamBamEmbedStrategy::AuxiliaryData,
                         _ => SamBamEmbedStrategy::OptionalFields,
                     })
                     .unwrap_or(SamBamEmbedStrategy::OptionalFields);
@@ -1363,6 +1364,7 @@ impl DataHandler for SamBamHandler {
                         "quality" => SamBamEmbedStrategy::QualityScores,
                         "comment" => SamBamEmbedStrategy::CommentLines,
                         "multi" => SamBamEmbedStrategy::MultiStrategy,
+                        "auxiliary" => SamBamEmbedStrategy::AuxiliaryData,
                         _ => SamBamEmbedStrategy::OptionalFields,
                     })
                     .unwrap_or(SamBamEmbedStrategy::OptionalFields);
@@ -1621,5 +1623,66 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
 
         // Biological integrity preserved: seq/qual lengths still match
         assert!(handler.verify_integrity(&carrier.raw_data, false).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_sam_auxiliary_data_embed_error() {
+        let handler = SamBamHandler::new();
+        let sam_data = create_minimal_sam();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::SAM,
+            raw_data: sam_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"test";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        };
+        params.format_specific.insert(
+            "sam_strategy".to_string(),
+            serde_json::Value::String("auxiliary".to_string()),
+        );
+
+        let result = handler.embed(&mut carrier, payload, &params).await;
+        assert!(result.is_err(), "AuxiliaryData embed should return error (not yet implemented)");
+    }
+
+    #[tokio::test]
+    async fn test_sam_auxiliary_data_extract_error() {
+        let handler = SamBamHandler::new();
+        let sam_data = create_minimal_sam();
+
+        let carrier = CarrierData {
+            format: DataFormat::SAM,
+            raw_data: sam_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        };
+        params.format_specific.insert(
+            "sam_strategy".to_string(),
+            serde_json::Value::String("auxiliary".to_string()),
+        );
+
+        let result = handler.extract(&carrier, &params).await;
+        assert!(result.is_err(), "AuxiliaryData extract should return error (not yet implemented)");
     }
 }

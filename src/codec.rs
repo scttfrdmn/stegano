@@ -348,6 +348,17 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_payload_all_ec_levels() {
+        let payload = b"";
+        for level in [ECLevel::None, ECLevel::Medium, ECLevel::High, ECLevel::Maximum] {
+            let params = params_with_ec(level);
+            let encoded = encode_payload(payload, &params).unwrap();
+            let decoded = decode_payload(&encoded, &params).unwrap();
+            assert_eq!(decoded, payload, "failed for {level:?}");
+        }
+    }
+
+    #[test]
     fn test_large_payload_roundtrip() {
         let params = params_with_ec(ECLevel::Low);
         let payload = vec![0xABu8; 5000]; // 5 KB, spans many RS blocks

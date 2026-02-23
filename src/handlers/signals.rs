@@ -41,17 +41,6 @@ impl SignalEmbedStrategy {
         }
     }
 
-    #[allow(dead_code)]
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(SignalEmbedStrategy::TimeDomainLSB),
-            1 => Some(SignalEmbedStrategy::FrequencyDomain),
-            2 => Some(SignalEmbedStrategy::PhaseModulation),
-            3 => Some(SignalEmbedStrategy::SpreadSpectrum),
-            4 => Some(SignalEmbedStrategy::EchoHiding),
-            _ => None,
-        }
-    }
 }
 
 impl SignalHandler {
@@ -817,7 +806,7 @@ impl DataHandler for SignalHandler {
             StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
             StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
             StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
-            StealthLevel::Maximum => SignalEmbedStrategy::PhaseModulation,
+            StealthLevel::Maximum => SignalEmbedStrategy::SpreadSpectrum,
         };
 
         self.embed_frequency_domain(carrier, payload, params, &strategy)
@@ -831,7 +820,7 @@ impl DataHandler for SignalHandler {
             StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
             StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
             StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
-            StealthLevel::Maximum => SignalEmbedStrategy::PhaseModulation,
+            StealthLevel::Maximum => SignalEmbedStrategy::SpreadSpectrum,
         };
         self.extract_with_strategy(carrier, &strategy, params).await
     }

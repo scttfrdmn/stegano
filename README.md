@@ -1,26 +1,22 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.12-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.13-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-337%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-346%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.12 - Latest Production Release
+## 🎯 Version 0.3.13 - Latest Production Release
 
-Stegano v0.3.12 delivers comprehensive correctness fixes and new roundtrip test coverage:
-- ✅ **337 Tests Passing** - Full roundtrip coverage for all five signal strategies, all imagery strategies, and all DICOM strategies
-- ✅ **DICOM PixelDataLSB Fixed** - Serialisation now syncs modified pixel bytes back to the data element before writing; embed/extract roundtrip verified
-- ✅ **Signal Capacity Estimates Fixed** - SpreadSpectrum and EchoHiding capacity formulas corrected to match actual algorithm bitrates
-- ✅ **Imagery Header Overhead Fixed** - AdaptiveLSB and EdgeBased overhead corrected to 80 bits (matching actual 10-byte header)
-- ✅ **VCF Extraction O(n) Performance** - INFO-field extraction no longer iterates 10,000 candidate keys per variant; direct key filtering via strip_prefix
-- ✅ **CLI Security** - Removed hardcoded `default_key` fallback; empty key now means no encryption
-- ✅ **Zero Clippy Warnings** - All warnings resolved: clamp(), is_multiple_of(), repeat_n(), div_ceil(), Default impls
-- ✅ **FFT Hermitian Symmetry** - Frequency-domain embedding correctly mirrors conjugate bins; no more round-trip drift
-- ✅ **SAM/BAM Strict Errors** - AuxiliaryData strategy now returns explicit errors instead of silently falling through
+Stegano v0.3.13 delivers API correctness fixes, new test coverage for all code paths, and dependency cleanup:
+- ✅ **346 Tests Passing** - Added roundtrip tests for AdaptiveLSB, VariantIdSteganography, empty payloads at all EC levels; error path tests for AuxiliaryData (SAM/BAM), UnusedMetadata and SequencePadding (DICOM)
+- ✅ **StealthLevel::Maximum Now Uses SpreadSpectrum** - Previously mapped to PhaseModulation (same as High); now correctly routes to SpreadSpectrum in both `embed()` and `extract()`
+- ✅ **DICOM Test Helper Fixed** - `create_minimal_dicom()` claimed Transfer Syntax UID length of 26 bytes but wrote 18; parser over-read and corrupted subsequent element headers
+- ✅ **SAM/BAM AuxiliaryData Reachable** - "auxiliary" key added to `sam_strategy` dispatch; strategy was previously unreachable via public API
+- ✅ **Dead Code Removed** - `SignalEmbedStrategy::from_u8()` and `cargo-tarpaulin`/`coverage-helper` dev-dependencies removed
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis
@@ -392,16 +388,17 @@ cargo test
 - **Non-coding Region Insertion**: Strategic placement in intergenic regions (planned)
 
 #### Scientific Imagery (TIFF/Microscopy)
-- **Wavelet Domain Embedding**: Frequency domain hiding with perceptual preservation
+- **Simple LSB**: Direct least-significant-bit substitution (StealthLevel::Low)
+- **Adaptive LSB**: Content-aware embedding at high-variation pixels (StealthLevel::Medium)
+- **Edge-Based**: Embedding at detected edge regions for high stealth (StealthLevel::High/Maximum)
 - **Scientific Metadata Fields**: Embed in TIFF tags and microscopy parameters
-- **Z-stack LSB**: Multi-dimensional hiding in microscopy stacks
-- **Perceptually Guided LSB**: Content-aware embedding preserving scientific accuracy
 
 #### Signal Data (WAV/Binary Signals)
-- **Spread Spectrum Embedding**: Robust against signal processing operations
-- **Phase Modulation**: Preserve amplitude characteristics critical for analysis
-- **Echo Hiding**: Temporal domain embedding for audio signals
-- **FFT-based Embedding**: Frequency domain manipulation with noise tolerance
+- **Time Domain LSB**: Direct sample LSB substitution (StealthLevel::Low)
+- **FFT-based Embedding**: Frequency domain manipulation (StealthLevel::Medium)
+- **Phase Modulation**: Preserve amplitude characteristics (StealthLevel::High)
+- **Spread Spectrum**: Chip-based spreading for maximum stealth (StealthLevel::Maximum)
+- **Echo Hiding**: Temporal domain embedding (internal strategy, not mapped to StealthLevel)
 
 ## Security Features
 
@@ -424,10 +421,10 @@ cargo test
 
 ### Steganographic Security Levels
 
-- **Maximum Stealth**: Minimal capacity, undetectable embedding
-- **High**: Balanced approach with good security/capacity ratio  
-- **Medium**: Higher capacity with reasonable stealth
-- **Low**: Maximum capacity for trusted environments
+- **Maximum Stealth** (`StealthLevel::Maximum`): Spread Spectrum (signals), Edge-Based (imagery) — lowest detectable footprint
+- **High** (`StealthLevel::High`): Phase Modulation (signals), Edge-Based (imagery) — balanced security/capacity
+- **Medium** (`StealthLevel::Medium`): FFT-based (signals), Adaptive LSB (imagery) — higher capacity with reasonable stealth
+- **Low** (`StealthLevel::Low`): Time Domain LSB (signals), Simple LSB (imagery) — maximum capacity for trusted environments
 
 ## Performance Targets
 

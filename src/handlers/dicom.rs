@@ -1320,7 +1320,7 @@ mod tests {
         // Transfer Syntax UID (0002,0010)
         data.extend_from_slice(&[0x02, 0x00, 0x10, 0x00]); // Tag
         data.extend_from_slice(b"UI"); // VR
-        data.extend_from_slice(&[0x1A, 0x00]); // Length
+        data.extend_from_slice(&[0x12, 0x00]); // Length: 18 bytes
         data.extend_from_slice(&[0x00, 0x00]); // Reserved
         data.extend_from_slice(b"1.2.840.10008.1.2\0"); // Implicit VR Little Endian
 
@@ -1525,5 +1525,111 @@ mod tests {
 
         let extracted = handler.extract(&carrier, &params).await.unwrap();
         assert_eq!(extracted, payload);
+    }
+
+    #[tokio::test]
+    async fn test_dicom_unused_metadata_embed_error() {
+        let handler = DicomHandler::new();
+        let mut carrier = CarrierData {
+            format: DataFormat::DICOM,
+            raw_data: create_minimal_dicom(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+        let payload = b"test";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "dicom_strategy".to_string(),
+            serde_json::Value::String("metadata".to_string()),
+        );
+        let result = handler.embed(&mut carrier, payload, &params).await;
+        assert!(result.is_err(), "UnusedMetadata embed should return error (not yet implemented)");
+    }
+
+    #[tokio::test]
+    async fn test_dicom_sequence_padding_embed_error() {
+        let handler = DicomHandler::new();
+        let mut carrier = CarrierData {
+            format: DataFormat::DICOM,
+            raw_data: create_minimal_dicom(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+        let payload = b"test";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "dicom_strategy".to_string(),
+            serde_json::Value::String("sequence".to_string()),
+        );
+        let result = handler.embed(&mut carrier, payload, &params).await;
+        assert!(result.is_err(), "SequencePadding embed should return error (not yet implemented)");
+    }
+
+    #[tokio::test]
+    async fn test_dicom_unused_metadata_extract_error() {
+        let handler = DicomHandler::new();
+        let carrier = CarrierData {
+            format: DataFormat::DICOM,
+            raw_data: create_minimal_dicom(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "dicom_strategy".to_string(),
+            serde_json::Value::String("metadata".to_string()),
+        );
+        let result = handler.extract(&carrier, &params).await;
+        assert!(result.is_err(), "UnusedMetadata extract should return error (not yet implemented)");
+    }
+
+    #[tokio::test]
+    async fn test_dicom_sequence_padding_extract_error() {
+        let handler = DicomHandler::new();
+        let carrier = CarrierData {
+            format: DataFormat::DICOM,
+            raw_data: create_minimal_dicom(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "dicom_strategy".to_string(),
+            serde_json::Value::String("sequence".to_string()),
+        );
+        let result = handler.extract(&carrier, &params).await;
+        assert!(result.is_err(), "SequencePadding extract should return error (not yet implemented)");
     }
 }
