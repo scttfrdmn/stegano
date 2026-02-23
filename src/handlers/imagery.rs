@@ -102,14 +102,22 @@ impl ImageryHandler {
             ))?;
         let total_pixels = dimensions.width * dimensions.height;
 
+        // Maximum possible capacity: 1 bit per byte in raw_data (LSB methods store
+        // at most 1 bit per carrier byte). Dimensions-based formulas can overstate
+        // reality when raw_data is smaller than total_pixels * assumed_channels
+        // (e.g. grayscale images whose raw_data.len() == total_pixels, not total_pixels*3).
+        let raw_data_bits = carrier.raw_data.len();
+
         let (capacity_bits, overhead) = match strategy {
             ImageEmbedStrategy::SimpleLSB => {
                 // 1 bit per channel (RGB = 3 bits per pixel)
-                (total_pixels * 3, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
+                let bits = (total_pixels as usize * 3).min(raw_data_bits);
+                (bits, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
             }
             ImageEmbedStrategy::AdaptiveLSB => {
                 // Variable bits per pixel based on local complexity
-                (total_pixels * 2, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
+                let bits = (total_pixels as usize * 2).min(raw_data_bits);
+                (bits, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
             }
             ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
                 // Not implemented — report zero capacity so callers don't attempt to use them
@@ -117,7 +125,8 @@ impl ImageryHandler {
             }
             ImageEmbedStrategy::EdgeBased => {
                 // Only embed in edge regions (estimate 30% of image)
-                (total_pixels * 3 / 10, 80) // 80 bits for 10-byte header
+                let bits = (total_pixels as usize * 3 / 10).min(raw_data_bits);
+                (bits, 80) // 80 bits for 10-byte header
             }
         };
 
@@ -989,5 +998,39 @@ mod tests {
 
         let extracted = handler.extract(&carrier, &params).await.unwrap();
         assert_eq!(extracted, payload);
+    }
+
+    #[test]
+    fn test_capacity_estimate_bounded_by_raw_data() {
+        // Regression test: capacity estimate must never exceed raw_data.len() bits.
+        // A grayscale image has raw_data.len() == total_pixels (1 byte/pixel),
+        // but the dimension-based formula would compute total_pixels * 3 bits (RGB
+        // assumption), overestimating 3×.  The cap added in v0.3.17 prevents this.
+        let handler = ImageryHandler::new();
+
+        // Simulate a grayscale 100×100 image: raw_data has only 10,000 bytes (not 30,000).
+        let carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: vec![0xAAu8; 10_000], // 10,000 bytes = 10,000 bits max LSB capacity
+            metadata: HashMap::new(),
+            dimensions: Some(Dimensions::new_2d(100, 100)), // 10,000 pixels
+            sampling_rate: None,
+        };
+
+        let capacity = handler.estimate_capacity(&carrier).unwrap();
+
+        // All estimates must be ≤ raw_data.len() bits (10,000).
+        assert!(
+            capacity.total_bits <= 10_000,
+            "total_bits {} exceeds raw_data capacity 10,000",
+            capacity.total_bits
+        );
+        let low = capacity.format_specific_info["capacity_low_stealth_bits"]
+            .as_u64().unwrap() as usize;
+        assert!(
+            low <= 10_000,
+            "low_stealth capacity {} exceeds raw_data capacity 10,000",
+            low
+        );
     }
 }

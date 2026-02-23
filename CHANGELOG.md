@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.17] - 2026-02-22
+
+### Fixed
+- **Imagery capacity estimation overflow** (`src/handlers/imagery.rs`):
+  `estimate_image_capacity()` computed `total_pixels * 3` bits for SimpleLSB (and similar
+  dimension-based formulas for other strategies). For a grayscale image (`raw_data.len() ==
+  total_pixels`), this overestimates by 3×. The inflated estimate passes the capacity guard in
+  `embed_lsb()` without error, but `embed_lsb_pixels()` silently breaks early when it exhausts
+  `image_data` — returning `Ok` while writing only a fraction of the payload. Extraction then
+  returns garbled or truncated data with no error surfaced.
+
+  Fix: all three non-unimplemented strategies now cap their computed `capacity_bits` by
+  `carrier.raw_data.len()`, since LSB methods store at most 1 bit per carrier byte.
+
+### Tests
+- `test_capacity_estimate_bounded_by_raw_data`: regression test with a 10,000-byte grayscale
+  carrier (100×100 pixels, 1 byte/pixel). Verifies all per-stealth-level estimates are ≤
+  `raw_data.len()` bits (10,000), not the inflated 30,000 that dimensions alone would imply.
+
 ## [0.3.16] - 2026-02-22
 
 ### Fixed
