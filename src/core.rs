@@ -342,6 +342,7 @@ impl Dimensions {
 ///     stealth_level: StealthLevel::High,
 ///     use_gpu: false,
 ///     format_specific: format_params,
+///     enable_validation: false,
 /// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

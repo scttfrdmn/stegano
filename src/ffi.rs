@@ -10,6 +10,16 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
 use std::ptr;
 use std::slice;
+use std::sync::OnceLock;
+
+/// Single shared Tokio runtime — avoids creating a new runtime per FFI call.
+static TOKIO_RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn ffi_runtime() -> &'static tokio::runtime::Runtime {
+    TOKIO_RT.get_or_init(|| {
+        tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for FFI")
+    })
+}
 
 /// C-compatible error codes
 #[repr(C)]
@@ -295,11 +305,8 @@ pub unsafe extern "C" fn stegano_embed(
 
     match registry.get_handler(&carrier.format) {
         Some(handler) => {
-            // Use a runtime for async call
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(_) => return SteganoErrorCode::Unknown,
-            };
+            // Use the shared static runtime
+            let rt = ffi_runtime();
 
             match rt.block_on(handler.embed(&mut carrier, payload_slice, &params)) {
                 Ok(result) => {
@@ -397,11 +404,8 @@ pub unsafe extern "C" fn stegano_extract(
 
     match registry.get_handler(&carrier.format) {
         Some(handler) => {
-            // Use a runtime for async call
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(_) => return SteganoErrorCode::Unknown,
-            };
+            // Use the shared static runtime
+            let rt = ffi_runtime();
 
             match rt.block_on(handler.extract(&carrier, &params)) {
                 Ok(payload) => {

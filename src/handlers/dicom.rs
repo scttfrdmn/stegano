@@ -321,12 +321,7 @@ impl DicomHandler {
                     data_elements.push(element);
 
                     // Break if we've moved past file meta information and found some data
-                    if should_break {
-                        // Continue parsing but we can optimize by breaking early for large files
-                        if data_elements.len() > 1000 {
-                            break;
-                        }
-                    }
+                    let _ = should_break; // No artificial cap — parse all elements
                 }
                 Err(e) => {
                     log::warn!("Failed to parse DICOM element at offset {offset}: {e}");
@@ -864,9 +859,13 @@ impl DicomHandler {
             SteganoError::IntegrityError("No pixel data found in DICOM".to_string())
         })?;
 
-        // Convert payload to bits
+        // Prepend 4-byte little-endian length header so extraction is self-framing
+        let len_bytes = (payload.len() as u32).to_le_bytes();
+        let framed: Vec<u8> = len_bytes.iter().chain(payload.iter()).copied().collect();
+
+        // Convert framed payload to bits (LSB-first per byte)
         let mut payload_bits = Vec::new();
-        for byte in payload {
+        for byte in &framed {
             for i in 0..8 {
                 payload_bits.push((byte >> i) & 1);
             }
@@ -903,30 +902,49 @@ impl DicomHandler {
         })
     }
 
-    /// Extract payload from pixel data LSB
-    fn extract_pixel_data_lsb(&self, dicom: &DicomFile, payload_length: usize) -> Result<Vec<u8>> {
+    /// Extract payload from pixel data LSB (self-framing: reads 4-byte length header first)
+    fn extract_pixel_data_lsb(&self, dicom: &DicomFile) -> Result<Vec<u8>> {
         let pixel_data = dicom.pixel_data.as_ref().ok_or_else(|| {
             SteganoError::IntegrityError("No pixel data found in DICOM".to_string())
         })?;
 
-        let required_bits = payload_length * 8;
+        // Need at least 32 bits for the length header
+        if pixel_data.pixel_data.len() < 32 {
+            return Err(SteganoError::IntegrityError(
+                "Insufficient pixel data for length header".to_string(),
+            ));
+        }
 
+        // Read 4-byte (32-bit) length header from the first 32 LSBs
+        let mut header_bits = [0u8; 32];
+        for (i, bit) in header_bits.iter_mut().enumerate() {
+            *bit = pixel_data.pixel_data[i] & 1;
+        }
+        let mut len_bytes = [0u8; 4];
+        for (byte_idx, chunk) in header_bits.chunks(8).enumerate() {
+            let mut byte = 0u8;
+            for (i, &bit) in chunk.iter().enumerate() {
+                byte |= bit << i;
+            }
+            len_bytes[byte_idx] = byte;
+        }
+        let payload_length = u32::from_le_bytes(len_bytes) as usize;
+
+        let required_bits = 32 + payload_length * 8;
         if required_bits > pixel_data.pixel_data.len() {
             return Err(SteganoError::IntegrityError(
                 "Insufficient pixel data for extraction".to_string(),
             ));
         }
 
-        // Extract bits from LSB
-        let mut extracted_bits = Vec::new();
-        for i in 0..required_bits {
-            if i < pixel_data.pixel_data.len() {
-                extracted_bits.push(pixel_data.pixel_data[i] & 1);
-            }
+        // Extract payload bits (after the 32-bit header)
+        let mut extracted_bits = Vec::with_capacity(payload_length * 8);
+        for i in 32..required_bits {
+            extracted_bits.push(pixel_data.pixel_data[i] & 1);
         }
 
         // Convert bits back to bytes
-        let mut payload = Vec::new();
+        let mut payload = Vec::with_capacity(payload_length);
         for chunk in extracted_bits.chunks(8) {
             if chunk.len() == 8 {
                 let mut byte = 0u8;
@@ -1240,16 +1258,12 @@ impl DataHandler for DicomHandler {
                         self.extract_private_data_elements(&dicom)
                     }
                     DicomEmbedStrategy::PixelDataLSB => {
-                        // For LSB, we need to know the payload length
-                        // This is a limitation - in practice, would store length in metadata
-                        let estimated_length = 100; // Default estimate
-                        self.extract_pixel_data_lsb(&dicom, estimated_length)
+                        self.extract_pixel_data_lsb(&dicom)
                     }
                     DicomEmbedStrategy::MultiStrategy => {
                         // Try strategies in order of preference
                         self.extract_private_data_elements(&dicom).or_else(|_| {
-                            let estimated_length = 100;
-                            self.extract_pixel_data_lsb(&dicom, estimated_length)
+                            self.extract_pixel_data_lsb(&dicom)
                         })
                     }
                     _ => {

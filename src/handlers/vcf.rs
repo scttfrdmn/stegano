@@ -399,28 +399,23 @@ impl VcfHandler {
         let mut bit_index = 0;
         let mut variants_modified = 0;
 
-        // Embed bits in quality score decimal places
+        // Embed 3 bits per variant by storing them in the low 3 bits of the integer quality score.
+        // This avoids floating-point decimal-precision issues: qual is stored as floor(qual/8)*8 + 3-bit_value.
         for &var_idx in &available_variants {
             if bit_index >= payload_bits.len() {
                 break;
             }
 
             if let Some(qual) = vcf.variants[var_idx].qual {
-                // Modify quality score to embed up to 3 bits
-                let mut modified_qual = qual.floor(); // Remove existing decimal places
-                let mut decimal_part = 0.0;
-
-                // Embed up to 3 bits in decimal places
-                for decimal_pos in 1..=3 {
-                    if bit_index < payload_bits.len() {
-                        let bit = payload_bits[bit_index];
-                        decimal_part += (bit as f32) * 10.0_f32.powi(-decimal_pos);
-                        bit_index += 1;
-                    }
-                }
-
-                modified_qual += decimal_part;
-                vcf.variants[var_idx].qual = Some(modified_qual);
+                let integer_qual = qual.round() as u32;
+                // Pack up to 3 bits into the low 3 bits
+                let b0 = if bit_index < payload_bits.len() { let b = payload_bits[bit_index]; bit_index += 1; b } else { 0 };
+                let b1 = if bit_index < payload_bits.len() { let b = payload_bits[bit_index]; bit_index += 1; b } else { 0 };
+                let b2 = if bit_index < payload_bits.len() { let b = payload_bits[bit_index]; bit_index += 1; b } else { 0 };
+                let triplet = b0 as u32 | ((b1 as u32) << 1) | ((b2 as u32) << 2);
+                // Store: clear low 3 bits, set to triplet
+                let new_qual = (integer_qual & !7) | (triplet & 7);
+                vcf.variants[var_idx].qual = Some(new_qual as f32);
                 variants_modified += 1;
             }
         }
@@ -439,18 +434,14 @@ impl VcfHandler {
     fn extract_quality_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
         let mut extracted_bits = Vec::new();
 
-        // Extract bits from quality score decimal places
+        // Extract bits from low 3 bits of integer quality score (matches embed_quality_strategy)
         for variant in &vcf.variants {
             if let Some(qual) = variant.qual {
-                let integer_part = qual.floor();
-                let decimal_part = qual - integer_part;
-
-                // Extract up to 3 bits from decimal places
-                for decimal_pos in 1..=3 {
-                    let place_value = 10.0_f32.powi(-decimal_pos);
-                    let digit = ((decimal_part / place_value) % 10.0).round() as u8;
-                    extracted_bits.push(digit & 1);
-                }
+                let integer_qual = qual.round() as u32;
+                let triplet = integer_qual & 7;
+                extracted_bits.push((triplet & 1) as u8);
+                extracted_bits.push(((triplet >> 1) & 1) as u8);
+                extracted_bits.push(((triplet >> 2) & 1) as u8);
             }
         }
 
@@ -766,9 +757,9 @@ impl VcfHandler {
             variant.alt_alleles.join(","),
         ];
 
-        // Quality field
+        // Quality field — use integer formatting since we embed in integer bits
         if let Some(qual) = variant.qual {
-            fields.push(format!("{qual:.3}"));
+            fields.push(format!("{}", qual.round() as u32));
         } else {
             fields.push(".".to_string());
         }

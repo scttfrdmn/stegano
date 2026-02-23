@@ -338,11 +338,10 @@ impl SamBamHandler {
             references.push(reference);
         }
 
-        // Read alignment records (simplified - just read a few for demonstration)
+        // Read all alignment records
         let mut alignments = Vec::new();
-        let max_alignments = 100; // Limit for performance
 
-        while offset < data.len() && alignments.len() < max_alignments {
+        while offset < data.len() {
             match self.parse_bam_alignment(data, &mut offset) {
                 Ok(alignment) => alignments.push(alignment),
                 Err(_) => break, // Stop on parsing error
@@ -792,21 +791,26 @@ impl SamBamHandler {
         Ok(payload)
     }
 
-    /// Embed payload in quality scores
+    /// Embed payload in quality scores (self-framing: 4-byte LE length header prepended)
     fn embed_quality_scores(&self, sam: &mut SamFile, payload: &[u8]) -> Result<SamBamEmbedResult> {
-        // Convert payload to bits
+        // Prepend 4-byte little-endian length header
+        let len_bytes = (payload.len() as u32).to_le_bytes();
+        let framed: Vec<u8> = len_bytes.iter().chain(payload.iter()).copied().collect();
+
+        // Convert framed payload to bits (LSB-first per byte)
         let mut payload_bits = Vec::new();
-        for byte in payload {
+        for byte in &framed {
             for i in 0..8 {
                 payload_bits.push((byte >> i) & 1);
             }
         }
 
-        // Count available quality score positions
-        let mut total_quals = 0;
-        for alignment in &sam.alignments {
-            total_quals += alignment.qual.len();
-        }
+        // Count available quality score positions (only valid ASCII 33–126)
+        let total_quals: usize = sam
+            .alignments
+            .iter()
+            .map(|a| a.qual.chars().filter(|&c| (33u8..=126u8).contains(&(c as u8))).count())
+            .sum();
 
         if payload_bits.len() > total_quals {
             return Err(SteganoError::InsufficientCapacity {
@@ -862,38 +866,47 @@ impl SamBamHandler {
         })
     }
 
-    /// Extract payload from quality scores
-    fn extract_quality_scores(&self, sam: &SamFile, payload_length: usize) -> Result<Vec<u8>> {
-        let required_bits = payload_length * 8;
-        let mut extracted_bits = Vec::new();
+    /// Extract payload from quality scores (self-framing: reads 4-byte length header first)
+    fn extract_quality_scores(&self, sam: &SamFile) -> Result<Vec<u8>> {
+        // Collect all LSBs from valid quality score characters
+        let mut all_bits: Vec<u8> = sam
+            .alignments
+            .iter()
+            .flat_map(|a| a.qual.chars())
+            .filter(|&c| (33u8..=126u8).contains(&(c as u8)))
+            .map(|c| c as u8 & 1)
+            .collect();
 
-        // Extract bits from quality scores
-        for alignment in &sam.alignments {
-            if extracted_bits.len() >= required_bits {
-                break;
-            }
-
-            for c in alignment.qual.chars() {
-                if extracted_bits.len() >= required_bits {
-                    break;
-                }
-
-                let ascii_val = c as u8;
-                if (33..=126).contains(&ascii_val) {
-                    extracted_bits.push(ascii_val & 1);
-                }
-            }
+        // Need at least 32 bits for length header
+        if all_bits.len() < 32 {
+            return Err(SteganoError::IntegrityError(
+                "Insufficient quality data for length header".to_string(),
+            ));
         }
 
-        if extracted_bits.len() < required_bits {
+        // Read 4-byte LE length from the first 32 bits
+        let mut len_bytes = [0u8; 4];
+        for (byte_idx, chunk) in all_bits[..32].chunks(8).enumerate() {
+            let mut byte = 0u8;
+            for (i, &bit) in chunk.iter().enumerate() {
+                byte |= bit << i;
+            }
+            len_bytes[byte_idx] = byte;
+        }
+        let payload_length = u32::from_le_bytes(len_bytes) as usize;
+
+        let required_bits = 32 + payload_length * 8;
+        if all_bits.len() < required_bits {
             return Err(SteganoError::IntegrityError(
                 "Insufficient quality data for extraction".to_string(),
             ));
         }
 
-        // Convert bits back to bytes
-        let mut payload = Vec::new();
-        for chunk in extracted_bits.chunks(8) {
+        all_bits.truncate(required_bits);
+
+        // Convert payload bits (skip first 32 header bits) back to bytes
+        let mut payload = Vec::with_capacity(payload_length);
+        for chunk in all_bits[32..].chunks(8) {
             if chunk.len() == 8 {
                 let mut byte = 0u8;
                 for (i, &bit) in chunk.iter().enumerate() {
@@ -1025,6 +1038,73 @@ impl SamBamHandler {
             steganographic_ratio: recommended_bits as f64 / total_bits as f64,
             format_specific_info: format_info,
         })
+    }
+
+    /// Serialize BAM file back to binary format
+    fn serialize_bam(&self, bam: &BamFile) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        // Magic
+        out.extend_from_slice(&bam.header.magic);
+
+        // Header text (l_text + text bytes)
+        let text_bytes = bam.header.text.as_bytes();
+        let l_text = text_bytes.len() as u32;
+        out.extend_from_slice(&l_text.to_le_bytes());
+        out.extend_from_slice(text_bytes);
+
+        // n_ref
+        out.extend_from_slice(&bam.header.n_ref.to_le_bytes());
+
+        // Reference sequences
+        for r in &bam.references {
+            // l_name stored in struct already includes null terminator
+            out.extend_from_slice(&r.l_name.to_le_bytes());
+            out.extend_from_slice(r.name.as_bytes());
+            // pad with nulls to match original l_name
+            let null_count = r.l_name as usize - r.name.len();
+            out.extend(std::iter::repeat(0u8).take(null_count));
+            out.extend_from_slice(&r.l_ref.to_le_bytes());
+        }
+
+        // Alignment records
+        for a in &bam.alignments {
+            let read_name_bytes = a.read_name.as_bytes();
+            // l_read_name includes null terminator
+            let seq_bytes = (a.l_seq as usize + 1) / 2;
+            // block_size = fixed 32 bytes + variable fields
+            let block_size: u32 = (32u32)
+                + a.l_read_name as u32
+                + a.n_cigar_op as u32 * 4
+                + seq_bytes as u32
+                + a.l_seq
+                + a.aux_data.len() as u32;
+
+            out.extend_from_slice(&block_size.to_le_bytes());
+            out.extend_from_slice(&a.refid.to_le_bytes());
+            out.extend_from_slice(&a.pos.to_le_bytes());
+            out.push(a.l_read_name);
+            out.push(a.mapq);
+            out.extend_from_slice(&a.bin.to_le_bytes());
+            out.extend_from_slice(&a.n_cigar_op.to_le_bytes());
+            out.extend_from_slice(&a.flag.to_le_bytes());
+            out.extend_from_slice(&a.l_seq.to_le_bytes());
+            out.extend_from_slice(&a.next_refid.to_le_bytes());
+            out.extend_from_slice(&a.next_pos.to_le_bytes());
+            out.extend_from_slice(&a.tlen.to_le_bytes());
+            out.extend_from_slice(read_name_bytes);
+            // null-pad to match l_read_name
+            let null_count = a.l_read_name as usize - read_name_bytes.len();
+            out.extend(std::iter::repeat(0u8).take(null_count));
+            for &cigar_op in &a.cigar {
+                out.extend_from_slice(&cigar_op.to_le_bytes());
+            }
+            out.extend_from_slice(&a.seq);
+            out.extend_from_slice(&a.qual);
+            out.extend_from_slice(&a.aux_data);
+        }
+
+        out
     }
 
     /// Serialize SAM file back to string format
@@ -1224,9 +1304,39 @@ impl DataHandler for SamBamHandler {
                 })
             }
             DataFormat::BAM => {
-                // For BAM, we'll implement a simplified approach
-                // In practice, would need full BAM serialization
-                return Err(SteganoError::UnsupportedFormat(DataFormat::BAM));
+                let mut bam = self.parse_bam(&carrier.raw_data)?;
+
+                // Embed in header text using STEGANO_DATA comment line
+                let hex_payload = hex::encode(payload);
+                let comment_line = format!("@CO\tSTEGANO_DATA:{hex_payload}\n");
+                bam.header.text.push_str(&comment_line);
+                bam.header.l_text = bam.header.text.len() as u32;
+
+                let embed_result = SamBamEmbedResult {
+                    success: true,
+                    bytes_embedded: payload.len(),
+                    strategy_used: SamBamEmbedStrategy::CommentLines,
+                    records_modified: 0,
+                    fields_added: 1,
+                    biological_integrity_preserved: true,
+                };
+
+                carrier.raw_data = self.serialize_bam(&bam);
+
+                let embedding_time = start_time.elapsed().as_millis() as u64;
+
+                Ok(EmbedResult {
+                    success: embed_result.success,
+                    bytes_embedded: embed_result.bytes_embedded,
+                    carrier_modified: true,
+                    performance_stats: PerformanceStats {
+                        embedding_time_ms: embedding_time,
+                        encryption_time_ms: 0,
+                        gpu_acceleration_used: false,
+                        memory_usage_bytes: carrier.raw_data.len() + payload.len(),
+                    },
+                    validation_report: None,
+                })
             }
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
         }
@@ -1254,9 +1364,7 @@ impl DataHandler for SamBamHandler {
                 match strategy {
                     SamBamEmbedStrategy::OptionalFields => self.extract_sam_optional_fields(&sam),
                     SamBamEmbedStrategy::QualityScores => {
-                        // For quality scores, we need to know the payload length
-                        let estimated_length = 100; // Default estimate
-                        self.extract_quality_scores(&sam, estimated_length)
+                        self.extract_quality_scores(&sam)
                     }
                     SamBamEmbedStrategy::CommentLines => self.extract_comment_lines(&sam),
                     SamBamEmbedStrategy::MultiStrategy => {
@@ -1267,7 +1375,27 @@ impl DataHandler for SamBamHandler {
                     _ => self.extract_sam_optional_fields(&sam),
                 }
             }
-            DataFormat::BAM => Err(SteganoError::UnsupportedFormat(DataFormat::BAM)),
+            DataFormat::BAM => {
+                let bam = self.parse_bam(&carrier.raw_data)?;
+                // Search for STEGANO_DATA in header text
+                if let Some(data_start) = bam.header.text.find("STEGANO_DATA:") {
+                    let hex_start = data_start + "STEGANO_DATA:".len();
+                    let hex_end = bam.header.text[hex_start..]
+                        .find('\n')
+                        .map(|n| hex_start + n)
+                        .unwrap_or(bam.header.text.len());
+                    let hex_data = &bam.header.text[hex_start..hex_end];
+                    hex::decode(hex_data.trim()).map_err(|_| {
+                        SteganoError::IntegrityError(
+                            "Invalid hex data in BAM comment".to_string(),
+                        )
+                    })
+                } else {
+                    Err(SteganoError::IntegrityError(
+                        "No steganographic data found in BAM header".to_string(),
+                    ))
+                }
+            }
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
         }
     }

@@ -13,6 +13,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.8] - 2026-02-22
+
+### Fixed
+- **DICOM PixelDataLSB** (`src/handlers/dicom.rs`): `embed_pixel_data_lsb` now prepends a 4-byte
+  little-endian length header before the payload bits; `extract_pixel_data_lsb` reads that header
+  to self-discover payload length instead of using a hardcoded `estimated_length = 100`.
+- **DICOM parse limit** (`src/handlers/dicom.rs`): Removed the artificial 1000-element cap in
+  `parse_dicom()` that silently truncated large DICOM files.
+- **SAM/BAM QualityScores** (`src/handlers/sam_bam.rs`): Same self-framing fix as DICOM —
+  `embed_quality_scores` prepends a 4-byte length header and `extract_quality_scores` reads it,
+  eliminating the hardcoded `estimated_length = 100`.
+- **BAM format** (`src/handlers/sam_bam.rs`): BAM embed and extract are now fully implemented.
+  Embed appends an `@CO STEGANO_DATA:<hex>` line to the BAM header text; extract recovers it.
+  `serialize_bam()` added to round-trip a `BamFile` struct back to binary. The 100-alignment
+  parse cap in `parse_bam()` is removed.
+- **VCF quality-score encoding** (`src/handlers/vcf.rs`): Replaced the unreliable IEEE 754
+  decimal-place approach with a lossless integer scheme: 3 bits are packed into the low 3 bits of
+  the rounded integer quality score (`qual = (qual & !7) | triplet`). Serialization changed from
+  `{:.3}` (clipped decimal) to `{}` (integer), ensuring bits survive the write/re-read cycle.
+- **FFI Tokio runtime** (`src/ffi.rs`): Replaced per-call `Runtime::new()` with a single shared
+  `OnceLock<Runtime>` (`TOKIO_RT`) initialized once on first use, eliminating the resource leak.
+- **Stale integration test assertions** (`tests/test_0_1_1_fixes.rs`, `tests/test_basic_functionality.rs`):
+  Fixed hardcoded version assertions ("0.2.1") and carrier sizes that became too small once
+  Reed-Solomon error correction became functional.
+
 ## [0.3.7] - 2026-02-22
 
 ### Added

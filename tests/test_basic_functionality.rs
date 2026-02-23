@@ -6,7 +6,7 @@ use stegano::*;
 #[tokio::test]
 async fn test_basic_steganography_roundtrip() {
     // Create test carrier data
-    let mut carrier_data = vec![0x42u8; 2048]; // 2048 bytes of data
+    let mut carrier_data = vec![0x42u8; 8192]; // Large enough for codec RS+encryption overhead
     for (i, byte) in carrier_data.iter_mut().enumerate() {
         *byte = (i % 256) as u8;
     }
