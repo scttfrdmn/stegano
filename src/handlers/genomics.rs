@@ -553,6 +553,17 @@ impl DataHandler for GenomicsHandler {
                     &effective_payload,
                     strategy,
                 )?;
+                if !result.success {
+                    // Some quality chars were unembeddable (their LSB modification
+                    // would have pushed the ASCII value below MIN_QUALITY_ASCII=33).
+                    // The capacity check passed using the overestimated formula but
+                    // actual usable capacity was smaller. Return an error rather than
+                    // silently returning partial/corrupt data.
+                    return Err(SteganoError::InsufficientCapacity {
+                        needed: effective_payload.len() * 8,
+                        available: result.quality_chars_modified,
+                    });
+                }
                 result.bytes_embedded
             }
             _ => return Err(SteganoError::UnsupportedFormat(carrier.format.clone())),

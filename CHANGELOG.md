@@ -13,6 +13,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.20] - 2026-02-23
+
+### Fixed
+- **Signals extraction: stored strategy byte not validated** (`src/handlers/signals.rs`):
+  `embed()` stored the embedding strategy as byte 8 of the `"SGSJ"` header
+  (`strategy.to_u8()`), but `extract()` ignored it entirely and dispatched purely from
+  `params.stealth_level`. This meant that if the caller used a different `stealth_level`
+  on extraction than on embedding — e.g., embed with `StealthLevel::High` (PhaseModulation)
+  and extract with `StealthLevel::Medium` (FrequencyDomain) — the wrong strategy was used
+  and extraction returned corrupted data or an error with no helpful message.
+
+  Fix (mirrors v0.3.19 imagery fix):
+  - Added `SignalEmbedStrategy::from_u8(v: u8) -> Option<Self>`.
+  - `extract_with_strategy` now validates `header_bytes[8] == strategy.to_u8()` after the
+    magic check; mismatches return an error.
+  - `extract()` now tries all five strategies in order (`TimeDomainLSB`, `FrequencyDomain`,
+    `PhaseModulation`, `SpreadSpectrum`, `EchoHiding`) instead of dispatching from
+    `stealth_level`, making signal extraction fully self-describing.
+
+- **FASTQ partial embedding surfaces an error instead of silently returning** (`src/handlers/genomics.rs`):
+  `embed_fastq_qualities()` may embed fewer bits than requested when quality chars near
+  ASCII 33 ('!') are "skipped" (clearing their LSBs would push the value below the valid
+  quality range [33–126]). In that case the function returns `Ok` with `result.success ==
+  false`. The caller in `embed()` never checked this flag, always proceeding as if the
+  full payload was embedded. On extraction, the truncated payload produces a corrupted
+  length header and garbled or empty output.
+
+  Fix: check `result.success` after `embed_fastq_qualities()`; return
+  `Err(InsufficientCapacity)` if `false`. The capacity estimation (`estimate_fastq_quality_capacity`)
+  still counts all quality chars (slightly optimistic), but any near-capacity case where
+  unembeddable chars reduce actual capacity is now surfaced as an error rather than silent
+  data loss.
+
+### Tests
+- `test_vcf_multistrategy_roundtrip`: first roundtrip test for `vcf_strategy = "multi"`.
+  Verifies embed→extract with MultiStrategy (info→sample_format→variant_id fallback chain)
+  correctly recovers the payload.
+- `test_sam_multistrategy_roundtrip`: first roundtrip test for `sam_strategy = "multi"`.
+  Verifies embed→extract with MultiStrategy (optional_fields→comment_lines fallback chain)
+  correctly recovers the payload.
+- **Test count: 378 → 380**
+
 ## [0.3.19] - 2026-02-23
 
 ### Fixed

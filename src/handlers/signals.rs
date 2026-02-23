@@ -41,6 +41,16 @@ impl SignalEmbedStrategy {
         }
     }
 
+    fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(SignalEmbedStrategy::TimeDomainLSB),
+            1 => Some(SignalEmbedStrategy::FrequencyDomain),
+            2 => Some(SignalEmbedStrategy::PhaseModulation),
+            3 => Some(SignalEmbedStrategy::SpreadSpectrum),
+            4 => Some(SignalEmbedStrategy::EchoHiding),
+            _ => None,
+        }
+    }
 }
 
 impl SignalHandler {
@@ -691,6 +701,17 @@ impl SignalHandler {
             ));
         }
 
+        // Validate the stored strategy tag matches what we probed with.
+        // Guards against false-positive "SGSJ" matches when the wrong
+        // strategy is tried first in the try-all loop in extract().
+        if header_bytes[8] != strategy.to_u8() {
+            return Err(SteganoError::InvalidParameter(format!(
+                "Strategy mismatch: header tag {} does not match probing strategy {}",
+                header_bytes[8],
+                strategy.to_u8()
+            )));
+        }
+
         let payload_size = u32::from_le_bytes([
             header_bytes[4],
             header_bytes[5],
@@ -848,15 +869,28 @@ impl DataHandler for SignalHandler {
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        // Dispatch to the same strategy that embed() uses for this stealth_level,
-        // so extract is always the exact inverse of embed.
-        let strategy = match params.stealth_level {
-            StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
-            StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
-            StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
-            StealthLevel::Maximum => SignalEmbedStrategy::SpreadSpectrum,
-        };
-        self.extract_with_strategy(carrier, &strategy, params).await
+        // Try all strategies in order. The stored strategy byte in the header
+        // (header[8]) is validated inside extract_with_strategy(), so only the
+        // strategy that was actually used to embed will succeed.
+        // This makes extraction self-describing regardless of which stealth_level
+        // the caller specifies.
+        let strategies = [
+            SignalEmbedStrategy::TimeDomainLSB,
+            SignalEmbedStrategy::FrequencyDomain,
+            SignalEmbedStrategy::PhaseModulation,
+            SignalEmbedStrategy::SpreadSpectrum,
+            SignalEmbedStrategy::EchoHiding,
+        ];
+
+        for strategy in &strategies {
+            if let Ok(result) = self.extract_with_strategy(carrier, strategy, params).await {
+                return Ok(result);
+            }
+        }
+
+        Err(SteganoError::InvalidParameter(
+            "No valid extraction strategy found".to_string(),
+        ))
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {

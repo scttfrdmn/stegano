@@ -1759,4 +1759,43 @@ read3\t0\tchr1\t300\t60\t50M\t*\t0\t0\tTTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
         let wrong_result = handler.extract(&carrier, &wrong_params).await;
         assert!(wrong_result.is_err(), "Wrong key should fail to extract");
     }
+
+    #[tokio::test]
+    async fn test_sam_multistrategy_roundtrip() {
+        // MultiStrategy embed uses optional fields (first preference).
+        // Extract with MultiStrategy recovers via optional fields → comment lines in order.
+        let handler = SamBamHandler::new();
+        let sam_data = create_minimal_sam();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::SAM,
+            raw_data: sam_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"multi strategy sam";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        };
+        params.format_specific.insert(
+            "sam_strategy".to_string(),
+            serde_json::Value::String("multi".to_string()),
+        );
+
+        // Embed with MultiStrategy
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        // Extract with MultiStrategy — should recover the same payload
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
 }

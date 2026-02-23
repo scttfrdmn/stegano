@@ -1,7 +1,7 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.19-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.20-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
@@ -9,12 +9,13 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.19 - Latest Production Release
+## 🎯 Version 0.3.20 - Latest Production Release
 
-Stegano v0.3.19 hardens imagery extraction against false-positive strategy detection and removes a dead-code placeholder:
-- ✅ **378 Tests Passing**
-- ✅ **Imagery extraction: strategy byte validated** — `extract_with_strategy` now reads the strategy tag stored in the embedded header and rejects any probe that decodes a valid `"IMSJ"` magic but mismatched strategy byte. This eliminates the theoretical (1/2^32 probability) false-positive where the wrong strategy could silently return corrupt data. The stored byte was written during embed via `strategy.to_u8()` but was never previously read back — `from_u8()` has been added to enable this.
-- ✅ **Removed dead `src/main.rs`** — placeholder `println!("Hello, world!")` binary that was never compiled (the real entry point is `src/bin/stegano.rs`).
+Stegano v0.3.20 fixes three correctness issues in the signals, genomics, and SAM/BAM+VCF handlers:
+- ✅ **380 Tests Passing** — 2 new MultiStrategy roundtrip tests
+- ✅ **Signals extraction: now self-describing** — Like imagery (fixed in v0.3.19), the signals handler now uses a try-all-strategies loop with stored-strategy-byte validation. Previously extraction dispatched from `stealth_level`, so embedding with `--stealth high` and extracting without specifying stealth used the wrong strategy. Added `SignalEmbedStrategy::from_u8()` to support the stored-byte validation.
+- ✅ **FASTQ partial embedding now surfaces an error** — `embed_fastq_qualities()` can silently succeed with `result.success = false` when some quality chars near ASCII 33 are unembeddable (their LSB modification would push below the valid range 33–126). The caller never checked this flag and always returned `Ok`. Now returns `Err(InsufficientCapacity)` when partial embedding is detected.
+- ✅ **VCF + SAM/BAM MultiStrategy roundtrip tests** — first ever coverage of the `"multi"` strategy path for both handlers.
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

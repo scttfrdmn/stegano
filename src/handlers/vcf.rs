@@ -1329,4 +1329,43 @@ mod tests {
         assert!(wrong_result.is_err(), "Wrong key should fail to extract");
     }
 
+    #[tokio::test]
+    async fn test_vcf_multistrategy_roundtrip() {
+        // MultiStrategy embed tries info → sample_format → variant_id in order.
+        // With INFO fields present the first strategy succeeds.
+        let handler = VcfHandler::new();
+        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\tDP=50\nchr1\t200\t.\tG\tC\t45.0\tPASS\tAF=0.5\nchr1\t300\t.\tC\tA\t60.0\tPASS\t.\n";
+
+        let mut carrier = CarrierData {
+            format: DataFormat::VCF,
+            raw_data: vcf_data.to_vec(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"multi strategy test";
+        let mut params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            format_specific: HashMap::new(),
+            enable_validation: false,
+        };
+        params.format_specific.insert(
+            "vcf_strategy".to_string(),
+            serde_json::Value::String("multi".to_string()),
+        );
+
+        // Embed with MultiStrategy
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        // Extract with MultiStrategy — should recover the same payload
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
+
 }
