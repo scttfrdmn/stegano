@@ -46,6 +46,7 @@ impl Default for HandlerRegistry {
 }
 
 impl HandlerRegistry {
+    /// Create a registry pre-populated with all built-in handlers.
     pub fn new() -> Self {
         Self {
             handlers: vec![
@@ -60,6 +61,8 @@ impl HandlerRegistry {
         }
     }
 
+    /// Return the handler responsible for the given [`DataFormat`], or `None`
+    /// if no handler covers that format.
     pub fn get_handler(&self, format: &DataFormat) -> Option<&dyn DataHandler> {
         match format {
             DataFormat::FASTA | DataFormat::FASTQ => {

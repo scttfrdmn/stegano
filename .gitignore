@@ -77,3 +77,6 @@ flamegraph.svg
 # Local development
 .local/
 local_config.toml
+
+# Sensitive IP and integration notes (not for VCS)
+docs/IP_AND_INTEGRATION.md

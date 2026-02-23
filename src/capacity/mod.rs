@@ -1,8 +1,13 @@
 //! Capacity estimation for different data formats
 
+/// Utility for estimating steganographic capacity of carrier data.
+///
+/// Provides conservative upper-bound estimates for different embedding
+/// strategies (LSB, frequency-domain) before a full embed is attempted.
 pub struct CapacityEstimator;
 
 impl CapacityEstimator {
+    /// Create a new `CapacityEstimator`.
     pub fn new() -> Self {
         Self
     }

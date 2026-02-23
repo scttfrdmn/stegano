@@ -732,6 +732,82 @@ KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
         assert_eq!(lines.len() % 4, 0, "FASTQ should have multiple of 4 lines");
     }
 
+    #[tokio::test]
+    async fn test_fastq_roundtrip_medium_stealth() {
+        let handler = GenomicsHandler::new();
+        let fastq_data = b"@seq1/1
+ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
++
+IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
+@seq2/1
+GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA
++
+JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ
+@seq3/1
+TTTTAAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCCGGGG
++
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+";
+        let mut carrier = CarrierData {
+            format: DataFormat::FASTQ,
+            raw_data: fastq_data.to_vec(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+        let payload = b"medium stealth payload";
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Medium, // Balanced: 2 bits/char
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload, "Medium stealth round-trip must recover payload");
+    }
+
+    #[tokio::test]
+    async fn test_fastq_roundtrip_high_stealth() {
+        let handler = GenomicsHandler::new();
+        let fastq_data = b"@seq1/1
+ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG
++
+IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
+@seq2/1
+GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA
++
+JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ
+@seq3/1
+TTTTAAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCCGGGG
++
+KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
+";
+        let mut carrier = CarrierData {
+            format: DataFormat::FASTQ,
+            raw_data: fastq_data.to_vec(),
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+        let payload = b"high stealth";
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::High, // Conservative: 1 bit/char
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload, "High stealth round-trip must recover payload");
+    }
+
     #[test]
     fn test_fastq_capacity_estimation_strategies() {
         let handler = GenomicsHandler::new();

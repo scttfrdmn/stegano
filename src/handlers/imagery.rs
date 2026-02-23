@@ -258,7 +258,7 @@ impl ImageryHandler {
             ImageEmbedStrategy::AdaptiveLSB => {
                 // Embed preferentially in high-variation areas
                 let mut bit_index = 0;
-                for i in 0..image_data.len() - 2 {
+                for i in 0..image_data.len().saturating_sub(2) {
                     if bit_index >= payload_bits.len() {
                         break;
                     }
@@ -295,6 +295,12 @@ impl ImageryHandler {
         let width = dimensions.width as usize;
         let height = dimensions.height as usize;
         let channels = 3; // Assume RGB
+
+        if height < 2 || width < 2 {
+            return Err(SteganoError::InvalidParameter(
+                "EdgeBased strategy requires image dimensions of at least 2x2".to_string(),
+            ));
+        }
 
         let mut bit_index = 0;
 
@@ -483,6 +489,10 @@ impl ImageryHandler {
         let height = dimensions.height as usize;
         let channels = 3;
         let mut bits = Vec::new();
+
+        if height < 2 || width < 2 {
+            return Ok(bits); // No edge pixels to extract from
+        }
 
         for y in 1..height - 1 {
             for x in 1..width - 1 {
