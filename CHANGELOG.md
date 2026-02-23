@@ -13,6 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.16] - 2026-02-22
+
+### Fixed
+- **DICOM codec integration** (`src/handlers/dicom.rs`):
+  `embed()` passed `payload` directly to strategy functions without calling
+  `codec::encode_payload()`; `extract()` returned raw bytes without calling
+  `codec::decode_payload()`. Both `encryption_key` and `error_correction_level` in
+  `EmbedParams` were silently ignored for all DICOM embedding strategies. Now guarded by
+  `use_codec` (non-empty key or non-None EC level), completing the codec integration fix
+  started in v0.3.15 for VCF, SAM, and BAM. Also fixes `encryption_time_ms` in the
+  returned `EmbedResult` (was always hardcoded to `0`).
+
+### Documentation
+- `ImageEmbedStrategy::DCTFrequency` and `PVD` now carry doc comments explicitly stating
+  they are not yet implemented and will return `SteganoError::InvalidParameter` at runtime.
+
+### Tests
+- `test_dicom_private_elements_with_encryption_roundtrip`: embed+extract with AES-256-GCM
+  key using PrivateDataElements strategy; also verifies a wrong key returns an error.
+
 ## [0.3.15] - 2026-02-22
 
 ### Fixed

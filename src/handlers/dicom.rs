@@ -1195,17 +1195,31 @@ impl DataHandler for DicomHandler {
                     })
                     .unwrap_or(DicomEmbedStrategy::PrivateDataElements);
 
+                let use_codec = !params.encryption_key.is_empty()
+                    || params.error_correction_level != crate::core::ECLevel::None;
+                let enc_start = Instant::now();
+                let final_payload: Vec<u8> = if use_codec {
+                    crate::codec::encode_payload(payload, params)?
+                } else {
+                    payload.to_vec()
+                };
+                let encryption_time_ms = if use_codec {
+                    enc_start.elapsed().as_millis().max(1) as u64
+                } else {
+                    0
+                };
+
                 let embed_result = match strategy {
                     DicomEmbedStrategy::PrivateDataElements => {
-                        self.embed_private_data_elements(&mut dicom, payload)?
+                        self.embed_private_data_elements(&mut dicom, &final_payload)?
                     }
                     DicomEmbedStrategy::PixelDataLSB => {
-                        self.embed_pixel_data_lsb(&mut dicom, payload)?
+                        self.embed_pixel_data_lsb(&mut dicom, &final_payload)?
                     }
                     DicomEmbedStrategy::MultiStrategy => {
                         // Try private data elements first, fallback to pixel LSB
-                        self.embed_private_data_elements(&mut dicom, payload)
-                            .or_else(|_| self.embed_pixel_data_lsb(&mut dicom, payload))?
+                        self.embed_private_data_elements(&mut dicom, &final_payload)
+                            .or_else(|_| self.embed_pixel_data_lsb(&mut dicom, &final_payload))?
                     }
                     DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
                         return Err(SteganoError::InvalidParameter(format!(
@@ -1239,7 +1253,7 @@ impl DataHandler for DicomHandler {
                     carrier_modified: true,
                     performance_stats: PerformanceStats {
                         embedding_time_ms: embedding_time,
-                        encryption_time_ms: 0,
+                        encryption_time_ms,
                         gpu_acceleration_used: false,
                         memory_usage_bytes: carrier.raw_data.len() + payload.len(),
                     },
@@ -1270,7 +1284,7 @@ impl DataHandler for DicomHandler {
                     })
                     .unwrap_or(DicomEmbedStrategy::PrivateDataElements);
 
-                match strategy {
+                let raw = match strategy {
                     DicomEmbedStrategy::PrivateDataElements => {
                         self.extract_private_data_elements(&dicom)
                     }
@@ -1288,6 +1302,14 @@ impl DataHandler for DicomHandler {
                             "{strategy:?} extraction is not yet implemented"
                         )))
                     }
+                }?;
+
+                let use_codec = !params.encryption_key.is_empty()
+                    || params.error_correction_level != crate::core::ECLevel::None;
+                if use_codec {
+                    crate::codec::decode_payload(&raw, params)
+                } else {
+                    Ok(raw)
                 }
             }
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
@@ -1637,5 +1659,45 @@ mod tests {
         );
         let result = handler.extract(&carrier, &params).await;
         assert!(result.is_err(), "SequencePadding extract should return error (not yet implemented)");
+    }
+
+    #[tokio::test]
+    async fn test_dicom_private_elements_with_encryption_roundtrip() {
+        // Verifies that encryption_key and error_correction_level are applied to
+        // DICOM embed/extract (previously they were silently ignored).
+        let handler = DicomHandler::new();
+        let dicom_data = create_minimal_dicom();
+
+        let mut carrier = CarrierData {
+            format: DataFormat::DICOM,
+            raw_data: dicom_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        };
+
+        let payload = b"sensitive dicom payload";
+        let mut params = EmbedParams {
+            encryption_key: b"test key for dicom encrypt!!!!!!".to_vec(), // 32 bytes
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Low,
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: HashMap::new(),
+        };
+        params.format_specific.insert(
+            "dicom_strategy".to_string(),
+            serde_json::Value::String("private".to_string()),
+        );
+
+        handler.embed(&mut carrier, payload, &params).await.unwrap();
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(&extracted, payload);
+
+        // Wrong key should fail
+        let mut wrong_params = params.clone();
+        wrong_params.encryption_key = b"wrong key for dicom encrypt!!!!!".to_vec();
+        let wrong_result = handler.extract(&carrier, &wrong_params).await;
+        assert!(wrong_result.is_err(), "Wrong key should fail to extract");
     }
 }

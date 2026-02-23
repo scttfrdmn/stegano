@@ -1,22 +1,20 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.15-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.16-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-349%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-350%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.15 - Latest Production Release
+## 🎯 Version 0.3.16 - Latest Production Release
 
-Stegano v0.3.15 fixes correctness bugs in AdaptiveLSB extraction and codec integration for genomics handlers:
-- ✅ **349 Tests Passing** — 3 new roundtrip tests for AdaptiveLSB, VCF encryption, and SAM encryption
-- ✅ **AdaptiveLSB Extract Fixed** - `extract_with_strategy()` now applies the same `variation > 10` threshold used during embed; previously it read every pixel byte sequentially (like SimpleLSB), causing silent data corruption on images with smooth regions
-- ✅ **Extract Strategy Order Fixed** - `extract()` now tries `[SimpleLSB, AdaptiveLSB, EdgeBased]` matching the embed order for `Low → Medium → High/Max` stealth levels
-- ✅ **VCF Codec Integration Fixed** - `embed()`/`extract()` now apply `codec::encode_payload`/`decode_payload` when `encryption_key` or `error_correction_level` are set; previously these parameters were silently ignored for VCF files
-- ✅ **SAM/BAM Codec Integration Fixed** - Same fix for SAM and BAM handlers; encryption and error correction now correctly applied
+Stegano v0.3.16 completes codec integration across all handlers:
+- ✅ **350 Tests Passing** — new DICOM encryption roundtrip test
+- ✅ **DICOM Codec Integration Fixed** - `embed()`/`extract()` now apply `codec::encode_payload`/`decode_payload` when `encryption_key` or `error_correction_level` are set; previously these parameters were silently ignored for DICOM files (the last handler with this gap after VCF/SAM/BAM were fixed in v0.3.15)
+- ✅ **Imagery API Clarified** - `ImageEmbedStrategy::DCTFrequency` and `PVD` variants now carry doc comments explicitly stating they are not yet implemented and will return errors at runtime
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

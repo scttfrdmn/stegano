@@ -20,9 +20,11 @@ pub enum ImageEmbedStrategy {
     SimpleLSB,
     /// Advanced LSB with adaptive selection of channels
     AdaptiveLSB,
-    /// DCT-based embedding in frequency domain
+    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
+    /// Use `SimpleLSB`, `AdaptiveLSB`, or `EdgeBased` instead.
     DCTFrequency,
-    /// Pixel value differencing
+    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
+    /// Use `SimpleLSB`, `AdaptiveLSB`, or `EdgeBased` instead.
     PVD,
     /// Edge-based embedding for higher imperceptibility
     EdgeBased,
