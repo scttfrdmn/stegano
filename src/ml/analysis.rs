@@ -18,6 +18,106 @@ fn normal_cdf(x: f32) -> f32 {
     if x >= 0.0 { approx } else { 1.0 - approx }
 }
 
+/// Linear-interpolation percentile on a pre-sorted slice. `p` in [0, 1].
+fn percentile(sorted: &[f32], p: f32) -> f32 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let pos = p * (sorted.len() - 1) as f32;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    if lo == hi {
+        return sorted[lo];
+    }
+    sorted[lo] + (pos - lo as f32) * (sorted[hi] - sorted[lo])
+}
+
+/// Kolmogorov-Smirnov statistic of `sorted` against Normal(mean, std).
+fn ks_vs_normal(sorted: &[f32], mean: f32, std: f32) -> f32 {
+    let n = sorted.len() as f32;
+    sorted
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            let theoretical = if std > 0.0 { normal_cdf((x - mean) / std) } else { 0.5 };
+            ((i + 1) as f32 / n - theoretical).abs()
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// Kolmogorov-Smirnov statistic of `sorted` against Exponential(rate = 1/mean).
+fn ks_vs_exponential(sorted: &[f32], mean: f32) -> f32 {
+    let n = sorted.len() as f32;
+    let rate = if mean > 0.0 { 1.0 / mean } else { 1.0 };
+    sorted
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            let theoretical = if x < 0.0 { 0.0 } else { 1.0 - (-rate * x).exp() };
+            ((i + 1) as f32 / n - theoretical).abs()
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// Kolmogorov-Smirnov statistic of `sorted` against Uniform(min, max).
+fn ks_vs_uniform(sorted: &[f32], min: f32, max: f32) -> f32 {
+    let n = sorted.len() as f32;
+    let range = max - min;
+    if range.abs() < f32::EPSILON {
+        return 1.0;
+    }
+    sorted
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            let theoretical = ((x - min) / range).clamp(0.0, 1.0);
+            ((i + 1) as f32 / n - theoretical).abs()
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// Fill all `DescriptiveStats` fields for a single named metric.
+fn record_metric(name: &str, values: &[f32], desc: &mut DescriptiveStats) {
+    let n = values.len();
+    if n == 0 {
+        return;
+    }
+    let nf = n as f32;
+    let mean = values.iter().sum::<f32>() / nf;
+    let var = values.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / nf;
+    let std = var.sqrt();
+
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let min = sorted[0];
+    let max = sorted[n - 1];
+    let median = percentile(&sorted, 0.5);
+    let q1 = percentile(&sorted, 0.25);
+    let q3 = percentile(&sorted, 0.75);
+
+    let skewness = if std > 0.0 {
+        values.iter().map(|&x| ((x - mean) / std).powi(3)).sum::<f32>() / nf
+    } else {
+        0.0
+    };
+    let kurtosis = if std > 0.0 {
+        values.iter().map(|&x| ((x - mean) / std).powi(4)).sum::<f32>() / nf - 3.0
+    } else {
+        0.0
+    };
+
+    let k = name.to_string();
+    desc.means.insert(k.clone(), mean);
+    desc.std_devs.insert(k.clone(), std);
+    desc.mins.insert(k.clone(), min);
+    desc.maxs.insert(k.clone(), max);
+    desc.medians.insert(k.clone(), median);
+    desc.quantiles.insert(k.clone(), (q1, q3));
+    desc.skewness.insert(k.clone(), skewness);
+    desc.kurtosis.insert(k, kurtosis);
+}
+
 /// Performance analysis engine
 #[derive(Debug)]
 pub struct AnalysisEngine {
@@ -753,66 +853,33 @@ impl AnalysisEngine {
 
     /// Calculate descriptive statistics
     fn calculate_descriptive_stats(&self, data: &[PerformanceMetrics]) -> DescriptiveStats {
-        let mut means = HashMap::new();
-        let std_devs = HashMap::new();
-        let mut mins = HashMap::new();
-        let mut maxs = HashMap::new();
-
-        if !data.is_empty() {
-            // Capacity efficiency
-            let capacity_values: Vec<f32> = data.iter().map(|d| d.capacity_efficiency).collect();
-            means.insert(
-                "capacity_efficiency".to_string(),
-                capacity_values.iter().sum::<f32>() / capacity_values.len() as f32,
-            );
-            mins.insert(
-                "capacity_efficiency".to_string(),
-                *capacity_values
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap(),
-            );
-            maxs.insert(
-                "capacity_efficiency".to_string(),
-                *capacity_values
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap(),
-            );
-
-            // Embedding time
-            let time_values: Vec<f32> = data.iter().map(|d| d.embedding_time_ms as f32).collect();
-            means.insert(
-                "embedding_time_ms".to_string(),
-                time_values.iter().sum::<f32>() / time_values.len() as f32,
-            );
-            mins.insert(
-                "embedding_time_ms".to_string(),
-                *time_values
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap(),
-            );
-            maxs.insert(
-                "embedding_time_ms".to_string(),
-                *time_values
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap(),
-            );
-        }
-
-        DescriptiveStats {
+        let mut desc = DescriptiveStats {
             count: data.len(),
-            means,
-            std_devs,
-            mins,
-            maxs,
+            means: HashMap::new(),
+            std_devs: HashMap::new(),
+            mins: HashMap::new(),
+            maxs: HashMap::new(),
             medians: HashMap::new(),
             quantiles: HashMap::new(),
             skewness: HashMap::new(),
             kurtosis: HashMap::new(),
+        };
+
+        if data.is_empty() {
+            return desc;
         }
+
+        let capacity: Vec<f32> = data.iter().map(|m| m.capacity_efficiency).collect();
+        let time_ms: Vec<f32> = data.iter().map(|m| m.embedding_time_ms as f32).collect();
+        let quality: Vec<f32> = data.iter().map(|m| m.quality_preservation).collect();
+        let accuracy: Vec<f32> = data.iter().map(|m| m.extraction_accuracy).collect();
+
+        record_metric("capacity_efficiency", &capacity, &mut desc);
+        record_metric("embedding_time_ms", &time_ms, &mut desc);
+        record_metric("quality_preservation", &quality, &mut desc);
+        record_metric("extraction_accuracy", &accuracy, &mut desc);
+
+        desc
     }
 }
 
@@ -836,7 +903,66 @@ impl DistributionAnalyzer {
 
 impl StatisticalAnalyzer for DistributionAnalyzer {
     fn analyze(&self, data: &[PerformanceMetrics]) -> Result<StatisticalSummary> {
-        // Simplified implementation
+        let values: Vec<f32> = data.iter().map(|m| m.capacity_efficiency).collect();
+        let n = values.len() as f32;
+
+        let mut sorted = values.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let mean = values.iter().sum::<f32>() / n;
+        let std = (values.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n).sqrt();
+        let min = sorted.first().copied().unwrap_or(0.0);
+        let max = sorted.last().copied().unwrap_or(1.0);
+
+        // KS statistic against three candidate distributions (lower = better fit)
+        let ks_normal = ks_vs_normal(&sorted, mean, std);
+        let ks_exp = if mean > 0.0 {
+            ks_vs_exponential(&sorted, mean)
+        } else {
+            1.0
+        };
+        let ks_uniform = ks_vs_uniform(&sorted, min, max);
+
+        let best_fit = if ks_normal <= ks_exp && ks_normal <= ks_uniform {
+            "normal"
+        } else if ks_exp <= ks_uniform {
+            "exponential"
+        } else {
+            "uniform"
+        };
+
+        // KS p-value approximation: p ≈ 2·exp(-2·n·D²)
+        let ks_pvalue = |d: f32| (2.0 * (-2.0 * n * d * d).exp()).clamp(0.0, 1.0);
+
+        let mut goodness_of_fit = HashMap::new();
+        goodness_of_fit.insert("normal".to_string(), 1.0 - ks_normal);
+        goodness_of_fit.insert("exponential".to_string(), 1.0 - ks_exp);
+        goodness_of_fit.insert("uniform".to_string(), 1.0 - ks_uniform);
+
+        let mut test_p_values = HashMap::new();
+        test_p_values.insert("normal".to_string(), ks_pvalue(ks_normal));
+        test_p_values.insert("exponential".to_string(), ks_pvalue(ks_exp));
+        test_p_values.insert("uniform".to_string(), ks_pvalue(ks_uniform));
+
+        let mut parameters = HashMap::new();
+        parameters.insert("mean".to_string(), mean);
+        parameters.insert("std".to_string(), std);
+        parameters.insert("min".to_string(), min);
+        parameters.insert("max".to_string(), max);
+
+        let alpha = 0.05f32;
+        let test_results = vec![StatisticalTest {
+            name: "ks_normality".to_string(),
+            statistic: ks_normal,
+            p_value: ks_pvalue(ks_normal),
+            critical_value: 1.36 / n.sqrt(), // Kolmogorov critical value at α=0.05
+            conclusion: if ks_pvalue(ks_normal) > alpha {
+                "data is consistent with normal distribution".to_string()
+            } else {
+                "data deviates significantly from normal distribution".to_string()
+            },
+        }];
+
         Ok(StatisticalSummary {
             descriptive: DescriptiveStats {
                 count: data.len(),
@@ -850,10 +976,10 @@ impl StatisticalAnalyzer for DistributionAnalyzer {
                 kurtosis: HashMap::new(),
             },
             distribution: DistributionAnalysis {
-                best_fit: "normal".to_string(),
-                parameters: HashMap::new(),
-                goodness_of_fit: HashMap::new(),
-                test_p_values: HashMap::new(),
+                best_fit: best_fit.to_string(),
+                parameters,
+                goodness_of_fit,
+                test_p_values,
             },
             correlations: HashMap::new(),
             outliers: OutlierAnalysis {
@@ -863,7 +989,7 @@ impl StatisticalAnalyzer for DistributionAnalyzer {
                 method: self.name().to_string(),
             },
             confidence_intervals: HashMap::new(),
-            test_results: Vec::new(),
+            test_results,
         })
     }
 
@@ -993,14 +1119,95 @@ impl OutlierAnalyzer {
     pub fn new(method: OutlierMethod, threshold: f32) -> Self {
         Self { method, threshold }
     }
+
+    /// IQR fence method: outliers are values beyond Q1 − k·IQR or Q3 + k·IQR.
+    fn iqr_outliers(&self, values: &[f32]) -> (Vec<usize>, Vec<f32>) {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let q1 = percentile(&sorted, 0.25);
+        let q3 = percentile(&sorted, 0.75);
+        let iqr = q3 - q1;
+        if iqr == 0.0 {
+            return (vec![], vec![]);
+        }
+        let lower = q1 - self.threshold * iqr;
+        let upper = q3 + self.threshold * iqr;
+
+        values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| {
+                if v < lower || v > upper {
+                    let score = if v < lower {
+                        (lower - v) / iqr
+                    } else {
+                        (v - upper) / iqr
+                    };
+                    Some((i, score))
+                } else {
+                    None
+                }
+            })
+            .unzip()
+    }
+
+    /// Z-score method: outliers have |z| > threshold.
+    fn zscore_outliers(&self, values: &[f32]) -> (Vec<usize>, Vec<f32>) {
+        let n = values.len() as f32;
+        if n < 2.0 {
+            return (vec![], vec![]);
+        }
+        let mean = values.iter().sum::<f32>() / n;
+        let std = (values.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n).sqrt();
+        if std == 0.0 {
+            return (vec![], vec![]);
+        }
+        values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| {
+                let z = (v - mean).abs() / std;
+                if z > self.threshold { Some((i, z)) } else { None }
+            })
+            .unzip()
+    }
+
+    /// Modified Z-score method: uses median and MAD — more robust to extreme outliers.
+    fn modified_zscore_outliers(&self, values: &[f32]) -> (Vec<usize>, Vec<f32>) {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = percentile(&sorted, 0.5);
+
+        let mut abs_devs: Vec<f32> = values.iter().map(|&x| (x - median).abs()).collect();
+        abs_devs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mad = percentile(&abs_devs, 0.5);
+        let scale = if mad > 0.0 { mad * 1.4826 } else { 1.0 }; // ≈ σ for normal data
+
+        values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| {
+                let mz = (v - median).abs() / scale;
+                if mz > self.threshold { Some((i, mz)) } else { None }
+            })
+            .unzip()
+    }
 }
 
 impl StatisticalAnalyzer for OutlierAnalyzer {
     fn analyze(&self, data: &[PerformanceMetrics]) -> Result<StatisticalSummary> {
-        // Simplified outlier detection
+        let values: Vec<f32> = data.iter().map(|m| m.capacity_efficiency).collect();
+
+        let (outlier_indices, outlier_scores) = match self.method {
+            OutlierMethod::IQR => self.iqr_outliers(&values),
+            OutlierMethod::ZScore => self.zscore_outliers(&values),
+            OutlierMethod::ModifiedZScore => self.modified_zscore_outliers(&values),
+            OutlierMethod::IsolationForest => self.zscore_outliers(&values), // CPU fallback
+        };
+
         let outliers = OutlierAnalysis {
-            outlier_indices: Vec::new(),
-            outlier_scores: Vec::new(),
+            outlier_indices,
+            outlier_scores,
             threshold: self.threshold,
             method: format!("{:?}", self.method),
         };
@@ -1132,13 +1339,87 @@ impl DetectionEvaluator for ChiSquareDetector {
 }
 
 impl DetectionEvaluator for SamplePairsDetector {
-    fn evaluate(&self, _original: &[u8], _stego: &[u8]) -> Result<DetectionScore> {
+    /// Sample Pairs (SP) analysis: compares adjacent-pair difference histograms.
+    ///
+    /// After LSB substitution, the D_0 (same-value) and D_1 (differ-by-1) counts
+    /// shift in a characteristic way.  The SP embedding estimate is derived from
+    /// the change in the D_0 / D_1 ratio between the original and stego data.
+    fn evaluate(&self, original: &[u8], stego: &[u8]) -> Result<DetectionScore> {
+        let n = original.len().min(stego.len());
+
+        if n < 2 {
+            return Ok(DetectionScore {
+                detection_probability: 0.0,
+                confidence: 0.0,
+                method_scores: HashMap::new(),
+                evidence: Vec::new(),
+                resistance_grade: ResistanceGrade::Excellent,
+            });
+        }
+
+        // Count D_0 (|diff|=0) and D_1 (|diff|=1) for both original and stego
+        let (mut o_d0, mut o_d1) = (0u64, 0u64);
+        let (mut s_d0, mut s_d1) = (0u64, 0u64);
+        for i in 0..n - 1 {
+            let o_diff = (original[i] as i16 - original[i + 1] as i16).unsigned_abs();
+            if o_diff == 0 { o_d0 += 1; } else if o_diff == 1 { o_d1 += 1; }
+
+            let s_diff = (stego[i] as i16 - stego[i + 1] as i16).unsigned_abs();
+            if s_diff == 0 { s_d0 += 1; } else if s_diff == 1 { s_d1 += 1; }
+        }
+
+        let pairs = (n - 1) as f32;
+        let o_d0r = o_d0 as f32 / pairs;
+        let o_d1r = o_d1 as f32 / pairs;
+        let s_d0r = s_d0 as f32 / pairs;
+        let s_d1r = s_d1 as f32 / pairs;
+
+        // SP ratio: (D_0 - D_1) / (D_0 + D_1); LSB embedding drives this toward 0
+        let sp_orig = if o_d0 + o_d1 > 0 {
+            (o_d0 as f32 - o_d1 as f32) / (o_d0 + o_d1) as f32
+        } else {
+            0.0
+        };
+        let sp_stego = if s_d0 + s_d1 > 0 {
+            (s_d0 as f32 - s_d1 as f32) / (s_d0 + s_d1) as f32
+        } else {
+            0.0
+        };
+        let sp_change = (sp_stego - sp_orig).abs();
+        let d0_shift = (s_d0r - o_d0r).abs();
+        let d1_shift = (s_d1r - o_d1r).abs();
+
+        // Weight SP change more; scale so typical embedding (~25% payload) gives ~0.4
+        let detection_probability = (sp_change * 2.0 + d0_shift + d1_shift).clamp(0.0, 1.0);
+        let confidence = if n >= 1000 { 0.80 } else { 0.50 };
+
+        let resistance_grade = match detection_probability {
+            p if p < 0.2 => ResistanceGrade::Excellent,
+            p if p < 0.4 => ResistanceGrade::Good,
+            p if p < 0.6 => ResistanceGrade::Fair,
+            p if p < 0.8 => ResistanceGrade::Poor,
+            _ => ResistanceGrade::Failed,
+        };
+
+        let mut method_scores = HashMap::new();
+        method_scores.insert("sp_ratio_change".to_string(), sp_change);
+        method_scores.insert("d0_rate_shift".to_string(), d0_shift);
+        method_scores.insert("d1_rate_shift".to_string(), d1_shift);
+
         Ok(DetectionScore {
-            detection_probability: 0.2,
-            confidence: 0.7,
-            method_scores: HashMap::new(),
-            evidence: Vec::new(),
-            resistance_grade: ResistanceGrade::Good,
+            detection_probability,
+            confidence,
+            method_scores,
+            evidence: vec![DetectionEvidence {
+                description: format!(
+                    "SP analysis: D₀ shift={:.4}, D₁ shift={:.4}, SP ratio change={:.4}",
+                    d0_shift, d1_shift, sp_change
+                ),
+                strength: detection_probability,
+                method: self.name().to_string(),
+                location: None,
+            }],
+            resistance_grade,
         })
     }
 
@@ -1152,13 +1433,79 @@ impl DetectionEvaluator for SamplePairsDetector {
 }
 
 impl DetectionEvaluator for HistogramDetector {
-    fn evaluate(&self, _original: &[u8], _stego: &[u8]) -> Result<DetectionScore> {
+    /// Compare byte-value histograms via Total Variation Distance (TVD = L₁/2).
+    ///
+    /// TVD = ½ Σ |p_i − q_i|.  For identical distributions TVD=0; for completely
+    /// disjoint distributions TVD=1.  Even small LSB changes produce measurable TVD.
+    fn evaluate(&self, original: &[u8], stego: &[u8]) -> Result<DetectionScore> {
+        let mut orig_hist = [0u64; 256];
+        let mut stego_hist = [0u64; 256];
+        for &b in original { orig_hist[b as usize] += 1; }
+        for &b in stego { stego_hist[b as usize] += 1; }
+
+        let orig_n = original.len().max(1) as f64;
+        let stego_n = stego.len().max(1) as f64;
+
+        // Total Variation Distance
+        let tvd: f64 = orig_hist
+            .iter()
+            .zip(stego_hist.iter())
+            .map(|(&o, &s)| ((o as f64 / orig_n) - (s as f64 / stego_n)).abs())
+            .sum::<f64>()
+            / 2.0;
+
+        // Peak single-bin difference (most-changed byte value)
+        let peak_diff: f64 = orig_hist
+            .iter()
+            .zip(stego_hist.iter())
+            .map(|(&o, &s)| ((o as f64 / orig_n) - (s as f64 / stego_n)).abs())
+            .fold(0.0_f64, f64::max);
+
+        // Chi-square between the two histograms (for bins with expected > 0)
+        let chi2: f64 = orig_hist
+            .iter()
+            .zip(stego_hist.iter())
+            .filter_map(|(&o, &s)| {
+                if o > 0 {
+                    let e = o as f64 / orig_n * stego_n;
+                    Some((s as f64 - e).powi(2) / e)
+                } else {
+                    None
+                }
+            })
+            .sum();
+
+        // Scale TVD from [0, 0.5] to [0, 1]; typical steganography produces TVD ~0.01-0.1
+        let detection_probability = (tvd * 4.0).clamp(0.0, 1.0) as f32;
+        let confidence = if original.len() >= 256 && stego.len() >= 256 { 0.75 } else { 0.40 };
+
+        let resistance_grade = match detection_probability {
+            p if p < 0.2 => ResistanceGrade::Excellent,
+            p if p < 0.4 => ResistanceGrade::Good,
+            p if p < 0.6 => ResistanceGrade::Fair,
+            p if p < 0.8 => ResistanceGrade::Poor,
+            _ => ResistanceGrade::Failed,
+        };
+
+        let mut method_scores = HashMap::new();
+        method_scores.insert("total_variation_distance".to_string(), tvd as f32);
+        method_scores.insert("peak_bin_difference".to_string(), peak_diff as f32);
+        method_scores.insert("chi2_statistic".to_string(), chi2 as f32);
+
         Ok(DetectionScore {
-            detection_probability: 0.15,
-            confidence: 0.6,
-            method_scores: HashMap::new(),
-            evidence: Vec::new(),
-            resistance_grade: ResistanceGrade::Excellent,
+            detection_probability,
+            confidence,
+            method_scores,
+            evidence: vec![DetectionEvidence {
+                description: format!(
+                    "Histogram TVD={:.4}, peak bin diff={:.4}, χ²={:.2}",
+                    tvd, peak_diff, chi2
+                ),
+                strength: detection_probability,
+                method: self.name().to_string(),
+                location: None,
+            }],
+            resistance_grade,
         })
     }
 
@@ -1218,5 +1565,160 @@ mod tests {
 
         assert!(!engine.analyzers.is_empty());
         assert!(!engine.detection_evaluators.is_empty());
+    }
+
+    fn make_metrics(capacity: f32, time_ms: u64, quality: f32, accuracy: f32) -> PerformanceMetrics {
+        PerformanceMetrics {
+            capacity_efficiency: capacity,
+            embedding_time_ms: time_ms,
+            quality_preservation: quality,
+            extraction_accuracy: accuracy,
+            memory_usage: 1024,
+            gpu_acceleration_benefit: 1.0,
+        }
+    }
+
+    #[test]
+    fn test_descriptive_stats_complete() {
+        let engine = AnalysisEngine::new(AnalysisConfig::default());
+        let data: Vec<PerformanceMetrics> = (0..10)
+            .map(|i| make_metrics(i as f32 / 10.0, i as u64 * 10, 0.9, 0.95))
+            .collect();
+
+        let desc = engine.calculate_descriptive_stats(&data);
+        assert_eq!(desc.count, 10);
+        // All fields should be populated
+        assert!(!desc.std_devs.is_empty(), "std_devs should be populated");
+        assert!(!desc.medians.is_empty(), "medians should be populated");
+        assert!(!desc.quantiles.is_empty(), "quantiles should be populated");
+        assert!(!desc.skewness.is_empty(), "skewness should be populated");
+        assert!(!desc.kurtosis.is_empty(), "kurtosis should be populated");
+        // Sanity-check mean of capacity_efficiency = 0 + 0.1 + ... + 0.9 / 10 = 0.45
+        let mean = desc.means["capacity_efficiency"];
+        assert!((mean - 0.45).abs() < 0.01, "mean capacity: expected ≈0.45, got {}", mean);
+        // Q1 < median < Q3
+        let (q1, q3) = desc.quantiles["capacity_efficiency"];
+        let med = desc.medians["capacity_efficiency"];
+        assert!(q1 <= med && med <= q3, "Q1={} median={} Q3={}", q1, med, q3);
+    }
+
+    #[test]
+    fn test_iqr_outlier_detection() {
+        let analyzer = OutlierAnalyzer::new(OutlierMethod::IQR, 1.5);
+        // Values with one clear outlier
+        let metrics: Vec<PerformanceMetrics> = (0..20)
+            .map(|i| {
+                let cap = if i == 19 { 10.0 } else { i as f32 / 20.0 }; // 10.0 is far outlier
+                make_metrics(cap, 10, 0.9, 0.95)
+            })
+            .collect();
+
+        let summary = analyzer.analyze(&metrics).unwrap();
+        assert!(
+            !summary.outliers.outlier_indices.is_empty(),
+            "IQR should detect the extreme outlier at index 19"
+        );
+        assert!(summary.outliers.outlier_indices.contains(&19));
+        assert_eq!(summary.outliers.method, "IQR");
+    }
+
+    #[test]
+    fn test_zscore_outlier_detection() {
+        let analyzer = OutlierAnalyzer::new(OutlierMethod::ZScore, 2.0);
+        let metrics: Vec<PerformanceMetrics> = (0..20)
+            .map(|i| {
+                let cap = if i == 0 { 50.0 } else { 0.5 + i as f32 * 0.01 };
+                make_metrics(cap, 10, 0.9, 0.95)
+            })
+            .collect();
+
+        let summary = analyzer.analyze(&metrics).unwrap();
+        assert!(
+            !summary.outliers.outlier_indices.is_empty(),
+            "Z-score should detect the outlier at index 0"
+        );
+        assert!(summary.outliers.outlier_indices.contains(&0));
+    }
+
+    #[test]
+    fn test_distribution_analyzer_identifies_best_fit() {
+        let analyzer = DistributionAnalyzer::new();
+        // Uniformly distributed capacity values → uniform should win or at least be considered
+        let metrics: Vec<PerformanceMetrics> = (0..50)
+            .map(|i| make_metrics(i as f32 / 50.0, 10, 0.9, 0.95))
+            .collect();
+
+        let summary = analyzer.analyze(&metrics).unwrap();
+        // best_fit should be one of the known distributions
+        assert!(
+            ["normal", "exponential", "uniform"].contains(&summary.distribution.best_fit.as_str()),
+            "unexpected best_fit: {}",
+            summary.distribution.best_fit
+        );
+        // All three should have goodness-of-fit scores
+        assert!(summary.distribution.goodness_of_fit.contains_key("normal"));
+        assert!(summary.distribution.goodness_of_fit.contains_key("uniform"));
+        // p-values should be in [0, 1]
+        for (_, &p) in &summary.distribution.test_p_values {
+            assert!(p >= 0.0 && p <= 1.0, "p-value out of range: {}", p);
+        }
+    }
+
+    #[test]
+    fn test_sample_pairs_detector_identical_data() {
+        let detector = SamplePairsDetector;
+        let data: Vec<u8> = (0..1000u16).map(|i| (i % 256) as u8).collect();
+        // Identical original and stego → near-zero detection probability
+        let score = detector.evaluate(&data, &data).unwrap();
+        assert!(
+            score.detection_probability < 0.05,
+            "identical data should give near-zero detection, got {}",
+            score.detection_probability
+        );
+    }
+
+    #[test]
+    fn test_sample_pairs_detector_lsb_flipped() {
+        let detector = SamplePairsDetector;
+        let original: Vec<u8> = (0..2000u16).map(|i| (i % 256) as u8).collect();
+        // Simulate aggressive LSB embedding: flip all LSBs
+        let stego: Vec<u8> = original.iter().map(|&b| b ^ 1).collect();
+        let score = detector.evaluate(&original, &stego).unwrap();
+        // Flipping all LSBs should significantly change the D0/D1 histogram
+        assert!(
+            score.detection_probability > 0.0,
+            "all-LSB-flipped data should produce non-zero detection"
+        );
+        assert!(!score.method_scores.is_empty());
+    }
+
+    #[test]
+    fn test_histogram_detector_identical() {
+        let detector = HistogramDetector;
+        let data: Vec<u8> = (0..512u16).map(|i| (i % 256) as u8).collect();
+        let score = detector.evaluate(&data, &data).unwrap();
+        assert!(
+            score.detection_probability < 0.01,
+            "identical data → TVD=0 → detection ≈ 0, got {}",
+            score.detection_probability
+        );
+        let tvd = score.method_scores["total_variation_distance"];
+        assert!(tvd < 0.001, "TVD should be 0 for identical data, got {}", tvd);
+    }
+
+    #[test]
+    fn test_histogram_detector_different_distributions() {
+        let detector = HistogramDetector;
+        let original: Vec<u8> = vec![0u8; 512];
+        let stego: Vec<u8> = (0..512u16).map(|i| (i % 256) as u8).collect();
+        let score = detector.evaluate(&original, &stego).unwrap();
+        // Very different distributions should produce high detection probability
+        assert!(
+            score.detection_probability > 0.5,
+            "very different histograms should be detected, got {}",
+            score.detection_probability
+        );
+        assert!(score.method_scores.contains_key("total_variation_distance"));
+        assert!(score.method_scores.contains_key("chi2_statistic"));
     }
 }
