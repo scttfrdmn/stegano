@@ -132,6 +132,10 @@ pub enum DataFormat {
     BINARY,
     /// Plain text data
     TEXT,
+
+    // Astronomical
+    /// Flexible Image Transport System — astronomical images and data tables
+    FITS,
 }
 
 impl DataFormat {
@@ -180,6 +184,7 @@ impl DataFormat {
             DataFormat::CsvTimeseries => ".csv",
             DataFormat::BINARY => ".bin",
             DataFormat::TEXT => ".txt",
+            DataFormat::FITS => ".fits",
         }
     }
 }
@@ -359,6 +364,15 @@ pub struct EmbedParams {
     pub enable_validation: bool,
     /// Format-specific embedding parameters
     pub format_specific: HashMap<String, serde_json::Value>,
+    /// Symmetric cipher used for encryption (default: AES-256-GCM)
+    #[serde(default)]
+    pub cipher_kind: CipherKind,
+}
+
+impl Default for EmbedParams {
+    fn default() -> Self {
+        Self::new(vec![])
+    }
 }
 
 impl EmbedParams {
@@ -371,6 +385,7 @@ impl EmbedParams {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: CipherKind::Aes256Gcm,
         }
     }
 
@@ -383,6 +398,7 @@ impl EmbedParams {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: CipherKind::Aes256Gcm,
         }
     }
 
@@ -408,6 +424,49 @@ impl EmbedParams {
     pub fn with_ec_level(mut self, level: ECLevel) -> Self {
         self.error_correction_level = level;
         self
+    }
+
+    /// Use ChaCha20-Poly1305 instead of the default AES-256-GCM.
+    ///
+    /// ChaCha20-Poly1305 is a software-friendly constant-time AEAD cipher that
+    /// performs better on platforms without AES hardware acceleration while
+    /// providing equivalent security guarantees.
+    pub fn with_chacha20(mut self) -> Self {
+        self.cipher_kind = CipherKind::ChaCha20Poly1305;
+        self
+    }
+}
+
+/// Symmetric AEAD cipher used for payload encryption.
+///
+/// Both variants use a 256-bit key derived from the password via Blake3 and
+/// provide authenticated encryption — a wrong key produces a decryption error,
+/// never silent data corruption.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum CipherKind {
+    /// AES-256-GCM (default). Fastest on CPUs with AES-NI hardware acceleration.
+    #[default]
+    Aes256Gcm,
+    /// ChaCha20-Poly1305. Constant-time in software; preferred on ARM / embedded.
+    ChaCha20Poly1305,
+}
+
+impl CipherKind {
+    /// Serialize to a single byte stored in the encrypted payload header.
+    pub fn to_u8(self) -> u8 {
+        match self {
+            CipherKind::Aes256Gcm => 0,
+            CipherKind::ChaCha20Poly1305 => 1,
+        }
+    }
+
+    /// Deserialize from the byte stored in the encrypted payload header.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(CipherKind::Aes256Gcm),
+            1 => Some(CipherKind::ChaCha20Poly1305),
+            _ => None,
+        }
     }
 }
 

@@ -450,6 +450,7 @@ impl MLModel for CudaNeuralNetwork {
             use_gpu: output.get(2).copied().unwrap_or(0.8) > 0.5,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         })
     }
 
@@ -861,6 +862,7 @@ mod tests {
                 use_gpu: true,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             performance: crate::ml::PerformanceMetrics {
                 capacity_efficiency: 0.8,

@@ -39,10 +39,13 @@ pub enum Commands {
         /// Format-specific embedding strategy.
         /// VCF: info|quality|sample|id|multi
         /// SAM/BAM: optional|comment|quality|multi
-        /// PNG/TIFF: lsb|adaptive|edge
+        /// PNG/TIFF: lsb|adaptive|edge|dct
         /// WAV: timedomain|frequency|phase|spread
         #[arg(long)]
         strategy: Option<String>,
+        /// Encryption cipher (aes256gcm, chacha20). Auto-detected on extract.
+        #[arg(long, default_value = "aes256gcm")]
+        cipher: String,
     },
     /// Extract secret data from carrier file
     Extract {

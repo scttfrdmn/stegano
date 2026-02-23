@@ -268,6 +268,7 @@ impl MLOptimizer {
                     use_gpu: false,
                     format_specific: HashMap::new(),
                     enable_validation: false,
+                    cipher_kind: Default::default(),
                 },
                 predicted_performance: PerformanceMetrics {
                     capacity_efficiency: 0.5,

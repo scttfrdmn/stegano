@@ -52,6 +52,7 @@ pub enum CDataFormat {
     CsvTimeseries = 11,
     Binary = 12,
     Text = 13,
+    Fits = 14,
 }
 
 /// C-compatible embed result structure
@@ -89,6 +90,7 @@ fn to_c_format(format: &DataFormat) -> CDataFormat {
         DataFormat::CsvTimeseries => CDataFormat::CsvTimeseries,
         DataFormat::BINARY => CDataFormat::Binary,
         DataFormat::TEXT => CDataFormat::Text,
+        DataFormat::FITS => CDataFormat::Fits,
     }
 }
 
@@ -109,6 +111,7 @@ fn from_c_format(format: CDataFormat) -> DataFormat {
         CDataFormat::CsvTimeseries => DataFormat::CsvTimeseries,
         CDataFormat::Binary => DataFormat::BINARY,
         CDataFormat::Text => DataFormat::TEXT,
+        CDataFormat::Fits => DataFormat::FITS,
     }
 }
 
@@ -299,6 +302,7 @@ pub unsafe extern "C" fn stegano_embed(
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        cipher_kind: Default::default(),
     };
 
     let registry = HandlerRegistry::new();
@@ -398,6 +402,7 @@ pub unsafe extern "C" fn stegano_extract(
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        cipher_kind: Default::default(),
     };
 
     let registry = HandlerRegistry::new();
@@ -450,7 +455,7 @@ pub unsafe extern "C" fn stegano_free(ptr: *mut c_void) {
 /// Returns: Version string (caller must NOT free)
 #[no_mangle]
 pub extern "C" fn stegano_version() -> *const c_char {
-    static VERSION: &str = "0.3.21\0";
+    static VERSION: &str = "0.4.0\0";
     VERSION.as_ptr() as *const c_char
 }
 
@@ -531,6 +536,6 @@ mod tests {
         assert!(!version_ptr.is_null());
 
         let version_str = unsafe { CStr::from_ptr(version_ptr) };
-        assert_eq!(version_str.to_str().unwrap(), "0.3.21");
+        assert_eq!(version_str.to_str().unwrap(), "0.4.0");
     }
 }

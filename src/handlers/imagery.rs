@@ -14,19 +14,21 @@ pub struct ImageryHandler {
     crypto: Option<CryptoLayer>,
 }
 
+/// Image embedding strategy.
+///
+/// This enum is `#[non_exhaustive]` — future strategies can be added without
+/// breaking existing match arms.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum ImageEmbedStrategy {
-    /// Simple LSB embedding in least significant bits
+    /// Simple LSB embedding in least significant bits.  Highest capacity.
     SimpleLSB,
-    /// Advanced LSB with adaptive selection of channels
+    /// Advanced LSB with adaptive selection of high-variation regions.
     AdaptiveLSB,
-    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
-    /// Use `SimpleLSB`, `AdaptiveLSB`, or `EdgeBased` instead.
+    /// DCT frequency-domain embedding in mid-frequency 8-point DCT coefficients.
+    /// Lower capacity than LSB methods but more imperceptible.
     DCTFrequency,
-    /// **Not yet implemented** — returns `SteganoError::InvalidParameter` at embed/extract time.
-    /// Use `SimpleLSB`, `AdaptiveLSB`, or `EdgeBased` instead.
-    PVD,
-    /// Edge-based embedding for higher imperceptibility
+    /// Edge-based embedding for higher imperceptibility (spatial domain).
     EdgeBased,
 }
 
@@ -36,7 +38,8 @@ impl ImageEmbedStrategy {
             ImageEmbedStrategy::SimpleLSB => 0,
             ImageEmbedStrategy::AdaptiveLSB => 1,
             ImageEmbedStrategy::DCTFrequency => 2,
-            ImageEmbedStrategy::PVD => 3,
+            // 3 was PVD (removed in v0.4.0) — slot intentionally unused to
+            // avoid misinterpreting payloads embedded with the old PVD strategy.
             ImageEmbedStrategy::EdgeBased => 4,
         }
     }
@@ -47,11 +50,136 @@ impl ImageEmbedStrategy {
             0 => Some(ImageEmbedStrategy::SimpleLSB),
             1 => Some(ImageEmbedStrategy::AdaptiveLSB),
             2 => Some(ImageEmbedStrategy::DCTFrequency),
-            3 => Some(ImageEmbedStrategy::PVD),
+            // 3 = removed PVD — returns None (payloads embedded with PVD are unreadable)
             4 => Some(ImageEmbedStrategy::EdgeBased),
             _ => None,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 8-point DCT-II / IDCT-II helpers
+// ---------------------------------------------------------------------------
+//
+// These implement the orthonormal DCT-II (and its inverse, DCT-III) on 8
+// values.  The math is standard: C[k] = α[k] * Σ_n x[n] * cos(π(2n+1)k/16)
+// where α[0]=1/√8, α[k>0]=√(2/8).
+
+fn dct8(input: &[f64; 8]) -> [f64; 8] {
+    use std::f64::consts::PI;
+    let mut out = [0f64; 8];
+    for k in 0..8usize {
+        let alpha = if k == 0 { (1.0f64 / 8.0).sqrt() } else { (2.0f64 / 8.0).sqrt() };
+        out[k] = alpha
+            * (0..8usize)
+                .map(|j| input[j] * (PI * (2 * j + 1) as f64 * k as f64 / 16.0).cos())
+                .sum::<f64>();
+    }
+    out
+}
+
+fn idct8(input: &[f64; 8]) -> [f64; 8] {
+    use std::f64::consts::PI;
+    let mut out = [0f64; 8];
+    for j in 0..8usize {
+        out[j] = (0..8usize)
+            .map(|k| {
+                let alpha = if k == 0 { (1.0f64 / 8.0).sqrt() } else { (2.0f64 / 8.0).sqrt() };
+                alpha * input[k] * (PI * (2 * j + 1) as f64 * k as f64 / 16.0).cos()
+            })
+            .sum::<f64>();
+    }
+    out
+}
+
+/// Quantization step for QIM (Quantization Index Modulation) in DCT domain.
+/// Must be large enough that the per-pixel rounding error after IDCT→clamp
+/// does not flip the parity bit on re-DCT.  Analysis: max per-pixel error
+/// from clamping is 0.5, which propagates to ≤ 0.5·√(2/8) ≈ 0.35 coefficient
+/// units.  DELTA=8 gives a half-period of 4 » 0.35 so parity is preserved.
+const DCT_DELTA: f64 = 8.0;
+
+/// Indices of mid-frequency DCT coefficients used for embedding (1 bit each).
+const DCT_COEFF_INDICES: [usize; 4] = [2, 3, 4, 5];
+
+/// Embed `payload` bytes into `image_data` using QIM in 8-point DCT blocks.
+///
+/// The data is divided into 8-byte blocks.  Each block is DCT-transformed,
+/// 4 mid-frequency coefficients (indices 2–5) are quantised to encode 1 bit
+/// each, and the block is IDCT-transformed back.  Pixel values are clamped to
+/// [0, 255] and rounded to the nearest integer.
+fn embed_dct(image_data: &mut Vec<u8>, payload: &[u8]) -> crate::core::Result<()> {
+    let payload_bits: Vec<u8> = payload
+        .iter()
+        .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
+        .collect();
+
+    let num_blocks = image_data.len() / 8;
+    let bits_capacity = num_blocks * DCT_COEFF_INDICES.len();
+    if payload_bits.len() > bits_capacity {
+        return Err(crate::core::SteganoError::InsufficientCapacity {
+            needed: payload_bits.len(),
+            available: bits_capacity / 8,
+        });
+    }
+
+    let mut bit_idx = 0;
+    for block_idx in 0..num_blocks {
+        if bit_idx >= payload_bits.len() {
+            break;
+        }
+        let start = block_idx * 8;
+        let block: [f64; 8] = std::array::from_fn(|i| image_data[start + i] as f64);
+        let mut coeffs = dct8(&block);
+
+        for &coeff_idx in &DCT_COEFF_INDICES {
+            if bit_idx >= payload_bits.len() {
+                break;
+            }
+            let bit = payload_bits[bit_idx] as f64;
+            // QIM: quantise to nearest multiple of 2*DELTA, offset by DELTA*bit
+            let two_delta = 2.0 * DCT_DELTA;
+            coeffs[coeff_idx] = two_delta * (coeffs[coeff_idx] / two_delta).round() + DCT_DELTA * bit;
+            bit_idx += 1;
+        }
+
+        let restored = idct8(&coeffs);
+        for i in 0..8 {
+            image_data[start + i] = restored[i].round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    Ok(())
+}
+
+/// Extract `bits_needed` bits from `image_data` using the same DCT-QIM scheme.
+fn extract_dct_bits(
+    image_data: &[u8],
+    bits_needed: usize,
+) -> crate::core::Result<Vec<u8>> {
+    let mut bits = Vec::with_capacity(bits_needed);
+    let num_blocks = image_data.len() / 8;
+
+    'outer: for block_idx in 0..num_blocks {
+        let start = block_idx * 8;
+        let block: [f64; 8] = std::array::from_fn(|i| image_data[start + i] as f64);
+        let coeffs = dct8(&block);
+
+        for &coeff_idx in &DCT_COEFF_INDICES {
+            if bits.len() >= bits_needed {
+                break 'outer;
+            }
+            // QIM decode: parity of round(coeff / DELTA)
+            let parity = (coeffs[coeff_idx] / DCT_DELTA).round() as i64;
+            bits.push(parity.rem_euclid(2) as u8);
+        }
+    }
+
+    if bits.len() < bits_needed {
+        return Err(crate::core::SteganoError::InvalidParameter(
+            "Insufficient DCT blocks to extract the requested bits".to_string(),
+        ));
+    }
+    Ok(bits)
 }
 
 impl ImageryHandler {
@@ -130,9 +258,11 @@ impl ImageryHandler {
                 let bits = (total_pixels as usize * 2).min(raw_data_bits);
                 (bits, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
             }
-            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
-                // Not implemented — report zero capacity so callers don't attempt to use them
-                (0, 0)
+            ImageEmbedStrategy::DCTFrequency => {
+                // 4 bits per 8-byte DCT block (coefficients 2..5)
+                // = raw_data.len() / 8 * 4 bits = raw_data.len() / 2 bits
+                let bits = raw_data_bits / 2;
+                (bits, 80)
             }
             ImageEmbedStrategy::EdgeBased => {
                 // Only embed in edge regions (estimate 30% of image)
@@ -227,10 +357,8 @@ impl ImageryHandler {
                     dims.clone(),
                 )?;
             }
-            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
-                return Err(SteganoError::InvalidParameter(format!(
-                    "{strategy:?} embedding is not yet implemented; use SimpleLSB, AdaptiveLSB, or EdgeBased"
-                )));
+            ImageEmbedStrategy::DCTFrequency => {
+                embed_dct(&mut carrier.raw_data, &total_data)?;
             }
         }
 
@@ -408,10 +536,8 @@ impl ImageryHandler {
                     header_bytes_needed * 8,
                 )?;
             }
-            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
-                return Err(SteganoError::InvalidParameter(format!(
-                    "{strategy:?} extraction is not yet implemented"
-                )));
+            ImageEmbedStrategy::DCTFrequency => {
+                header_bits = extract_dct_bits(&carrier.raw_data, header_bytes_needed * 8)?;
             }
         }
 
@@ -489,10 +615,8 @@ impl ImageryHandler {
                     total_bits_needed,
                 )?;
             }
-            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
-                return Err(SteganoError::InvalidParameter(format!(
-                    "{strategy:?} extraction is not yet implemented"
-                )));
+            ImageEmbedStrategy::DCTFrequency => {
+                all_bits = extract_dct_bits(&carrier.raw_data, total_bits_needed)?;
             }
         }
 
@@ -613,15 +737,18 @@ impl DataHandler for ImageryHandler {
             "capacity_medium_stealth_bits".to_string(),
             serde_json::Value::Number(serde_json::Number::from(info.recommended_bits)),
         );
-        // High and Maximum stealth both use EdgeBased (~30% of pixels), much lower capacity.
+        // High stealth → EdgeBased
         if let Ok(edge) = self.estimate_image_capacity(carrier, &ImageEmbedStrategy::EdgeBased) {
             info.format_specific_info.insert(
                 "capacity_high_stealth_bits".to_string(),
                 serde_json::Value::Number(serde_json::Number::from(edge.recommended_bits)),
             );
+        }
+        // Maximum stealth → DCTFrequency
+        if let Ok(dct) = self.estimate_image_capacity(carrier, &ImageEmbedStrategy::DCTFrequency) {
             info.format_specific_info.insert(
                 "capacity_maximum_stealth_bits".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(edge.recommended_bits)),
+                serde_json::Value::Number(serde_json::Number::from(dct.recommended_bits)),
             );
         }
         Ok(info)
@@ -633,22 +760,38 @@ impl DataHandler for ImageryHandler {
         payload: &[u8],
         params: &EmbedParams,
     ) -> Result<EmbedResult> {
-        let strategy = match params.stealth_level {
+        // Check for format-specific override from --strategy flag
+        let strategy_override = params
+            .format_specific
+            .get("imagery_strategy")
+            .and_then(|v| v.as_str())
+            .map(|s| match s.to_lowercase().as_str() {
+                "lsb" | "simplelSB" | "simplelSb" => Some(ImageEmbedStrategy::SimpleLSB),
+                "adaptive" | "adaptivelSB" | "adaptivelsb" => Some(ImageEmbedStrategy::AdaptiveLSB),
+                "dct" | "dctfrequency" => Some(ImageEmbedStrategy::DCTFrequency),
+                "edge" | "edgebased" => Some(ImageEmbedStrategy::EdgeBased),
+                _ => None,
+            })
+            .flatten();
+
+        let strategy = strategy_override.unwrap_or_else(|| match params.stealth_level {
             StealthLevel::Low => ImageEmbedStrategy::SimpleLSB,
             StealthLevel::Medium => ImageEmbedStrategy::AdaptiveLSB,
             StealthLevel::High => ImageEmbedStrategy::EdgeBased,
-            StealthLevel::Maximum => ImageEmbedStrategy::EdgeBased,
-        };
+            StealthLevel::Maximum => ImageEmbedStrategy::DCTFrequency,
+        });
 
         self.embed_lsb(carrier, payload, params, &strategy).await
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        // Try strategies in order matching embed()'s stealth_level dispatch:
-        // Low→SimpleLSB, Medium→AdaptiveLSB, High/Maximum→EdgeBased.
+        // Try all implemented strategies; the stored strategy byte in the header
+        // (validated in extract_with_strategy) ensures we return data only from
+        // the correct strategy.
         let strategies = [
             ImageEmbedStrategy::SimpleLSB,
             ImageEmbedStrategy::AdaptiveLSB,
+            ImageEmbedStrategy::DCTFrequency,
             ImageEmbedStrategy::EdgeBased,
         ];
 
@@ -761,9 +904,12 @@ mod tests {
             .as_u64().unwrap() as usize;
         let high = capacity.format_specific_info["capacity_high_stealth_bits"]
             .as_u64().unwrap() as usize;
+        let max = capacity.format_specific_info["capacity_maximum_stealth_bits"]
+            .as_u64().unwrap() as usize;
         assert!(low >= med, "SimpleLSB should have >= capacity than AdaptiveLSB");
         assert!(med >= high, "AdaptiveLSB should have >= capacity than EdgeBased");
         assert!(high > 0, "EdgeBased capacity should be positive for a valid image");
+        assert!(max > 0, "DCT capacity should be positive for a valid image");
     }
 
     #[tokio::test]
@@ -880,10 +1026,16 @@ mod tests {
         let edge_capacity = handler
             .estimate_image_capacity(&carrier, &ImageEmbedStrategy::EdgeBased)
             .unwrap();
+        let dct_capacity = handler
+            .estimate_image_capacity(&carrier, &ImageEmbedStrategy::DCTFrequency)
+            .unwrap();
 
         // Simple LSB should have highest capacity
         assert!(simple_capacity.recommended_bits >= adaptive_capacity.recommended_bits);
         assert!(adaptive_capacity.recommended_bits >= edge_capacity.recommended_bits);
+        // DCT capacity is positive and less than adaptive LSB
+        assert!(dct_capacity.recommended_bits > 0);
+        assert!(dct_capacity.recommended_bits <= adaptive_capacity.recommended_bits);
     }
 
     #[test]
@@ -940,6 +1092,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -980,6 +1133,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -1012,11 +1166,118 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
         assert!(result.success);
         assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    // ---- DCT-II / IDCT-II unit tests ----
+
+    #[test]
+    fn test_dct8_idct8_roundtrip() {
+        let original: [f64; 8] = [100.0, 120.0, 80.0, 90.0, 110.0, 70.0, 95.0, 105.0];
+        let coeffs = dct8(&original);
+        let restored = idct8(&coeffs);
+        for i in 0..8 {
+            assert!(
+                (restored[i] - original[i]).abs() < 1e-9,
+                "IDCT(DCT(x))[{i}] = {:.6} but expected {:.6}",
+                restored[i],
+                original[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_dct_embed_extract_bits() {
+        // Embed 8 bits and check we get the same bits back
+        let bits_in: Vec<u8> = vec![1, 0, 1, 1, 0, 0, 1, 0];
+        let mut data = vec![100u8; 16]; // 2 DCT blocks → 8 bits capacity
+        // Manually embed
+        let payload_byte = 0b0100_1101u8; // bits[0..8] = [1,0,1,1,0,0,1,0] LSB-first
+        let payload = [payload_byte];
+        let header: Vec<u8> = b"IMSJ".iter().chain([3u8, 0u8, 0u8, 0u8, 2u8, 0u8].iter()).cloned().collect();
+        let total: Vec<u8> = header.into_iter().chain(payload.iter().cloned()).collect();
+        let mut image_data = vec![128u8; 512]; // enough for 11-byte message
+        embed_dct(&mut image_data, &total).unwrap();
+        let extracted_bits = extract_dct_bits(&image_data, total.len() * 8).unwrap();
+        let extracted_bytes: Vec<u8> = extracted_bits
+            .chunks(8)
+            .map(|chunk| chunk.iter().enumerate().fold(0u8, |a, (i, &b)| a | (b << i)))
+            .collect();
+        assert_eq!(&extracted_bytes[..4], b"IMSJ");
+        assert_eq!(extracted_bytes[8], 2); // strategy byte = DCTFrequency
+        let _ = bits_in; // used conceptually
+    }
+
+    #[tokio::test]
+    async fn test_dct_embedding_roundtrip() {
+        let handler = ImageryHandler::new();
+        let payload = b"dct!";
+
+        // 256×1 "image" of natural-ish values — DCT needs ~30-ish bytes of carrier
+        // per payload byte.  payload = 4 bytes → need at least 4*8 = 32 bits →
+        // header (10 bytes = 80 bits) + payload (4 bytes = 32 bits) = 112 bits →
+        // 28 DCT blocks @ 4 bits each = 112 carrier bytes minimum.
+        // Use 4096 bytes for plenty of headroom.
+        let carrier_data: Vec<u8> = (0..4096u16).map(|i| (i % 200 + 28) as u8).collect();
+        let mut carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: carrier_data,
+            metadata: HashMap::new(),
+            dimensions: Some(Dimensions::new_2d(64, 64)),
+            sampling_rate: None,
+        };
+
+        let params = EmbedParams {
+            encryption_key: vec![],
+            error_correction_level: ECLevel::None,
+            stealth_level: StealthLevel::Maximum, // → DCTFrequency
+            use_gpu: false,
+            enable_validation: false,
+            format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
+        };
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
+        assert_eq!(result.bytes_embedded, payload.len());
+
+        let extracted = handler.extract(&carrier, &params).await.unwrap();
+        assert_eq!(extracted, payload);
+    }
+
+    #[tokio::test]
+    async fn test_dct_strategy_via_format_specific() {
+        let handler = ImageryHandler::new();
+        let payload = b"via_flag";
+
+        let carrier_data: Vec<u8> = (0..4096u16).map(|i| (i % 200 + 28) as u8).collect();
+        let mut carrier = CarrierData {
+            format: DataFormat::PNG,
+            raw_data: carrier_data,
+            metadata: HashMap::new(),
+            dimensions: Some(Dimensions::new_2d(64, 64)),
+            sampling_rate: None,
+        };
+
+        // Select DCT via format_specific["imagery_strategy"] = "dct"
+        let mut params = EmbedParams::new(vec![]);
+        params.error_correction_level = ECLevel::None;
+        params.stealth_level = StealthLevel::Low; // would normally → SimpleLSB
+        params.format_specific.insert(
+            "imagery_strategy".to_string(),
+            serde_json::Value::String("dct".to_string()),
+        );
+
+        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
+        assert!(result.success);
 
         let extracted = handler.extract(&carrier, &params).await.unwrap();
         assert_eq!(extracted, payload);

@@ -1,7 +1,7 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.21-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
@@ -9,13 +9,14 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.21 - Latest Production Release
+## 🎯 Version 0.4.0 - Latest Production Release
 
-Stegano v0.3.21 adds the three v0.4.0 CLI features (preview ahead of the full v0.4.0 minor release):
-- ✅ **393 Tests Passing** — 13 new unit tests for `parse_ec_level` and `apply_strategy`
-- ✅ **`--ec-level` flag** — Control Reed-Solomon error-correction level per embed: `none`, `low`, `medium`, `high`, `maximum`. Resolves [#13](https://github.com/scttfrdmn/stegano/issues/13).
-- ✅ **`--strategy` flag** — Select format-specific embedding strategy at the CLI (`--strategy adaptive` for imagery, `--strategy frequency` for WAV, etc.). Resolves [#14](https://github.com/scttfrdmn/stegano/issues/14).
-- ✅ **`detect` subcommand** — `stegano detect -i file.png` checks for hidden data and exits 0 (found) or 1 (not found) — scriptable. Resolves [#15](https://github.com/scttfrdmn/stegano/issues/15).
+Stegano v0.4.0 delivers four major new capabilities across cryptography, format support, and language bindings:
+- ✅ **420 Tests Passing** — 410 lib tests + 10 new Python binding tests (`--features python`)
+- ✅ **ChaCha20-Poly1305 encryption** — `--cipher chacha20` flag on embed; cipher auto-detected on extract. Resolves [#17](https://github.com/scttfrdmn/stegano/issues/17).
+- ✅ **DCT frequency-domain embedding** — `StealthLevel::Maximum` now uses real 8-point QIM-based DCT embedding (replaces unimplemented placeholder). PVD variant removed. Resolves [#19](https://github.com/scttfrdmn/stegano/issues/19).
+- ✅ **FITS astronomical format handler** — Pixel-LSB steganography in FITS data sections; supports `.fits`, `.fit`, `.fts` files used by telescopes and observatories. Resolves [#18](https://github.com/scttfrdmn/stegano/issues/18).
+- ✅ **Python bindings via PyO3** — `import stegano` in Python; `stegano.embed()`, `stegano.extract()`, `stegano.estimate_capacity()`; build with `maturin develop --features python`. Resolves [#16](https://github.com/scttfrdmn/stegano/issues/16).
 
 ### 🆕 New in v0.3.3
 - **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis

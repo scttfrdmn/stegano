@@ -347,6 +347,7 @@ impl NeuralNetworkModel {
             use_gpu,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -671,6 +672,7 @@ impl DecisionTreeModel {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             }
         };
 
@@ -830,6 +832,7 @@ impl MLModel for DecisionTreeModel {
                     use_gpu: false,
                     format_specific: HashMap::new(),
                     enable_validation: false,
+                    cipher_kind: Default::default(),
                 })
             }
         } else {
@@ -1016,6 +1019,7 @@ mod tests {
                     use_gpu: i % 3 == 0,
                     format_specific: HashMap::new(),
                     enable_validation: false,
+                    cipher_kind: Default::default(),
                 },
                 performance: super::super::PerformanceMetrics {
                     embedding_time_ms: 10,
@@ -1055,6 +1059,7 @@ mod tests {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             performance: super::super::PerformanceMetrics {
                 capacity_efficiency: 0.8,

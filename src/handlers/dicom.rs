@@ -1416,6 +1416,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),
@@ -1541,6 +1542,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),
@@ -1573,6 +1575,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),
@@ -1600,6 +1603,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),
@@ -1626,6 +1630,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),
@@ -1652,6 +1657,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),
@@ -1684,6 +1690,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "dicom_strategy".to_string(),

@@ -13,6 +13,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.4.0] - 2026-02-23
+
+### Added
+- **ChaCha20-Poly1305 encryption** (`src/crypto/mod.rs`, `src/core.rs`, `src/cli/`):
+  New `CipherKind` enum (`Aes256Gcm` = 0, `ChaCha20Poly1305` = 1) stored as a prefix byte
+  in the serialised payload so extraction auto-detects the cipher.  Added `--cipher chacha20`
+  flag on the `embed` subcommand; `EmbedParams::with_chacha20()` builder.  Serialisation
+  format updated from 48 → 49 bytes minimum.  Resolves
+  [#17](https://github.com/scttfrdmn/stegano/issues/17).
+- **DCT frequency-domain embedding** (`src/handlers/imagery.rs`):
+  Implemented 8-point DCT-II / QIM steganography (`dct8`, `idct8`, `embed_dct`,
+  `extract_dct_bits`).  `StealthLevel::Maximum` now dispatches to `DCTFrequency` instead of
+  the unimplemented `EdgeBased` strategy.  Added `imagery_strategy = "dct"` key in
+  `format_specific` to override per-embed.  Removed the `PVD` variant (slot intentionally
+  unused, byte value 3 reserved).  Resolves
+  [#19](https://github.com/scttfrdmn/stegano/issues/19).
+- **FITS astronomical format handler** (`src/handlers/fits.rs`):
+  Pixel-LSB steganography in the FITS primary HDU data section.  Handler locates the data
+  section by scanning 80-byte header cards for the `END` card and aligning to the next
+  2880-byte block boundary.  Magic: `FTSJ` + 4-byte LE payload length + strategy byte +
+  codec mode byte.  Supports `.fits`, `.fit`, `.fts` extensions; magic detection via
+  `SIMPLE  ` prefix.  9 unit tests.  Resolves
+  [#18](https://github.com/scttfrdmn/stegano/issues/18).
+- **Python bindings via PyO3** (`src/python.rs`, `pyproject.toml`):
+  Optional `python` feature (`--features python`) exposes `stegano.Stegano` Python class
+  and module-level `embed()`, `extract()`, `estimate_capacity()`, `version()` functions.
+  Format auto-detected from carrier bytes; sync wrappers around the Tokio async API.
+  Build with `maturin develop --features python`; requires
+  `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` on Python ≥ 3.14.  10 new unit tests.  Resolves
+  [#16](https://github.com/scttfrdmn/stegano/issues/16).
+
+### Changed
+- `EmbedParams` gains a `cipher_kind: CipherKind` field (default `Aes256Gcm`, serde
+  default) — all existing struct literals updated with `cipher_kind: Default::default()`.
+- `ImageEmbedStrategy` is now `#[non_exhaustive]`; `Maximum` stealth maps to `DCTFrequency`.
+- `DataFormat::FITS` added; `CDataFormat::Fits = 14` in FFI; `get_handler` updated.
+- `pyproject.toml` added at repository root for maturin-based Python wheel builds.
+
 ## [0.3.21] - 2026-02-23
 
 ### Added

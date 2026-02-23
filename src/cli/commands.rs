@@ -14,6 +14,7 @@ pub async fn handle_embed(
     stealth: &str,
     ec_level: &str,
     strategy: Option<&str>,
+    cipher: &str,
 ) -> Result<()> {
     println!("🔐 Embedding {payload} into {input} -> {output}");
 
@@ -37,6 +38,10 @@ pub async fn handle_embed(
     let mut params = EmbedParams::new(key)
         .with_stealth_level(stealth_level)
         .with_ec_level(ec);
+
+    if cipher.eq_ignore_ascii_case("chacha20") || cipher.eq_ignore_ascii_case("chacha20poly1305") {
+        params = params.with_chacha20();
+    }
 
     if gpu {
         params = params.with_gpu();
@@ -355,6 +360,7 @@ fn detect_format_from_extension(path: &str) -> Option<DataFormat> {
         "wav" => DataFormat::WAV,
         "csv" => DataFormat::CsvTimeseries,
         "txt" => DataFormat::TEXT,
+        "fits" | "fit" | "fts" => DataFormat::FITS,
         _ => return None,
     })
 }
@@ -400,6 +406,10 @@ fn detect_format_from_magic(data: &[u8]) -> Option<DataFormat> {
     }
     if data.starts_with(b"##fileformat=VCF") {
         return Some(DataFormat::VCF);
+    }
+    // FITS: "SIMPLE  " (8-byte keyword, space-padded)
+    if data.len() >= 8 && &data[..8] == b"SIMPLE  " {
+        return Some(DataFormat::FITS);
     }
 
     None
@@ -575,6 +585,7 @@ fn apply_strategy(params: &mut EmbedParams, format: &DataFormat, strategy: &str)
         }
         DataFormat::WAV => "signal_strategy",
         DataFormat::FASTA | DataFormat::FASTQ => "genomics_strategy",
+        DataFormat::FITS => "fits_strategy",
         _ => return,
     };
     params

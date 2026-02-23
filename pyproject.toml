@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "stegano"
+dynamic = ["version"]
+description = "High-performance scientific data steganography"
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["steganography", "genomics", "astronomy", "bioinformatics", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Security :: Cryptography",
+]
+
+[tool.maturin]
+# Rust features to enable when building the Python extension.
+# "pyo3/extension-module" links the GIL-based Python C-API correctly.
+features = ["python", "pyo3/extension-module"]
+# The Python module name (matches the #[pymodule] fn name in lib.rs).
+module-name = "stegano"
+# Strip debug symbols in release wheels.
+strip = true
+
+[tool.maturin.env]
+# Required when the system Python is newer than the pyo3 release's max-tested
+# version.  Forward compatibility uses the stable ABI so it should be safe.
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"

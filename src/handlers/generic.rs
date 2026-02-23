@@ -473,6 +473,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         // Embed

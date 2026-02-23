@@ -737,6 +737,7 @@ mod tests {
                     use_gpu: false,
                     format_specific: HashMap::new(),
                     enable_validation: false,
+                    cipher_kind: Default::default(),
                 },
                 performance: PerformanceMetrics {
                     capacity_efficiency: 0.5,
@@ -799,6 +800,7 @@ mod tests {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             performance: PerformanceMetrics {
                 capacity_efficiency: 0.5,

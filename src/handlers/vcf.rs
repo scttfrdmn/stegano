@@ -1135,6 +1135,7 @@ mod tests {
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),
@@ -1176,6 +1177,7 @@ mod tests {
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),
@@ -1245,6 +1247,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),
@@ -1278,6 +1281,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),
@@ -1312,6 +1316,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),
@@ -1352,6 +1357,7 @@ mod tests {
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "vcf_strategy".to_string(),

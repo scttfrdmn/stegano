@@ -72,6 +72,21 @@ pub mod ml;
 pub mod monitoring;
 pub mod validation;
 
+#[cfg(feature = "python")]
+pub mod python;
+
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
+/// Python extension module entry point.
+///
+/// Activated only when compiled with `--features python` (e.g. via maturin).
+#[cfg(feature = "python")]
+#[pymodule]
+fn stegano(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    python::init_module(m)
+}
+
 pub use core::*;
 
 // Re-export main API types

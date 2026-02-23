@@ -685,6 +685,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         // Embed
@@ -732,6 +733,7 @@ KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         // Test capacity estimation
@@ -795,6 +797,7 @@ KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
         assert!(result.success);
@@ -833,6 +836,7 @@ KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
         assert!(result.success);

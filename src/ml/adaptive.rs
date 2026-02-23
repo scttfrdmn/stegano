@@ -448,6 +448,7 @@ mod tests {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             EmbedParams {
                 encryption_key: vec![],
@@ -456,6 +457,7 @@ mod tests {
                 use_gpu: true,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
         ];
 
@@ -496,6 +498,7 @@ mod tests {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             metrics: PerformanceMetrics {
                 capacity_efficiency: 0.8,

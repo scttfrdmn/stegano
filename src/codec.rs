@@ -28,7 +28,7 @@ pub fn encode_payload(payload: &[u8], params: &EmbedParams) -> crate::core::Resu
     // Step 1: encrypt with params key if provided.
     if !params.encryption_key.is_empty() {
         let key = normalize_key(&params.encryption_key);
-        let crypto = CryptoLayer::new_from_key(&key)?;
+        let crypto = CryptoLayer::new_from_key_with_kind(&key, params.cipher_kind)?;
         let sp = crypto.encrypt(&data)?;
         data = CryptoLayer::serialize_payload(&sp);
         flags |= FLAG_ENCRYPTED;
@@ -206,6 +206,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         }
     }
 
@@ -217,6 +218,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         }
     }
 
@@ -228,6 +230,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         }
     }
 
@@ -239,6 +242,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         }
     }
 

@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             stealth,
             ec_level,
             strategy,
+            cipher,
         } => {
             if let Err(e) = stegano::cli::commands::handle_embed(
                 &input,
@@ -29,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &stealth,
                 &ec_level,
                 strategy.as_deref(),
+                &cipher,
             )
             .await
             {

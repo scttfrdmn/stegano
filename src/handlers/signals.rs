@@ -1220,6 +1220,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -1251,6 +1252,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -1290,6 +1292,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         handler
@@ -1343,6 +1346,7 @@ mod tests {
             use_gpu: false,
             enable_validation: false,
             format_specific: std::collections::HashMap::new(),
+            cipher_kind: Default::default(),
         };
 
         handler

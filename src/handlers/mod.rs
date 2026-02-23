@@ -1,6 +1,7 @@
 //! Data format handlers for different scientific data types
 
 pub mod dicom;
+pub mod fits;
 pub mod generic;
 pub mod genomics;
 pub mod imagery;
@@ -50,13 +51,14 @@ impl HandlerRegistry {
     pub fn new() -> Self {
         Self {
             handlers: vec![
-                Box::new(genomics::GenomicsHandler::new()),
-                Box::new(vcf::VcfHandler::new()),
-                Box::new(dicom::DicomHandler::new()),
-                Box::new(sam_bam::SamBamHandler),
-                Box::new(imagery::ImageryHandler::new()),
-                Box::new(signals::SignalHandler::new()),
-                Box::new(generic::GenericHandler::new()),
+                Box::new(genomics::GenomicsHandler::new()),   // 0
+                Box::new(vcf::VcfHandler::new()),             // 1
+                Box::new(dicom::DicomHandler::new()),         // 2
+                Box::new(sam_bam::SamBamHandler),             // 3
+                Box::new(imagery::ImageryHandler::new()),     // 4
+                Box::new(signals::SignalHandler::new()),      // 5
+                Box::new(fits::FitsHandler::new()),           // 6
+                Box::new(generic::GenericHandler::new()),     // 7
             ],
         }
     }
@@ -83,8 +85,11 @@ impl HandlerRegistry {
             DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries => {
                 Some(&*self.handlers[5]) // SignalHandler
             }
+            DataFormat::FITS => {
+                Some(&*self.handlers[6]) // FitsHandler
+            }
             DataFormat::BINARY | DataFormat::TEXT => {
-                Some(&*self.handlers[6]) // GenericHandler
+                Some(&*self.handlers[7]) // GenericHandler
             }
         }
     }

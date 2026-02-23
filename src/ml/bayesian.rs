@@ -440,6 +440,7 @@ impl BayesianOptimizer {
             use_gpu: random::<bool>(),
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -489,6 +490,7 @@ impl BayesianOptimizer {
             use_gpu,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -960,6 +962,7 @@ mod tests {
             use_gpu: true,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
 
         let vector = optimizer.embed_params_to_vector(&params);

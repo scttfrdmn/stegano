@@ -1322,6 +1322,7 @@ impl OptimizationEngine {
                 parent2.format_specific.clone()
             },
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -1423,6 +1424,7 @@ impl OptimizationEngine {
             use_gpu: random::<bool>(),
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -1444,6 +1446,7 @@ impl OptimizationEngine {
                         use_gpu,
                         format_specific: HashMap::new(),
                         enable_validation: false,
+                        cipher_kind: Default::default(),
                     });
                 }
             }
@@ -1524,6 +1527,7 @@ impl OptimizationEngine {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             // High performance strategy
             EmbedParams {
@@ -1533,6 +1537,7 @@ impl OptimizationEngine {
                 use_gpu: true,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
             // Balanced strategy
             EmbedParams {
@@ -1542,6 +1547,7 @@ impl OptimizationEngine {
                 use_gpu: false,
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             },
         ];
 
@@ -1589,6 +1595,7 @@ impl OptimizationEngine {
                 parent2.format_specific.clone()
             },
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -1816,6 +1823,7 @@ impl OptimizationEngine {
                 encryption_key: Vec::new(),
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             };
             swarm.push(params);
         }
@@ -1983,6 +1991,7 @@ impl OptimizationEngine {
                 encryption_key: Vec::new(),
                 format_specific: HashMap::new(),
                 enable_validation: false,
+                cipher_kind: Default::default(),
             };
 
             velocities[i] = ParticleVelocity {
@@ -2046,6 +2055,7 @@ impl OptimizationEngine {
             use_gpu: vec.get(2).unwrap_or(&0.0) > &0.5,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 }
@@ -2432,6 +2442,7 @@ mod tests {
             use_gpu: gpu,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         }
     }
 
@@ -2546,6 +2557,7 @@ mod tests {
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
 
         let mut engine = OptimizationEngine::new(OptimizationConfig {

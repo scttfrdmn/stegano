@@ -1526,6 +1526,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1566,6 +1567,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1633,6 +1635,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1673,6 +1676,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1703,6 +1707,7 @@ read2	0	chr1	200	60	100M	*	0	0	GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1743,6 +1748,7 @@ read3\t0\tchr1\t300\t60\t50M\t*\t0\t0\tTTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
             use_gpu: false,
             enable_validation: false,
             format_specific: HashMap::new(),
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
@@ -1783,6 +1789,7 @@ read3\t0\tchr1\t300\t60\t50M\t*\t0\t0\tTTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            cipher_kind: Default::default(),
         };
         params.format_specific.insert(
             "sam_strategy".to_string(),
