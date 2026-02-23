@@ -371,11 +371,15 @@ impl VcfHandler {
         Ok(payload)
     }
 
-    /// Embed payload using quality score steganography
+    /// Embed payload using quality score steganography (self-framing: 4-byte length header)
     fn embed_quality_strategy(&self, vcf: &mut VcfFile, payload: &[u8]) -> Result<VcfEmbedResult> {
-        // Convert payload to bits
+        // Prepend 4-byte LE length header so extraction is self-framing
+        let len_bytes = (payload.len() as u32).to_le_bytes();
+        let framed: Vec<u8> = len_bytes.iter().chain(payload.iter()).copied().collect();
+
+        // Convert framed payload to bits (LSB-first per byte)
         let mut payload_bits = Vec::new();
-        for byte in payload {
+        for byte in &framed {
             for i in 0..8 {
                 payload_bits.push((byte >> i) & 1);
             }
@@ -430,24 +434,47 @@ impl VcfHandler {
         })
     }
 
-    /// Extract payload from quality score steganography
+    /// Extract payload from quality score steganography (self-framing: reads 4-byte length header)
     fn extract_quality_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        let mut extracted_bits = Vec::new();
+        // Collect all bits from low 3 bits of integer quality scores
+        let all_bits: Vec<u8> = vcf
+            .variants
+            .iter()
+            .filter_map(|v| v.qual)
+            .flat_map(|qual| {
+                let t = qual.round() as u32 & 7;
+                [(t & 1) as u8, ((t >> 1) & 1) as u8, ((t >> 2) & 1) as u8]
+            })
+            .collect();
 
-        // Extract bits from low 3 bits of integer quality score (matches embed_quality_strategy)
-        for variant in &vcf.variants {
-            if let Some(qual) = variant.qual {
-                let integer_qual = qual.round() as u32;
-                let triplet = integer_qual & 7;
-                extracted_bits.push((triplet & 1) as u8);
-                extracted_bits.push(((triplet >> 1) & 1) as u8);
-                extracted_bits.push(((triplet >> 2) & 1) as u8);
-            }
+        // Need at least 32 bits for the 4-byte length header
+        if all_bits.len() < 32 {
+            return Err(SteganoError::IntegrityError(
+                "Insufficient quality data for length header".to_string(),
+            ));
         }
 
-        // Convert bits back to bytes
-        let mut payload = Vec::new();
-        for chunk in extracted_bits.chunks(8) {
+        // Decode 4-byte LE length from first 32 bits
+        let mut len_bytes = [0u8; 4];
+        for (byte_idx, chunk) in all_bits[..32].chunks(8).enumerate() {
+            let mut byte = 0u8;
+            for (i, &bit) in chunk.iter().enumerate() {
+                byte |= bit << i;
+            }
+            len_bytes[byte_idx] = byte;
+        }
+        let payload_length = u32::from_le_bytes(len_bytes) as usize;
+
+        let required_bits = 32 + payload_length * 8;
+        if all_bits.len() < required_bits {
+            return Err(SteganoError::IntegrityError(
+                "Insufficient quality variants for payload extraction".to_string(),
+            ));
+        }
+
+        // Convert payload bits (skip first 32 header bits) back to bytes
+        let mut payload = Vec::with_capacity(payload_length);
+        for chunk in all_bits[32..required_bits].chunks(8) {
             if chunk.len() == 8 {
                 let mut byte = 0u8;
                 for (i, &bit) in chunk.iter().enumerate() {
@@ -457,7 +484,7 @@ impl VcfHandler {
             }
         }
 
-        if payload.is_empty() {
+        if payload.is_empty() && payload_length > 0 {
             return Err(SteganoError::IntegrityError(
                 "No steganographic data found in quality scores".to_string(),
             ));
@@ -476,8 +503,6 @@ impl VcfHandler {
         let mut variants_modified = 0;
         let mut info_fields_added = 0;
 
-        // Add custom FORMAT field to store steganographic data
-        let steg_format_field = "STEG";
         let chunk_size = 16; // 16 hex characters per variant
 
         let chunks: Vec<&str> = hex_payload
@@ -493,23 +518,25 @@ impl VcfHandler {
             });
         }
 
-        // Add steganographic data to FORMAT fields
+        // Each chunk gets its own indexed FORMAT tag (S00, S01, …) so extraction can
+        // reconstruct order even if variants are reordered between embed and extract.
         for (i, chunk) in chunks.iter().enumerate() {
             if i < vcf.variants.len() && !chunk.is_empty() {
                 let variant = &mut vcf.variants[i];
+                let field_tag = format!("S{i:02}"); // S00 … S99
 
                 // Update FORMAT field
                 if let Some(ref mut format) = variant.format {
-                    if !format.contains(steg_format_field) {
-                        format.push_str(&format!(":{steg_format_field}"));
+                    if !format.contains(&field_tag) {
+                        format.push_str(&format!(":{field_tag}"));
                     }
                 } else {
-                    variant.format = Some(format!("GT:{steg_format_field}"));
+                    variant.format = Some(format!("GT:{field_tag}"));
                 }
 
                 // Add steganographic data to each sample
                 for sample in &mut variant.samples {
-                    sample.insert(steg_format_field.to_string(), chunk.to_string());
+                    sample.insert(field_tag.clone(), chunk.to_string());
                 }
 
                 variants_modified += 1;
@@ -529,18 +556,24 @@ impl VcfHandler {
 
     /// Extract payload from sample FORMAT field steganography
     fn extract_sample_format_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        let steg_format_field = "STEG";
-        let mut hex_chunks = Vec::new();
+        // Collect (index, hex_chunk) pairs from indexed tags S00, S01, …
+        let mut indexed_chunks: Vec<(usize, String)> = Vec::new();
 
-        // Collect steganographic data from FORMAT fields
         for variant in &vcf.variants {
             if let Some(ref format) = variant.format {
-                if format.contains(steg_format_field) {
-                    // Get data from first sample (they should all be identical for this field)
-                    if let Some(sample) = variant.samples.first() {
-                        if let Some(chunk) = sample.get(steg_format_field) {
-                            if !chunk.is_empty() && chunk != "." {
-                                hex_chunks.push(chunk.clone());
+                for field_name in format.split(':') {
+                    // Match S\d\d pattern (e.g. S00, S01, … S99)
+                    if field_name.len() == 3
+                        && field_name.starts_with('S')
+                        && field_name[1..].chars().all(|c| c.is_ascii_digit())
+                    {
+                        if let Ok(idx) = field_name[1..].parse::<usize>() {
+                            if let Some(sample) = variant.samples.first() {
+                                if let Some(chunk) = sample.get(field_name) {
+                                    if !chunk.is_empty() && chunk != "." {
+                                        indexed_chunks.push((idx, chunk.clone()));
+                                    }
+                                }
                             }
                         }
                     }
@@ -548,21 +581,19 @@ impl VcfHandler {
             }
         }
 
-        if hex_chunks.is_empty() {
+        if indexed_chunks.is_empty() {
             return Err(SteganoError::IntegrityError(
                 "No steganographic data found in FORMAT fields".to_string(),
             ));
         }
 
-        // Concatenate hex chunks
-        let hex_payload: String = hex_chunks.join("");
+        // Sort by index to restore original chunk order
+        indexed_chunks.sort_by_key(|(idx, _)| *idx);
+        let hex_payload: String = indexed_chunks.into_iter().map(|(_, c)| c).collect();
 
-        // Decode hex to bytes
-        let payload = hex::decode(hex_payload).map_err(|_| {
+        hex::decode(hex_payload).map_err(|_| {
             SteganoError::IntegrityError("Invalid hex data in FORMAT fields".to_string())
-        })?;
-
-        Ok(payload)
+        })
     }
 
     /// Embed payload using variant ID steganography
@@ -589,16 +620,18 @@ impl VcfHandler {
 
         let mut variants_modified = 0;
 
-        // Embed chunks in variant IDs
+        // Embed chunks in variant IDs — always include a 4-digit index so extraction
+        // can sort chunks back into the correct order regardless of variant reordering.
         for (i, chunk) in chunks.iter().enumerate() {
             if i < vcf.variants.len() && !chunk.is_empty() {
                 let variant = &mut vcf.variants[i];
 
-                // Create new variant ID with embedded data
+                // Format: STEG{i:04}_{hex_chunk} appended after the existing ID
+                let steg_suffix = format!("STEG{i:04}_{chunk}");
                 let new_id = if variant.id == "." {
-                    format!("{CUSTOM_ID_PREFIX}_{i:04}_{chunk}")
+                    steg_suffix
                 } else {
-                    format!("{}_{}", variant.id, chunk)
+                    format!("{}_{}",  variant.id, steg_suffix)
                 };
 
                 variant.id = new_id;
@@ -618,36 +651,45 @@ impl VcfHandler {
 
     /// Extract payload from variant ID steganography
     fn extract_variant_id_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        let mut hex_chunks = Vec::new();
+        // Collect (index, hex_chunk) pairs by finding "STEG{4digits}_{hex}" pattern
+        let marker = "STEG";
+        let mut indexed_chunks: Vec<(usize, String)> = Vec::new();
 
-        // Extract embedded data from variant IDs
         for variant in &vcf.variants {
-            // Look for embedded data pattern in ID
-            if let Some(last_underscore) = variant.id.rfind('_') {
-                let suffix = &variant.id[last_underscore + 1..];
-
-                // Check if suffix looks like hex data
-                if suffix.len() >= 4 && suffix.chars().all(|c| c.is_ascii_hexdigit()) {
-                    hex_chunks.push(suffix.to_string());
+            if let Some(steg_pos) = variant.id.find(marker) {
+                let after = &variant.id[steg_pos + marker.len()..];
+                // after should start with 4 decimal digits, then '_', then hex chunk
+                if after.len() >= 6
+                    && after[..4].chars().all(|c| c.is_ascii_digit())
+                    && after.as_bytes().get(4) == Some(&b'_')
+                {
+                    if let Ok(idx) = after[..4].parse::<usize>() {
+                        let rest = &after[5..];
+                        let hex_end = rest
+                            .find(|c: char| !c.is_ascii_hexdigit())
+                            .unwrap_or(rest.len());
+                        let hex_chunk = &rest[..hex_end];
+                        if !hex_chunk.is_empty() {
+                            indexed_chunks.push((idx, hex_chunk.to_string()));
+                        }
+                    }
                 }
             }
         }
 
-        if hex_chunks.is_empty() {
+        if indexed_chunks.is_empty() {
             return Err(SteganoError::IntegrityError(
                 "No steganographic data found in variant IDs".to_string(),
             ));
         }
 
-        // Concatenate hex chunks
-        let hex_payload: String = hex_chunks.join("");
+        // Sort by index to restore original chunk order
+        indexed_chunks.sort_by_key(|(idx, _)| *idx);
+        let hex_payload: String = indexed_chunks.into_iter().map(|(_, c)| c).collect();
 
-        // Decode hex to bytes
-        let payload = hex::decode(hex_payload).map_err(|_| {
+        hex::decode(hex_payload).map_err(|_| {
             SteganoError::IntegrityError("Invalid hex data in variant IDs".to_string())
-        })?;
-
-        Ok(payload)
+        })
     }
 
     /// Estimate capacity for VCF file
@@ -1093,7 +1135,8 @@ mod tests {
     #[tokio::test]
     async fn test_vcf_quality_score_embedding_roundtrip() {
         let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\t.\nchr1\t200\t.\tG\tC\t45.0\tPASS\t.\nchr1\t300\t.\tC\tA\t60.0\tPASS\t.\nchr1\t400\t.\tT\tG\t75.0\tPASS\t.\n";
+        // Need ≥14 variants: 4-byte length header + 1-byte payload = 40 bits at 3 bits/variant
+        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30\tPASS\t.\nchr1\t200\t.\tG\tC\t45\tPASS\t.\nchr1\t300\t.\tC\tA\t60\tPASS\t.\nchr1\t400\t.\tT\tG\t75\tPASS\t.\nchr1\t500\t.\tA\tC\t90\tPASS\t.\nchr1\t600\t.\tG\tT\t50\tPASS\t.\nchr1\t700\t.\tC\tG\t35\tPASS\t.\nchr1\t800\t.\tT\tA\t80\tPASS\t.\nchr1\t900\t.\tA\tG\t40\tPASS\t.\nchr1\t1000\t.\tG\tA\t55\tPASS\t.\nchr1\t1100\t.\tC\tT\t70\tPASS\t.\nchr1\t1200\t.\tT\tC\t85\tPASS\t.\nchr1\t1300\t.\tA\tT\t25\tPASS\t.\nchr1\t1400\t.\tG\tC\t95\tPASS\t.\n";
 
         let mut carrier = CarrierData {
             format: DataFormat::VCF,

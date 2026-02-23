@@ -13,6 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.9] - 2026-02-22
+
+### Fixed
+- **VCF quality-score self-framing** (`src/handlers/vcf.rs`): `embed_quality_strategy` now prepends
+  a 4-byte little-endian length header before encoding payload bits; `extract_quality_strategy`
+  reads that header to determine exact payload length, eliminating over-read from extra variants.
+- **VCF variant-ID ordering** (`src/handlers/vcf.rs`): Every chunk now carries an embedded sequence
+  index (`STEG{i:04}_<chunk>`). Extraction sorts collected chunks by index before concatenating,
+  making round-trips correct even if variant order changes between embed and extract.
+- **VCF sample-FORMAT ordering** (`src/handlers/vcf.rs`): Custom FORMAT fields use per-variant
+  indexed tags (`S{i:02}`) instead of a static `STEG` tag. Extraction sorts by numeric index,
+  ensuring correct bit ordering.
+- **Codec RS overflow** (`src/codec.rs`): `rs_encode` now uses `checked_mul(255).and_then(…)`
+  when computing the output buffer capacity, returning `InvalidParameter` instead of panicking on
+  implausibly large payloads.
+- **Imagery DCT/PVD silent fallback** (`src/handlers/imagery.rs`): `embed_lsb` and
+  `extract_with_strategy` for `DCTFrequency` and `PVD` variants now return an explicit
+  `InvalidParameter` error instead of silently falling back to SimpleLSB. `AdaptiveLSB` is
+  correctly handled using the same sequential pixel-LSB path as `SimpleLSB`.
+- **DICOM UnusedMetadata / SequencePadding silent fallback** (`src/handlers/dicom.rs`): Both embed
+  and extract now return an explicit `InvalidParameter` error for these unimplemented strategy
+  variants instead of silently falling back to `PrivateDataElements`.
+- **Signal extraction per-strategy dispatch** (`src/handlers/signals.rs`): `extract_with_strategy`
+  now dispatches to dedicated extraction functions for each strategy
+  (`extract_fft_magnitude_bits`, `extract_fft_phase_bits`, `extract_spread_spectrum_bits`,
+  `extract_echo_hiding_bits`) instead of always using the time-domain LSB path for non-time-domain
+  embeds.
+- **FFT magnitude quantization** (`src/handlers/signals.rs`): `embed_fft_magnitude` switched from
+  a multiplicative modifier (not invertible) to parity quantization against a fixed step size
+  (`MAG_STEP = 0.01`), making `extract_fft_magnitude_bits` reliably recover the embedded bits.
+
 ## [0.3.8] - 2026-02-22
 
 ### Fixed

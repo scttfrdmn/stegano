@@ -221,13 +221,10 @@ impl ImageryHandler {
                     dims.clone(),
                 )?;
             }
-            _ => {
-                // For now, fallback to simple LSB for other strategies
-                self.embed_lsb_pixels(
-                    &mut carrier.raw_data,
-                    &total_data,
-                    &ImageEmbedStrategy::SimpleLSB,
-                )?;
+            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
+                return Err(SteganoError::InvalidParameter(format!(
+                    "{strategy:?} embedding is not yet implemented; use SimpleLSB, AdaptiveLSB, or EdgeBased"
+                )));
             }
         }
 
@@ -365,7 +362,7 @@ impl ImageryHandler {
         let header_bytes_needed = 10; // 4 magic + 4 size + 1 strategy + 1 encryption
 
         match strategy {
-            ImageEmbedStrategy::SimpleLSB => {
+            ImageEmbedStrategy::SimpleLSB | ImageEmbedStrategy::AdaptiveLSB => {
                 for i in 0..header_bytes_needed * 8 {
                     if i >= carrier.raw_data.len() {
                         break;
@@ -388,14 +385,10 @@ impl ImageryHandler {
                     header_bytes_needed * 8,
                 )?;
             }
-            _ => {
-                // Fallback to simple LSB
-                for i in 0..header_bytes_needed * 8 {
-                    if i >= carrier.raw_data.len() {
-                        break;
-                    }
-                    header_bits.push(carrier.raw_data[i] & 1);
-                }
+            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
+                return Err(SteganoError::InvalidParameter(format!(
+                    "{strategy:?} extraction is not yet implemented"
+                )));
             }
         }
 
@@ -430,7 +423,7 @@ impl ImageryHandler {
         let mut all_bits = Vec::new();
 
         match strategy {
-            ImageEmbedStrategy::SimpleLSB => {
+            ImageEmbedStrategy::SimpleLSB | ImageEmbedStrategy::AdaptiveLSB => {
                 for i in 0..total_bits_needed.min(carrier.raw_data.len()) {
                     all_bits.push(carrier.raw_data[i] & 1);
                 }
@@ -447,10 +440,10 @@ impl ImageryHandler {
                     total_bits_needed,
                 )?;
             }
-            _ => {
-                for i in 0..total_bits_needed.min(carrier.raw_data.len()) {
-                    all_bits.push(carrier.raw_data[i] & 1);
-                }
+            ImageEmbedStrategy::DCTFrequency | ImageEmbedStrategy::PVD => {
+                return Err(SteganoError::InvalidParameter(format!(
+                    "{strategy:?} extraction is not yet implemented"
+                )));
             }
         }
 

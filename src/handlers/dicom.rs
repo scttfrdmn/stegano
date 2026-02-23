@@ -1205,9 +1205,10 @@ impl DataHandler for DicomHandler {
                         self.embed_private_data_elements(&mut dicom, payload)
                             .or_else(|_| self.embed_pixel_data_lsb(&mut dicom, payload))?
                     }
-                    _ => {
-                        // For other strategies, use private data elements as fallback
-                        self.embed_private_data_elements(&mut dicom, payload)?
+                    DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
+                        return Err(SteganoError::InvalidParameter(format!(
+                            "{strategy:?} embedding is not yet implemented; use PrivateDataElements, PixelDataLSB, or MultiStrategy"
+                        )));
                     }
                 };
 
@@ -1266,9 +1267,10 @@ impl DataHandler for DicomHandler {
                             self.extract_pixel_data_lsb(&dicom)
                         })
                     }
-                    _ => {
-                        // For other strategies, use private data elements as fallback
-                        self.extract_private_data_elements(&dicom)
+                    DicomEmbedStrategy::UnusedMetadata | DicomEmbedStrategy::SequencePadding => {
+                        Err(SteganoError::InvalidParameter(format!(
+                            "{strategy:?} extraction is not yet implemented"
+                        )))
                     }
                 }
             }

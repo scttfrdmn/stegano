@@ -134,7 +134,13 @@ fn rs_encode(data: &[u8], ecc_len: usize) -> crate::core::Result<Vec<u8>> {
     // At least one block even for empty input.
     let num_blocks = orig_len.div_ceil(data_chunk).max(1);
 
-    let mut out = Vec::with_capacity(4 + num_blocks * 255);
+    let capacity = num_blocks
+        .checked_mul(255)
+        .and_then(|n| n.checked_add(4))
+        .ok_or_else(|| {
+            SteganoError::InvalidParameter("Payload too large for Reed-Solomon encoding".into())
+        })?;
+    let mut out = Vec::with_capacity(capacity);
     out.extend_from_slice(&(orig_len as u32).to_le_bytes());
 
     for block_idx in 0..num_blocks {

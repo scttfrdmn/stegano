@@ -280,8 +280,14 @@ impl SignalHandler {
         Ok(())
     }
 
-    /// FFT-based magnitude embedding
+    /// FFT-based magnitude embedding using parity quantization.
+    ///
+    /// Encodes each bit by forcing the quantised magnitude of a frequency-domain
+    /// coefficient to an even (bit=0) or odd (bit=1) multiple of `MAG_STEP`.
+    /// The same quantisation is applied in `extract_fft_magnitude_bits` so the
+    /// operation is invertible after the i16 round-trip.
     fn embed_fft_magnitude(&self, samples: &mut [f32], payload_bits: &[u8]) -> Result<()> {
+        const MAG_STEP: f32 = 0.01; // quantisation step large enough to survive i16 noise
         let chunk_size = 1024;
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(chunk_size);
@@ -298,14 +304,11 @@ impl SignalHandler {
                 continue;
             }
 
-            // Convert to complex
             let mut buffer: Vec<Complex<f32>> =
                 chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
 
-            // Forward FFT
             fft.process(&mut buffer);
 
-            // Embed in middle frequency bins
             let start_bin = chunk_size / 4;
             let end_bin = 3 * chunk_size / 4;
 
@@ -315,26 +318,68 @@ impl SignalHandler {
                 }
 
                 let magnitude = elem.norm();
-                if magnitude > 0.001 {
-                    // Only modify significant coefficients
+                if magnitude > MAG_STEP {
                     let bit = payload_bits[bit_index];
-                    // Slight magnitude modification based on bit
-                    let modifier = if bit == 1 { 1.001 } else { 0.999 };
-                    *elem *= modifier;
+                    let phase = elem.arg();
+                    // Quantise magnitude to even/odd multiples of MAG_STEP
+                    let units = (magnitude / MAG_STEP).round() as u64;
+                    let new_units = if units % 2 == bit as u64 {
+                        units
+                    } else {
+                        units + 1
+                    };
+                    let new_mag = new_units as f32 * MAG_STEP;
+                    *elem = Complex::from_polar(new_mag, phase);
                     bit_index += 1;
                 }
             }
 
-            // Inverse FFT
             ifft.process(&mut buffer);
 
-            // Copy back to samples
             for (i, sample) in chunk.iter_mut().enumerate() {
                 *sample = buffer[i].re / chunk_size as f32;
             }
         }
 
         Ok(())
+    }
+
+    /// Extract bits embedded by `embed_fft_magnitude` (parity quantisation)
+    fn extract_fft_magnitude_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
+        const MAG_STEP: f32 = 0.01;
+        let chunk_size = 1024;
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(chunk_size);
+
+        let mut bits = Vec::with_capacity(bits_needed);
+
+        for chunk in samples.chunks(chunk_size) {
+            if bits.len() >= bits_needed || chunk.len() < chunk_size {
+                break;
+            }
+
+            let mut buffer: Vec<Complex<f32>> =
+                chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
+            fft.process(&mut buffer);
+
+            let start_bin = chunk_size / 4;
+            let end_bin = 3 * chunk_size / 4;
+
+            for elem in &buffer[start_bin..end_bin] {
+                if bits.len() >= bits_needed {
+                    break;
+                }
+
+                let magnitude = elem.norm();
+                if magnitude > MAG_STEP {
+                    let units = (magnitude / MAG_STEP).round() as u64;
+                    bits.push((units % 2) as u8);
+                }
+            }
+        }
+
+        bits.resize(bits_needed, 0);
+        Ok(bits)
     }
 
     /// FFT-based phase modulation
@@ -386,6 +431,47 @@ impl SignalHandler {
         }
 
         Ok(())
+    }
+
+    /// Extract bits embedded by `embed_fft_phase`.
+    ///
+    /// A positive phase shift encodes bit=1; negative encodes bit=0.
+    fn extract_fft_phase_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
+        let chunk_size = 1024;
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(chunk_size);
+
+        let mut bits = Vec::with_capacity(bits_needed);
+
+        for chunk in samples.chunks(chunk_size) {
+            if bits.len() >= bits_needed || chunk.len() < chunk_size {
+                break;
+            }
+
+            let mut buffer: Vec<Complex<f32>> =
+                chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
+            fft.process(&mut buffer);
+
+            let start_bin = chunk_size / 8;
+            let end_bin = chunk_size / 4;
+
+            for elem in &buffer[start_bin..end_bin] {
+                if bits.len() >= bits_needed {
+                    break;
+                }
+
+                if elem.norm() > 0.001 {
+                    // Positive phase shift → bit=1; negative → bit=0
+                    // We detect the residual: if phase mod (2*π) is closer to +0.1 than to -0.1
+                    // A simple heuristic: check if sin(phase) > 0 as proxy (works for small shifts)
+                    let phase = elem.arg();
+                    bits.push(if phase >= 0.0 { 1 } else { 0 });
+                }
+            }
+        }
+
+        bits.resize(bits_needed, 0);
+        Ok(bits)
     }
 
     /// Spread spectrum embedding
@@ -453,6 +539,81 @@ impl SignalHandler {
         Ok(())
     }
 
+    /// Extract bits embedded by `embed_spread_spectrum` via PN correlation.
+    fn extract_spread_spectrum_bits(
+        &self,
+        samples: &[f32],
+        bits_needed: usize,
+        sample_rate: u32,
+    ) -> Result<Vec<u8>> {
+        let chip_length = sample_rate as usize / 1000;
+        let mut bits = Vec::with_capacity(bits_needed);
+
+        for (bit_index, chunk) in samples.chunks(chip_length).enumerate() {
+            if bits.len() >= bits_needed {
+                break;
+            }
+
+            // Reconstruct the same PN sequence used during embed
+            let mut pn_sequence = vec![1.0f32; chunk.len()];
+            for (i, elem) in pn_sequence.iter_mut().enumerate().skip(1) {
+                *elem = if (i * 17 + bit_index * 31) % 2 == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+            }
+
+            // Correlate chunk with +PN and -PN
+            let corr_pos: f32 = chunk
+                .iter()
+                .zip(pn_sequence.iter())
+                .map(|(&s, &p)| s * p)
+                .sum();
+            bits.push(if corr_pos >= 0.0 { 1 } else { 0 });
+        }
+
+        bits.resize(bits_needed, 0);
+        Ok(bits)
+    }
+
+    /// Extract bits embedded by `embed_echo_hiding` via autocorrelation.
+    fn extract_echo_hiding_bits(
+        &self,
+        samples: &[f32],
+        bits_needed: usize,
+        sample_rate: u32,
+    ) -> Result<Vec<u8>> {
+        let delay_0 = (sample_rate as f32 * 0.0005) as usize;
+        let delay_1 = (sample_rate as f32 * 0.001) as usize;
+        let segment_length = sample_rate as usize / 10;
+        let mut bits = Vec::with_capacity(bits_needed);
+
+        for chunk in samples.chunks(segment_length) {
+            if bits.len() >= bits_needed {
+                break;
+            }
+
+            // Compute autocorrelation at delay_0 and delay_1
+            let len = chunk.len();
+            let autocorr = |delay: usize| -> f32 {
+                if delay >= len {
+                    return 0.0;
+                }
+                chunk[delay..].iter().zip(chunk[..len - delay].iter())
+                    .map(|(&a, &b)| a * b)
+                    .sum::<f32>()
+            };
+
+            let r0 = autocorr(delay_0).abs();
+            let r1 = autocorr(delay_1).abs();
+            bits.push(if r1 > r0 { 1 } else { 0 });
+        }
+
+        bits.resize(bits_needed, 0);
+        Ok(bits)
+    }
+
     /// Extract data using the detected strategy
     async fn extract_with_strategy(
         &self,
@@ -462,12 +623,30 @@ impl SignalHandler {
     ) -> Result<Vec<u8>> {
         let samples = self.bytes_to_samples(&carrier.raw_data);
 
-        // Extract header first
+        // Extract header (10 bytes = 80 bits) using per-strategy extractor
         let header_bits = match strategy {
-            SignalEmbedStrategy::TimeDomainLSB => self.extract_time_domain_bits(&samples, 80)?,
-            _ => {
-                // For complex strategies, try time domain extraction for header
+            SignalEmbedStrategy::TimeDomainLSB => {
                 self.extract_time_domain_bits(&samples, 80)?
+            }
+            SignalEmbedStrategy::FrequencyDomain => {
+                self.extract_fft_magnitude_bits(&samples, 80)?
+            }
+            SignalEmbedStrategy::PhaseModulation => {
+                self.extract_fft_phase_bits(&samples, 80)?
+            }
+            SignalEmbedStrategy::SpreadSpectrum => {
+                self.extract_spread_spectrum_bits(
+                    &samples,
+                    80,
+                    carrier.sampling_rate.unwrap_or(44100.0) as u32,
+                )?
+            }
+            SignalEmbedStrategy::EchoHiding => {
+                self.extract_echo_hiding_bits(
+                    &samples,
+                    80,
+                    carrier.sampling_rate.unwrap_or(44100.0) as u32,
+                )?
             }
         };
 
@@ -496,13 +675,28 @@ impl SignalHandler {
 
         let codec_mode = header_bytes[9]; // 0=raw, 1=self.crypto, 2=codec
 
-        // Extract full payload
+        // Extract full payload using the same per-strategy extractor
         let total_bits_needed = (10 + payload_size) * 8;
         let all_bits = match strategy {
             SignalEmbedStrategy::TimeDomainLSB => {
                 self.extract_time_domain_bits(&samples, total_bits_needed)?
             }
-            _ => self.extract_time_domain_bits(&samples, total_bits_needed)?,
+            SignalEmbedStrategy::FrequencyDomain => {
+                self.extract_fft_magnitude_bits(&samples, total_bits_needed)?
+            }
+            SignalEmbedStrategy::PhaseModulation => {
+                self.extract_fft_phase_bits(&samples, total_bits_needed)?
+            }
+            SignalEmbedStrategy::SpreadSpectrum => self.extract_spread_spectrum_bits(
+                &samples,
+                total_bits_needed,
+                carrier.sampling_rate.unwrap_or(44100.0) as u32,
+            )?,
+            SignalEmbedStrategy::EchoHiding => self.extract_echo_hiding_bits(
+                &samples,
+                total_bits_needed,
+                carrier.sampling_rate.unwrap_or(44100.0) as u32,
+            )?,
         };
 
         let all_bytes: Vec<u8> = all_bits
