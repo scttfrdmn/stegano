@@ -208,11 +208,23 @@ impl DataHandler for GenericHandler {
         &self,
         carrier: &mut CarrierData,
         payload: &[u8],
-        _params: &EmbedParams,
+        params: &EmbedParams,
     ) -> Result<EmbedResult> {
+        use crate::codec;
         let start_time = Instant::now();
 
-        let _bits_embedded = self.lsb_embed(&mut carrier.raw_data, payload)?;
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != ECLevel::None;
+        let (effective_payload, encryption_time_ms) = if use_codec {
+            let enc_start = Instant::now();
+            let encoded = codec::encode_payload(payload, params)?;
+            let enc_ms = enc_start.elapsed().as_nanos().max(1) as u64 / 1_000_000;
+            (encoded, enc_ms.max(1))
+        } else {
+            (payload.to_vec(), 0)
+        };
+
+        let _bits_embedded = self.lsb_embed(&mut carrier.raw_data, &effective_payload)?;
 
         let embedding_time = start_time.elapsed().as_millis() as u64;
 
@@ -222,7 +234,7 @@ impl DataHandler for GenericHandler {
             carrier_modified: true,
             performance_stats: PerformanceStats {
                 embedding_time_ms: embedding_time,
-                encryption_time_ms: 0, // No encryption in basic implementation
+                encryption_time_ms,
                 gpu_acceleration_used: false,
                 memory_usage_bytes: carrier.raw_data.len() + payload.len(),
             },
@@ -230,8 +242,16 @@ impl DataHandler for GenericHandler {
         })
     }
 
-    async fn extract(&self, carrier: &CarrierData, _params: &EmbedParams) -> Result<Vec<u8>> {
-        self.lsb_extract(&carrier.raw_data)
+    async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
+        use crate::codec;
+        let raw = self.lsb_extract(&carrier.raw_data)?;
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != ECLevel::None;
+        if use_codec {
+            codec::decode_payload(&raw, params)
+        } else {
+            Ok(raw)
+        }
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {
@@ -471,9 +491,11 @@ mod tests {
     #[tokio::test]
     async fn test_empty_payload_embedding() {
         let handler = GenericHandler::new();
+        // EmbedParams::new defaults to ECLevel::Medium which requires a carrier
+        // large enough to hold one full RS block even for empty payloads.
         let mut carrier = CarrierData {
             format: DataFormat::BINARY,
-            raw_data: vec![0; 100],
+            raw_data: vec![0; 4096],
             metadata: HashMap::new(),
             dimensions: None,
             sampling_rate: None,

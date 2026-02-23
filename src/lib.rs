@@ -59,6 +59,7 @@
 
 pub mod capacity;
 pub mod cli;
+pub mod codec;
 pub mod core;
 pub mod crypto;
 pub mod embedding;

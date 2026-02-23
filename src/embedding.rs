@@ -251,8 +251,9 @@ mod tests {
     async fn test_embedding_with_validation() {
         let embedder = SteganoEmbedder::new();
 
-        // Create test carrier
-        let test_data = vec![0u8; 1024];
+        // Create test carrier — large enough to hold encrypted + EC-encoded payload
+        // EmbedParams::new defaults to ECLevel::Medium which adds RS overhead
+        let test_data = vec![0u8; 8192];
         let mut carrier = CarrierData::new(DataFormat::BINARY, test_data);
 
         // Setup parameters with validation enabled
@@ -280,7 +281,8 @@ mod tests {
     async fn test_embedding_without_validation() {
         let embedder = SteganoEmbedder::new();
 
-        let test_data = vec![0u8; 1024];
+        // Large enough to hold encrypted + EC-encoded payload
+        let test_data = vec![0u8; 8192];
         let mut carrier = CarrierData::new(DataFormat::BINARY, test_data);
 
         // Parameters without validation

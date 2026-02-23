@@ -13,6 +13,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Nothing yet
 
+## [0.3.7] - 2026-02-22
+
+### Added
+- **`src/codec.rs`** — New self-framing encode/decode pipeline that wires
+  `EmbedParams::encryption_key` and `EmbedParams::error_correction_level` to
+  real, functional implementations:
+  - `encode_payload(payload, params)`: AES-256-GCM encryption (from key)
+    followed by Reed-Solomon error correction (from ECLevel), returns a
+    self-framing byte blob that `decode_payload` can reverse without external
+    metadata.
+  - `decode_payload(data, params)`: RS decoding then AES-GCM decryption; the
+    same params must be used as were supplied to `encode_payload`.
+  - `normalize_key(key)`: hashes any-length keys to exactly 32 bytes via Blake3
+    so AES-256-GCM always receives a valid key.
+  - 21 new unit tests cover no-op, encryption-only, each ECLevel, combined
+    encrypt+EC, short/long/empty keys, empty payloads, large payloads, wrong
+    key decryption failure, and missing key failure.
+- **ECLevel→RS mapping**: `ECLevel::Low`→16 ECC bytes, `Medium`→32, `High`→64,
+  `Maximum`→128 per 255-byte RS block. Arbitrary-length payloads are chunked
+  into fixed 255-byte RS blocks with zero-padding; the original length is
+  stored in a 4-byte header so the decoder can trim padding.
+
+### Changed
+- **All handlers now respect `params.encryption_key` and
+  `params.error_correction_level`** (`generic.rs`, `imagery.rs`,
+  `signals.rs`, `genomics.rs`):
+  - When `encryption_key` is non-empty or `error_correction_level != None`,
+    `embed()` calls `codec::encode_payload` before embedding the bytes and
+    `extract()` calls `codec::decode_payload` after extraction.
+  - `imagery.rs` and `signals.rs`: the header `is_encrypted` flag byte is
+    now a `codec_mode` byte — 0 = raw, 1 = legacy `self.crypto` password
+    path (backward-compatible), 2 = new codec pipeline — so existing embedded
+    data created with `with_encryption()` still extracts correctly.
+- **Capacity estimates corrected**: `imagery.rs` SimpleLSB header overhead
+  64 bits → 80 bits (10-byte header); `signals.rs` TimeDomainLSB header
+  overhead 128 bits → 80 bits, matching the actual 10-byte header format.
+- **7 unused dependencies removed** from `Cargo.toml`: `wide`, `ndarray`,
+  `image`, `tiff`, `bio`, `csv`, `wav` — none were imported anywhere in the
+  source tree.
+
+### Fixed
+- `embedding.rs` tests `test_embedding_with_validation` and
+  `test_embedding_without_validation`: carrier size increased from 1024 to
+  8192 bytes to accommodate the RS overhead introduced by the now-functional
+  `ECLevel::Medium` default in `EmbedParams::new`.
+- `generic.rs` test `test_empty_payload_embedding`: carrier size increased
+  from 100 to 4096 bytes for the same reason.
+
 ## [0.3.3] - 2026-02-22
 
 ### Fixed

@@ -114,7 +114,7 @@ impl ImageryHandler {
         let (capacity_bits, overhead) = match strategy {
             ImageEmbedStrategy::SimpleLSB => {
                 // 1 bit per channel (RGB = 3 bits per pixel)
-                (total_pixels * 3, 64) // 64 bits for header
+                (total_pixels * 3, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
             }
             ImageEmbedStrategy::AdaptiveLSB => {
                 // Variable bits per pixel based on local complexity
@@ -154,26 +154,35 @@ impl ImageryHandler {
         Ok(info)
     }
 
-    /// LSB embedding with optional encryption
+    /// LSB embedding with optional encryption / error correction
     async fn embed_lsb(
         &self,
         carrier: &mut CarrierData,
         payload: &[u8],
+        params: &EmbedParams,
         strategy: &ImageEmbedStrategy,
     ) -> Result<EmbedResult> {
         let embed_start = Instant::now();
 
-        // Prepare payload with encryption if enabled
-        let (final_payload, encryption_time_ms) = if let Some(ref crypto) = self.crypto {
+        // Prepare payload: params key + EC takes priority over self.crypto.
+        // codec_mode byte: 0 = raw, 1 = self.crypto (legacy), 2 = codec pipeline
+        use crate::codec;
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != ECLevel::None;
+        let (final_payload, encryption_time_ms, codec_mode) = if use_codec {
+            let enc_start = Instant::now();
+            let encoded = codec::encode_payload(payload, params)?;
+            let enc_ms = enc_start.elapsed().as_nanos().max(1) as u64 / 1_000_000;
+            (encoded, enc_ms.max(1), 2u8)
+        } else if let Some(ref crypto) = self.crypto {
             use crate::crypto::CryptoLayer;
             let enc_start = Instant::now();
             let secure_payload = crypto.encrypt(payload)?;
-            // Ceiling to nearest ms; at least 1 when encryption ran
             let enc_ns = enc_start.elapsed().as_nanos().max(1) as u64;
             let enc_ms = enc_ns.div_ceil(1_000_000);
-            (CryptoLayer::serialize_payload(&secure_payload), enc_ms)
+            (CryptoLayer::serialize_payload(&secure_payload), enc_ms, 1u8)
         } else {
-            (payload.to_vec(), 0)
+            (payload.to_vec(), 0, 0u8)
         };
 
         // Create header
@@ -181,7 +190,7 @@ impl ImageryHandler {
         header.extend_from_slice(b"IMSJ"); // Image Steganography header
         header.extend_from_slice(&(final_payload.len() as u32).to_le_bytes());
         header.push(strategy.to_u8());
-        header.push(if self.crypto.is_some() { 1 } else { 0 }); // Encryption flag
+        header.push(codec_mode); // 0=raw, 1=self.crypto, 2=codec
 
         let total_data = [header, final_payload].concat();
         let bits_needed = total_data.len() * 8;
@@ -349,6 +358,7 @@ impl ImageryHandler {
         &self,
         carrier: &CarrierData,
         strategy: &ImageEmbedStrategy,
+        params: &EmbedParams,
     ) -> Result<Vec<u8>> {
         // First extract header to determine payload size and encryption
         let mut header_bits = Vec::new();
@@ -413,7 +423,7 @@ impl ImageryHandler {
             header_bytes[7],
         ]) as usize;
 
-        let is_encrypted = header_bytes[9] == 1;
+        let codec_mode = header_bytes[9]; // 0=raw, 1=self.crypto, 2=codec
 
         // Extract payload
         let total_bits_needed = (header_bytes_needed + payload_size) * 8;
@@ -460,21 +470,31 @@ impl ImageryHandler {
             ));
         }
 
-        let encrypted_payload = &all_bytes[header_bytes_needed..header_bytes_needed + payload_size];
+        let raw_payload = &all_bytes[header_bytes_needed..header_bytes_needed + payload_size];
 
-        // Decrypt if necessary
-        if is_encrypted {
-            if let Some(ref crypto) = self.crypto {
-                use crate::crypto::CryptoLayer;
-                let secure_payload = CryptoLayer::deserialize_payload(encrypted_payload)?;
-                crypto.decrypt(&secure_payload)
-            } else {
-                Err(SteganoError::EncryptionError(
-                    "No decryption key available".to_string(),
-                ))
+        // Decode according to the codec_mode flag stored in the header.
+        match codec_mode {
+            0 => Ok(raw_payload.to_vec()),
+            1 => {
+                // Legacy: encrypted with self.crypto
+                if let Some(ref crypto) = self.crypto {
+                    use crate::crypto::CryptoLayer;
+                    let secure_payload = CryptoLayer::deserialize_payload(raw_payload)?;
+                    crypto.decrypt(&secure_payload)
+                } else {
+                    Err(SteganoError::EncryptionError(
+                        "No decryption key available".to_string(),
+                    ))
+                }
             }
-        } else {
-            Ok(encrypted_payload.to_vec())
+            2 => {
+                // New codec pipeline (encryption + EC via params)
+                use crate::codec;
+                codec::decode_payload(raw_payload, params)
+            }
+            _ => Err(SteganoError::IntegrityError(format!(
+                "Unknown codec mode {codec_mode}"
+            ))),
         }
     }
 
@@ -551,10 +571,10 @@ impl DataHandler for ImageryHandler {
             StealthLevel::Maximum => ImageEmbedStrategy::EdgeBased,
         };
 
-        self.embed_lsb(carrier, payload, &strategy).await
+        self.embed_lsb(carrier, payload, params, &strategy).await
     }
 
-    async fn extract(&self, carrier: &CarrierData, _params: &EmbedParams) -> Result<Vec<u8>> {
+    async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
         // Try different strategies in order of likelihood
         let strategies = [
             ImageEmbedStrategy::AdaptiveLSB,
@@ -563,7 +583,7 @@ impl DataHandler for ImageryHandler {
         ];
 
         for strategy in &strategies {
-            if let Ok(result) = self.extract_with_strategy(carrier, strategy).await {
+            if let Ok(result) = self.extract_with_strategy(carrier, strategy, params).await {
                 return Ok(result);
             }
         }

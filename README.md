@@ -1,27 +1,28 @@
 # Stegano - Scientific Data Steganography System
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.3.3-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.3.7-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-309%2B%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-329%2B%20passing-brightgreen.svg)](#)
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.3.3 - Latest Production Release
+## 🎯 Version 0.3.7 - Latest Production Release
 
-Stegano v0.3.3 replaces all stub/placeholder implementations with production-quality algorithms:
-- ✅ **309 Tests Passing** - Comprehensive coverage across all modules (312 with `--features cuda`)
+Stegano v0.3.7 completes the security pipeline by wiring encryption and Reed-Solomon error correction end-to-end:
+- ✅ **329 Tests Passing** - Comprehensive coverage across all modules
+- ✅ **Functional Encryption** - `EmbedParams::encryption_key` now drives real AES-256-GCM in all four handler families
+- ✅ **Functional Error Correction** - `EmbedParams::error_correction_level` wires to Reed-Solomon RS(255,k) for all handlers
+- ✅ **Self-Framing Codec** - `src/codec.rs` encode/decode pipeline; identical params produce identical round-trips
+- ✅ **Accurate Capacity Estimates** - Fixed 64→80 bit header overhead in imagery; 128→80 bits in signals
+- ✅ **Leaner Dependencies** - 7 unused crates removed (image, tiff, bio, csv, wav, wide, ndarray)
 - ✅ **Real Algorithm Implementations** - All stub/placeholder code replaced with production-quality algorithms
 - ✅ **Statistical Analysis** - Real KS goodness-of-fit, IQR/Z-score/MAD outlier detection, SP and histogram steganalysis
 - ✅ **Real Telemetry** - `getrusage(RUSAGE_SELF)` based memory/CPU sampling (no more random fakes)
-- ✅ **CUDA Acceleration** - NVRTC-compiled LSB kernels, JIT to native GPU arch (RTX 5090 / Blackwell tested)
 - ✅ **Validation Dashboard** - Human-readable `fmt::Display` output for `ValidationReport`
 - ✅ **Parallel Validation** - Classical statistical tests run concurrently via Rayon
-- ✅ **JSON Export** - `to_json_string()` for machine-readable report output
-- ✅ **Statistical Validation Framework** - Chi-square, KS, Runs, Anderson-Darling, autocorrelation
-- ✅ **High-Level Embedding API** - `SteganoEmbedder` with integrated validation pipeline
 - ✅ **Enterprise Security** - AES-256-GCM with BLAKE3 integrity verification
 
 ### 🆕 New in v0.3.3

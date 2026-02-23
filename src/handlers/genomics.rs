@@ -525,10 +525,22 @@ impl DataHandler for GenomicsHandler {
         payload: &[u8],
         params: &EmbedParams,
     ) -> Result<EmbedResult> {
+        use crate::codec;
         let start_time = Instant::now();
 
-        let bytes_embedded = match carrier.format {
-            DataFormat::FASTA => self.embed_fasta(&mut carrier.raw_data, payload)?,
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != ECLevel::None;
+        let (effective_payload, encryption_time_ms) = if use_codec {
+            let enc_start = Instant::now();
+            let encoded = codec::encode_payload(payload, params)?;
+            let enc_ms = enc_start.elapsed().as_nanos().max(1) as u64 / 1_000_000;
+            (encoded, enc_ms.max(1))
+        } else {
+            (payload.to_vec(), 0)
+        };
+
+        let _bytes_embedded = match carrier.format {
+            DataFormat::FASTA => self.embed_fasta(&mut carrier.raw_data, &effective_payload)?,
             DataFormat::FASTQ => {
                 // Map stealth level to quality embedding strategy
                 let strategy = match params.stealth_level {
@@ -538,7 +550,7 @@ impl DataHandler for GenomicsHandler {
                 };
                 let result = self.embed_fastq_qualities(
                     &mut carrier.raw_data,
-                    payload,
+                    &effective_payload,
                     strategy,
                 )?;
                 result.bytes_embedded
@@ -550,11 +562,11 @@ impl DataHandler for GenomicsHandler {
 
         Ok(EmbedResult {
             success: true,
-            bytes_embedded,
+            bytes_embedded: payload.len(),
             carrier_modified: true,
             performance_stats: PerformanceStats {
                 embedding_time_ms: embedding_time,
-                encryption_time_ms: 0,
+                encryption_time_ms,
                 gpu_acceleration_used: false,
                 memory_usage_bytes: carrier.raw_data.len() + payload.len(),
             },
@@ -563,8 +575,9 @@ impl DataHandler for GenomicsHandler {
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        match carrier.format {
-            DataFormat::FASTA => self.extract_fasta(&carrier.raw_data),
+        use crate::codec;
+        let raw = match carrier.format {
+            DataFormat::FASTA => self.extract_fasta(&carrier.raw_data)?,
             DataFormat::FASTQ => {
                 // Use same strategy as embed to correctly reverse the embedding
                 let strategy = match params.stealth_level {
@@ -572,9 +585,17 @@ impl DataHandler for GenomicsHandler {
                     StealthLevel::Medium => QualityEmbedStrategy::Balanced,
                     StealthLevel::High | StealthLevel::Maximum => QualityEmbedStrategy::Conservative,
                 };
-                self.extract_fastq_qualities(&carrier.raw_data, strategy)
+                self.extract_fastq_qualities(&carrier.raw_data, strategy)?
             }
-            _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
+            _ => return Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
+        };
+
+        let use_codec = !params.encryption_key.is_empty()
+            || params.error_correction_level != ECLevel::None;
+        if use_codec {
+            codec::decode_payload(&raw, params)
+        } else {
+            Ok(raw)
         }
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "stegano"
-version = "0.3.3"
+version = "0.3.7"
 edition = "2021"
 authors = ["Scott Friedman <scttfrdmn@gmail.com>"]
 description = "High-performance scientific data steganography system"
@@ -37,17 +37,9 @@ rayon = "1.7"
 crossbeam = "0.8"
 num_cpus = "1.15"
 
-# SIMD
-wide = "0.7"
-
 # Math and signal processing
 num-complex = "0.4"
 rustfft = "6.1"
-ndarray = "0.15"
-
-# Image processing
-image = "0.24"
-tiff = "0.9"
 
 # GPU acceleration
 wgpu = { version = "22.0", optional = true, features = ["wgsl"] }
@@ -60,10 +52,6 @@ cudarc = { version = "0.12", optional = true, default-features = false, features
 # Error correction
 reed-solomon = "0.2"
 
-# File format support
-bio = "1.4"           # Bioinformatics formats
-csv = "1.2"
-wav = "1.0"
 
 # Benchmarking
 criterion = { version = "0.5", optional = true }
