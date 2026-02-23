@@ -6,6 +6,12 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Handler for genomics carrier files (FASTA, FASTQ).
+///
+/// FASTA embedding uses sequence comment fields; FASTQ embedding encodes
+/// payload bits into quality score characters. The quality strategy is
+/// selected from [`EmbedParams::stealth_level`]: Low→Aggressive (3 bits/char),
+/// Medium→Balanced (2 bits/char), High/Maximum→Conservative (1 bit/char).
 pub struct GenomicsHandler;
 
 /// FASTQ quality score embedding strategies
@@ -517,18 +523,23 @@ impl DataHandler for GenomicsHandler {
         &self,
         carrier: &mut CarrierData,
         payload: &[u8],
-        _params: &EmbedParams,
+        params: &EmbedParams,
     ) -> Result<EmbedResult> {
         let start_time = Instant::now();
 
         let bytes_embedded = match carrier.format {
             DataFormat::FASTA => self.embed_fasta(&mut carrier.raw_data, payload)?,
             DataFormat::FASTQ => {
-                // Use FASTQ quality score steganography for better capacity and stealth
+                // Map stealth level to quality embedding strategy
+                let strategy = match params.stealth_level {
+                    StealthLevel::Low => QualityEmbedStrategy::Aggressive,
+                    StealthLevel::Medium => QualityEmbedStrategy::Balanced,
+                    StealthLevel::High | StealthLevel::Maximum => QualityEmbedStrategy::Conservative,
+                };
                 let result = self.embed_fastq_qualities(
                     &mut carrier.raw_data,
                     payload,
-                    QualityEmbedStrategy::Balanced,
+                    strategy,
                 )?;
                 result.bytes_embedded
             }
@@ -551,12 +562,17 @@ impl DataHandler for GenomicsHandler {
         })
     }
 
-    async fn extract(&self, carrier: &CarrierData, _params: &EmbedParams) -> Result<Vec<u8>> {
+    async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
         match carrier.format {
             DataFormat::FASTA => self.extract_fasta(&carrier.raw_data),
             DataFormat::FASTQ => {
-                // Use FASTQ quality score extraction
-                self.extract_fastq_qualities(&carrier.raw_data, QualityEmbedStrategy::Balanced)
+                // Use same strategy as embed to correctly reverse the embedding
+                let strategy = match params.stealth_level {
+                    StealthLevel::Low => QualityEmbedStrategy::Aggressive,
+                    StealthLevel::Medium => QualityEmbedStrategy::Balanced,
+                    StealthLevel::High | StealthLevel::Maximum => QualityEmbedStrategy::Conservative,
+                };
+                self.extract_fastq_qualities(&carrier.raw_data, strategy)
             }
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
         }

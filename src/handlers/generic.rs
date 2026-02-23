@@ -5,6 +5,10 @@ use crate::core::*;
 use async_trait::async_trait;
 use std::time::Instant;
 
+/// Fallback handler for arbitrary binary carrier data.
+///
+/// Uses simple LSB substitution with a 32-bit length header prepended
+/// to the payload. Suitable for any format not covered by a specialised handler.
 pub struct GenericHandler;
 
 impl Default for GenericHandler {

@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Handler for DICOM medical imaging files.
+///
+/// Embeds payload data in private DICOM tags, preserving all mandatory
+/// tags and pixel data so the file remains valid for medical viewers.
 pub struct DicomHandler;
 
 /// DICOM file structure for parsing

@@ -6,6 +6,10 @@ use crate::crypto::CryptoLayer;
 use async_trait::async_trait;
 use std::time::Instant;
 
+/// Handler for image carrier files (PNG, TIFF, microscopy).
+///
+/// Supports LSB substitution, adaptive LSB, and edge-based embedding
+/// strategies selectable via [`EmbedParams::stealth_level`].
 pub struct ImageryHandler {
     crypto: Option<CryptoLayer>,
 }
@@ -197,10 +201,15 @@ impl ImageryHandler {
                 self.embed_lsb_pixels(&mut carrier.raw_data, &total_data, strategy)?;
             }
             ImageEmbedStrategy::EdgeBased => {
+                let dims = carrier.dimensions.as_ref().ok_or_else(|| {
+                    SteganoError::InvalidParameter(
+                        "EdgeBased strategy requires image dimensions".to_string(),
+                    )
+                })?;
                 self.embed_edge_based(
                     &mut carrier.raw_data,
                     &total_data,
-                    carrier.dimensions.as_ref().unwrap().clone(),
+                    dims.clone(),
                 )?;
             }
             _ => {
@@ -411,9 +420,14 @@ impl ImageryHandler {
                 }
             }
             ImageEmbedStrategy::EdgeBased => {
+                let dims = carrier.dimensions.as_ref().ok_or_else(|| {
+                    SteganoError::InvalidParameter(
+                        "EdgeBased strategy requires image dimensions".to_string(),
+                    )
+                })?;
                 all_bits = self.extract_edge_bits(
                     &carrier.raw_data,
-                    carrier.dimensions.as_ref().unwrap().clone(),
+                    dims.clone(),
                     total_bits_needed,
                 )?;
             }

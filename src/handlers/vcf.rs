@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Handler for VCF (Variant Call Format) genomics carrier files.
+///
+/// Embeds payload data in the INFO and FORMAT fields of variant records,
+/// preserving the VCF schema so the file remains valid for variant analysis tools.
 pub struct VcfHandler;
 
 /// VCF file structure for parsing

@@ -7,6 +7,11 @@ use async_trait::async_trait;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::time::Instant;
 
+/// Handler for digital signal carrier files (WAV, binary signal).
+///
+/// Supports time-domain LSB, frequency-domain, phase modulation,
+/// spread-spectrum, and echo-hiding embedding strategies. The strategy
+/// is selected from [`EmbedParams::stealth_level`].
 pub struct SignalHandler {
     crypto: Option<CryptoLayer>,
 }

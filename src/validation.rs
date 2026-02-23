@@ -144,8 +144,8 @@ impl ClassicalStatisticalTests {
 
         let mut sorted1 = sample1.to_vec();
         let mut sorted2 = sample2.to_vec();
-        sorted1.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        sorted2.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted1.sort_by(|a, b| a.total_cmp(b));
+        sorted2.sort_by(|a, b| a.total_cmp(b));
 
         let n1 = sample1.len() as f64;
         let n2 = sample2.len() as f64;
@@ -263,7 +263,7 @@ impl ClassicalStatisticalTests {
         }
 
         let mut sorted_data = data.to_vec();
-        sorted_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted_data.sort_by(|a, b| a.total_cmp(b));
 
         let n = data.len() as f64;
         let mean = sorted_data.iter().sum::<f64>() / n;
@@ -960,7 +960,7 @@ impl PerformanceAnalysis {
 
         // Create threshold points
         let mut thresholds: Vec<f64> = predicted_scores.to_vec();
-        thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        thresholds.sort_by(|a, b| a.total_cmp(b));
         thresholds.dedup();
 
         let mut tpr_values = Vec::new();

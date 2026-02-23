@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Handler for SAM/BAM sequence alignment carrier files.
+///
+/// Embeds payload data in optional SAM tags on alignment records,
+/// preserving mandatory fields so the file remains valid for downstream
+/// bioinformatics tools.
 pub struct SamBamHandler;
 
 /// SAM file structure
