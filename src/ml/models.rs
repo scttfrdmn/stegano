@@ -424,9 +424,8 @@ impl NeuralNetworkModel {
     ///   2. Compute the pre-activation gradient (δ) at the output layer.
     ///   3. For each layer from last to first:
     ///      a. Update W and b using δ and the layer's input activations.
-    ///      b. Back-propagate δ through the weight matrix and apply the
-    ///         activation derivative of the preceding layer to get the
-    ///         next δ.
+    ///      b. Back-propagate δ through the weight matrix and apply the activation
+    ///         derivative of the preceding layer to get the next δ.
     fn backpropagate(&mut self, input: &[f32], _output: &[f32], target: &[f32], _loss: f32) {
         let lr = self.learning_rate;
         let n = self.layers.len();
@@ -464,8 +463,8 @@ impl NeuralNetworkModel {
 
                 // δ_input[j] = Σ_i  W[i][j] · δ[i]
                 for (i, &d) in delta.iter().enumerate() {
-                    for j in 0..prev_size {
-                        grad[j] += self.layers[l].weights[i][j] * d;
+                    for (j, g) in grad.iter_mut().enumerate() {
+                        *g += self.layers[l].weights[i][j] * d;
                     }
                 }
 
@@ -496,7 +495,7 @@ impl MLModel for NeuralNetworkModel {
         self.training_history.push(example.clone());
 
         // Retrain periodically
-        if self.training_history.len() % 50 == 0 {
+        if self.training_history.len().is_multiple_of(50) {
             let training_data = self.training_history.clone();
             self.train_batch(&training_data);
         }
@@ -844,7 +843,7 @@ impl MLModel for DecisionTreeModel {
         self.training_data.push(example.clone());
 
         // Rebuild tree periodically
-        if self.training_data.len() % 100 == 0 {
+        if self.training_data.len().is_multiple_of(100) {
             let training_data = self.training_data.clone();
             self.root = self.build_tree(&training_data, 0);
         }

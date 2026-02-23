@@ -332,6 +332,7 @@ impl TrainingPipeline {
     }
 
     /// Perform hyperparameter search
+    #[allow(clippy::type_complexity)]
     pub fn hyperparameter_search(
         &mut self,
         model_factory: &dyn Fn(&HashMap<String, f32>) -> Box<dyn MLModel>,

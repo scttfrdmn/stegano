@@ -257,7 +257,7 @@ impl HealthChecker {
                 .lines()
                 .find(|l| l.contains("CPU usage:"))
                 .and_then(|l| l.split(',').find(|s| s.contains("idle")))
-                .and_then(|s| s.trim().split_whitespace().next())
+                .and_then(|s| s.split_whitespace().next())
                 .and_then(|s| s.trim_end_matches('%').parse().ok())
                 .ok_or("could not parse CPU idle percentage from top output")?;
 
@@ -329,8 +329,8 @@ impl HealthChecker {
                     format!("statvfs failed: {}", std::io::Error::last_os_error()).into()
                 );
             }
-            let total = stat.f_blocks as u64 * stat.f_frsize as u64;
-            let avail = stat.f_bavail as u64 * stat.f_frsize as u64;
+            let total = stat.f_blocks as u64 * stat.f_frsize;
+            let avail = stat.f_bavail as u64 * stat.f_frsize;
             if total == 0 {
                 return Ok(0.0);
             }

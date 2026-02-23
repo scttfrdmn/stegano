@@ -180,7 +180,7 @@ impl SignalHandler {
             let secure_payload = crypto.encrypt(payload)?;
             // Ceiling to nearest ms; at least 1 when encryption ran
             let enc_ns = enc_start.elapsed().as_nanos().max(1) as u64;
-            let enc_ms = (enc_ns + 999_999) / 1_000_000;
+            let enc_ms = enc_ns.div_ceil(1_000_000);
             (CryptoLayer::serialize_payload(&secure_payload), enc_ms)
         } else {
             (payload.to_vec(), 0)
@@ -295,18 +295,18 @@ impl SignalHandler {
             let start_bin = chunk_size / 4;
             let end_bin = 3 * chunk_size / 4;
 
-            for bin in start_bin..end_bin {
+            for elem in &mut buffer[start_bin..end_bin] {
                 if bit_index >= payload_bits.len() {
                     break;
                 }
 
-                let magnitude = buffer[bin].norm();
+                let magnitude = elem.norm();
                 if magnitude > 0.001 {
                     // Only modify significant coefficients
                     let bit = payload_bits[bit_index];
                     // Slight magnitude modification based on bit
                     let modifier = if bit == 1 { 1.001 } else { 0.999 };
-                    buffer[bin] *= modifier;
+                    *elem *= modifier;
                     bit_index += 1;
                 }
             }
@@ -346,19 +346,19 @@ impl SignalHandler {
             let start_bin = chunk_size / 8;
             let end_bin = chunk_size / 4;
 
-            for bin in start_bin..end_bin {
+            for elem in &mut buffer[start_bin..end_bin] {
                 if bit_index >= payload_bits.len() {
                     break;
                 }
 
-                if buffer[bin].norm() > 0.001 {
-                    let current_phase = buffer[bin].arg();
+                if elem.norm() > 0.001 {
+                    let current_phase = elem.arg();
                     let bit = payload_bits[bit_index];
 
                     // Small phase shift based on bit
                     let phase_shift = if bit == 1 { 0.1 } else { -0.1 };
-                    let new_magnitude = buffer[bin].norm();
-                    buffer[bin] = Complex::from_polar(new_magnitude, current_phase + phase_shift);
+                    let new_magnitude = elem.norm();
+                    *elem = Complex::from_polar(new_magnitude, current_phase + phase_shift);
 
                     bit_index += 1;
                 }
@@ -382,9 +382,7 @@ impl SignalHandler {
         sample_rate: u32,
     ) -> Result<()> {
         let chip_length = sample_rate as usize / 1000; // 1ms chips
-        let mut bit_index = 0;
-
-        for chunk in samples.chunks_mut(chip_length) {
+        for (bit_index, chunk) in samples.chunks_mut(chip_length).enumerate() {
             if bit_index >= payload_bits.len() {
                 break;
             }
@@ -394,8 +392,8 @@ impl SignalHandler {
 
             // Generate pseudorandom sequence for spreading
             let mut pn_sequence = vec![1.0; chunk.len()];
-            for i in 1..pn_sequence.len() {
-                pn_sequence[i] = if (i * 17 + bit_index * 31) % 2 == 0 {
+            for (i, elem) in pn_sequence.iter_mut().enumerate().skip(1) {
+                *elem = if (i * 17 + bit_index * 31) % 2 == 0 {
                     1.0
                 } else {
                     -1.0
@@ -407,8 +405,6 @@ impl SignalHandler {
                 let spread_bit = if bit == 1 { 1.0 } else { -1.0 };
                 *sample += amplitude * spread_bit * pn_sequence[i];
             }
-
-            bit_index += 1;
         }
 
         Ok(())
@@ -426,9 +422,7 @@ impl SignalHandler {
         let echo_amplitude = 0.1;
 
         let segment_length = sample_rate as usize / 10; // 100ms segments
-        let mut bit_index = 0;
-
-        for chunk in samples.chunks_mut(segment_length) {
+        for (bit_index, chunk) in samples.chunks_mut(segment_length).enumerate() {
             if bit_index >= payload_bits.len() {
                 break;
             }
@@ -440,8 +434,6 @@ impl SignalHandler {
             for i in delay..chunk.len() {
                 chunk[i] += echo_amplitude * chunk[i - delay];
             }
-
-            bit_index += 1;
         }
 
         Ok(())

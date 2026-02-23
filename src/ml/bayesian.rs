@@ -616,8 +616,8 @@ impl BayesianOptimizer {
         let l = self.gaussian_process.cholesky_decomposition(&k);
 
         // Reject non-positive-definite matrices
-        for i in 0..n {
-            if l[i][i] <= 0.0 || !l[i][i].is_finite() {
+        for (i, row) in l.iter().enumerate().take(n) {
+            if row[i] <= 0.0 || !row[i].is_finite() {
                 return f32::NEG_INFINITY;
             }
         }

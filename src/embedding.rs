@@ -100,7 +100,7 @@ impl SteganoEmbedder {
         report.add_test_result(
             "chi_square_test".to_string(),
             serde_json::to_value(chi_square_result)
-                .map_err(|e| SteganoError::SerializationError(e))?,
+                .map_err(SteganoError::SerializationError)?,
         );
 
         // KS test for distribution comparison
@@ -115,7 +115,7 @@ impl SteganoEmbedder {
 
         report.add_test_result(
             "ks_test".to_string(),
-            serde_json::to_value(ks_result).map_err(|e| SteganoError::SerializationError(e))?,
+            serde_json::to_value(ks_result).map_err(SteganoError::SerializationError)?,
         );
 
         // Format-specific validation
@@ -130,7 +130,7 @@ impl SteganoEmbedder {
                     report.add_test_result(
                         "pixel_pair_analysis".to_string(),
                         serde_json::to_value(pixel_analysis)
-                            .map_err(|e| SteganoError::SerializationError(e))?,
+                            .map_err(SteganoError::SerializationError)?,
                     );
                 }
             }
@@ -154,7 +154,7 @@ impl SteganoEmbedder {
                         report.add_test_result(
                             "audio_steganalysis".to_string(),
                             serde_json::to_value(audio_analysis)
-                                .map_err(|e| SteganoError::SerializationError(e))?,
+                                .map_err(SteganoError::SerializationError)?,
                         );
                     }
                 }
@@ -180,7 +180,7 @@ impl SteganoEmbedder {
             report.add_test_result(
                 "roc_analysis".to_string(),
                 serde_json::to_value(roc_analysis)
-                    .map_err(|e| SteganoError::SerializationError(e))?,
+                    .map_err(SteganoError::SerializationError)?,
             );
         }
 

@@ -113,7 +113,7 @@ impl GpuBackend {
 
         #[cfg(feature = "gpu")]
         {
-            return Self::Wgpu;
+            Self::Wgpu
         }
 
         #[cfg(not(feature = "gpu"))]

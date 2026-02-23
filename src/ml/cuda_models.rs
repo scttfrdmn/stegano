@@ -10,8 +10,6 @@ use crate::ml::models::FeatureNormalization;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-
 #[cfg(feature = "cuda")]
 use crate::gpu::cuda::CudaAccelerator;
 
@@ -232,6 +230,7 @@ impl CudaNeuralNetwork {
     /// Train on a batch of examples using GPU-accelerated SGD.
     ///
     /// Performs one full forward + backward pass per example.
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))]
     pub async fn train_gpu(&mut self, training_data: &[TrainingExample]) -> Result<()> {
         let start = std::time::Instant::now();
 
@@ -365,6 +364,7 @@ impl CudaNeuralNetwork {
     }
 
     /// Clip gradient values to `[-clip, clip]` in place.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     fn clip_gradients(grads: &mut [f32], clip: f32) {
         if clip > 0.0 {
             for g in grads.iter_mut() {
@@ -496,9 +496,9 @@ impl MLModel for CudaNeuralNetwork {
             let s = output[i];
             let delta = (s - target[i]) * s * (1.0 - s);
             self.biases[n_layers - 1][i] -= self.learning_rate * delta;
-            for j in 0..in_size {
+            for (j, &pa) in prev_act.iter().enumerate() {
                 self.weights[n_layers - 1][i * in_size + j] -=
-                    self.learning_rate * delta * prev_act[j];
+                    self.learning_rate * delta * pa;
             }
         }
         Ok(())
@@ -512,7 +512,7 @@ impl MLModel for CudaNeuralNetwork {
             .last()
             .copied()
             .unwrap_or(1.0);
-        (1.0 - last_loss).max(0.0).min(1.0)
+        (1.0 - last_loss).clamp(0.0, 1.0)
     }
 
     fn evaluate(&self, _test_data: &[TrainingExample]) -> Result<ModelPerformance> {

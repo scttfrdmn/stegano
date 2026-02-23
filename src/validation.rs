@@ -928,6 +928,7 @@ pub struct CrossValidationResult {
 #[derive(Debug)]
 pub struct CrossValidation {
     k_folds: usize,
+    #[allow(dead_code)]
     random_seed: u64,
 }
 
@@ -1228,6 +1229,7 @@ impl CrossValidation {
 
 /// Domain-specific validation for scientific data
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct DomainSpecificValidation {
     genomics_validator: GenomicsValidator,
     medical_imaging_validator: MedicalImagingValidator,

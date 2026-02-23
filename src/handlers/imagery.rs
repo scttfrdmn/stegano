@@ -166,7 +166,7 @@ impl ImageryHandler {
             let secure_payload = crypto.encrypt(payload)?;
             // Ceiling to nearest ms; at least 1 when encryption ran
             let enc_ns = enc_start.elapsed().as_nanos().max(1) as u64;
-            let enc_ms = (enc_ns + 999_999) / 1_000_000;
+            let enc_ms = enc_ns.div_ceil(1_000_000);
             (CryptoLayer::serialize_payload(&secure_payload), enc_ms)
         } else {
             (payload.to_vec(), 0)

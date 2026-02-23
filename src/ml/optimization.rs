@@ -1472,9 +1472,7 @@ impl OptimizationEngine {
             .sort_by(|a, b| b.1.combined_score.partial_cmp(&a.1.combined_score).unwrap());
 
         // Add elite individuals
-        for i in 0..elite_count {
-            new_population.push(sorted_population[i].0.clone());
-        }
+        new_population.extend(sorted_population[..elite_count].iter().map(|(p, _)| p.clone()));
 
         // Generate offspring for the rest of the population
         while new_population.len() < population_size {
@@ -1841,6 +1839,7 @@ impl OptimizationEngine {
     }
 
     /// Update particle velocity using PSO equations
+    #[allow(clippy::too_many_arguments)]
     fn update_particle_velocity(
         &self,
         velocity: &mut ParticleVelocity,

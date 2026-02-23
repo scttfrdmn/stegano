@@ -296,7 +296,7 @@ impl MLOptimizer {
 
         // Trigger retraining if we have enough examples
         if self.training_data.len() >= self.config.min_training_examples
-            && self.training_data.len() % 50 == 0
+            && self.training_data.len().is_multiple_of(50)
         {
             self.retrain_models()?;
         }
@@ -507,10 +507,10 @@ impl MLOptimizer {
             let mut real_sum = 0.0;
             let mut imag_sum = 0.0;
 
-            for j in 0..n {
+            for (j, &sample) in signal.iter().enumerate() {
                 let angle = -2.0 * std::f32::consts::PI * (k * j) as f32 / n as f32;
-                real_sum += signal[j] * angle.cos();
-                imag_sum += signal[j] * angle.sin();
+                real_sum += sample * angle.cos();
+                imag_sum += sample * angle.sin();
             }
 
             result[k * 2] = real_sum;
@@ -624,7 +624,7 @@ impl MLOptimizer {
             }
             _ => {
                 let printable =
-                    data.iter().filter(|&&b| b >= 32 && b < 127).count() as f32 / total;
+                    data.iter().filter(|&&b| (32u8..127).contains(&b)).count() as f32 / total;
                 features.insert("printable_ratio".to_string(), printable);
             }
         }
@@ -1160,7 +1160,7 @@ impl MLOptimizer {
 
         // Combined confidence
         let combined = (historical_confidence + performance_confidence + format_confidence) / 3.0;
-        combined.max(0.0).min(1.0)
+        combined.clamp(0.0, 1.0)
     }
 
     /// Check if two parameter sets are equal

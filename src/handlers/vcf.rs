@@ -188,11 +188,12 @@ impl VcfHandler {
             let mut samples = Vec::new();
 
             // Parse sample columns
-            for sample_idx in 9..fields.len() {
-                if sample_idx < header_fields.len() {
-                    let sample_data = self.parse_sample_data(&format_str, fields[sample_idx])?;
-                    samples.push(sample_data);
-                }
+            for (sample_field, header_field) in
+                fields[9..].iter().zip(header_fields[9..].iter())
+            {
+                let sample_data = self.parse_sample_data(&format_str, sample_field)?;
+                let _ = header_field; // zip ensures we stay within header bounds
+                samples.push(sample_data);
             }
 
             (Some(format_str), samples)
@@ -753,14 +754,13 @@ impl VcfHandler {
 
     /// Serialize individual variant to string
     fn serialize_variant(&self, variant: &VcfVariant) -> String {
-        let mut fields = Vec::new();
-
-        // Basic fields
-        fields.push(variant.chrom.clone());
-        fields.push(variant.pos.to_string());
-        fields.push(variant.id.clone());
-        fields.push(variant.ref_allele.clone());
-        fields.push(variant.alt_alleles.join(","));
+        let mut fields = vec![
+            variant.chrom.clone(),
+            variant.pos.to_string(),
+            variant.id.clone(),
+            variant.ref_allele.clone(),
+            variant.alt_alleles.join(","),
+        ];
 
         // Quality field
         if let Some(qual) = variant.qual {

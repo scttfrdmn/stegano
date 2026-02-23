@@ -1267,9 +1267,9 @@ impl PolicyNetwork {
         let mut current = input.to_vec();
         for l in 0..self.weights.len() {
             let mut next = vec![0.0f32; self.weights[l].len()];
-            for neuron in 0..self.weights[l].len() {
+            for (neuron, w_row) in self.weights[l].iter().enumerate() {
                 let mut sum = self.biases[l][neuron];
-                for (i, &w) in self.weights[l][neuron].iter().enumerate() {
+                for (i, &w) in w_row.iter().enumerate() {
                     if i < current.len() {
                         sum += w * current[i];
                     }
@@ -1317,9 +1317,9 @@ impl PolicyNetwork {
             let mut layer_deltas = vec![0.0f32; n_curr];
             for j in 0..n_curr {
                 let mut grad = 0.0f32;
-                for k in 0..n_next {
-                    if j < self.weights[l + 1][k].len() {
-                        grad += self.weights[l + 1][k][j] * deltas[l + 1][k];
+                for (k, w_row) in self.weights[l + 1].iter().take(n_next).enumerate() {
+                    if j < w_row.len() {
+                        grad += w_row[j] * deltas[l + 1][k];
                     }
                 }
                 let a_j = all[l + 1][j];
@@ -1331,11 +1331,11 @@ impl PolicyNetwork {
         // Apply weight and bias updates
         for l in 0..n {
             let prev = &all[l];
-            for neuron in 0..self.weights[l].len() {
+            for (neuron, w_row) in self.weights[l].iter_mut().enumerate() {
                 let d = deltas[l][neuron];
-                for i in 0..self.weights[l][neuron].len() {
+                for (i, w) in w_row.iter_mut().enumerate() {
                     if i < prev.len() {
-                        self.weights[l][neuron][i] -= learning_rate * d * prev[i];
+                        *w -= learning_rate * d * prev[i];
                     }
                 }
                 self.biases[l][neuron] -= learning_rate * d;

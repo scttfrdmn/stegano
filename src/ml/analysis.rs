@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Standard normal CDF via Abramowitz & Stegun approximation 7.1.26 (max error 1.5e-7).
+#[allow(clippy::excessive_precision)]
 fn normal_cdf(x: f32) -> f32 {
     let t = 1.0 / (1.0 + 0.3275911 * x.abs());
     let poly = t * (0.254_829_592

@@ -65,8 +65,8 @@ impl GenericHandler {
 
         // Extract payload length from first 32 bits
         let mut len_bits = Vec::with_capacity(32);
-        for i in 0..32 {
-            len_bits.push(carrier[i] & 1);
+        for &byte in &carrier[..32] {
+            len_bits.push(byte & 1);
         }
         let payload_len = self.bits_to_u32(&len_bits);
 
@@ -83,8 +83,8 @@ impl GenericHandler {
 
         // Extract payload bits
         let mut payload_bits = Vec::with_capacity(payload_bits_needed);
-        for i in 32..(32 + payload_bits_needed) {
-            payload_bits.push(carrier[i] & 1);
+        for &byte in &carrier[32..(32 + payload_bits_needed)] {
+            payload_bits.push(byte & 1);
         }
 
         Ok(self.bits_to_bytes(&payload_bits))
