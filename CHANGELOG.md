@@ -8,10 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Nothing yet
+- **Extended FFI v2** (`src/ffi.rs`): `stegano_embed_v2` and `stegano_extract_v2` accept a
+  `format_specific_json` parameter (null-terminated UTF-8 JSON object) that is parsed into
+  `HashMap<String, serde_json::Value>` and forwarded as `EmbedParams::format_specific`.  This
+  allows CGO/C callers to select SAM `auxiliary`, DICOM `metadata`/`sequence`, WAV `echo`, and
+  other format-specific strategies without requiring a Rust rebuild.  Resolves
+  [#31](https://github.com/scttfrdmn/stegano/issues/31).
+- **Go bindings: `WithStrategy` and `WithCipher` options** (`go/stegano.go`):
+  `WithStrategy(string)` passes the chosen strategy as the correct JSON key for the carrier
+  format (`sam_strategy`, `dicom_strategy`, `signal_strategy`).  `WithCipher("chacha20")`
+  selects ChaCha20-Poly1305 encryption.  Both options automatically dispatch to the v2 FFI;
+  unchanged call sites continue to use the v1 path.  2 new tests — 19 Go tests total.
+- **CLI help improvements** (`src/cli/mod.rs`): `--strategy` help text now lists `auxiliary`
+  for SAM/BAM, `echo` for WAV, and the full DICOM strategy list
+  (`private|metadata|sequence|pixel_lsb`).
 
 ### Changed
-- Nothing yet
+- **README headline** updated to reflect v0.5.1 (was incorrectly showing v0.5.0).
 
 ## [0.5.1] - 2026-02-23
 

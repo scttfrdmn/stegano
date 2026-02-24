@@ -71,6 +71,8 @@ fmt.Println(stegano.Version()) // "0.5.1"
 |--------|-------------|
 | `WithPassword(string)` | AES-256-GCM encryption password. Empty = no encryption. |
 | `WithFormat(Format)` | Override auto-detected format. |
+| `WithStrategy(string)` | Format-specific embedding strategy (uses v2 FFI). SAM/BAM: `optional\|comment\|quality\|auxiliary`. DICOM: `private\|metadata\|sequence\|pixel_lsb`. WAV: `timedomain\|frequency\|phase\|spread\|echo`. PNG/TIFF: `lsb\|adaptive\|edge\|dct`. |
+| `WithCipher(string)` | Encryption cipher: `aes256gcm` (default) or `chacha20`. Requires `WithPassword`. Uses v2 FFI when set to `chacha20`. |
 
 ## Error handling
 

@@ -38,9 +38,10 @@ pub enum Commands {
         ec_level: String,
         /// Format-specific embedding strategy.
         /// VCF: info|quality|sample|id|multi
-        /// SAM/BAM: optional|comment|quality|multi
+        /// SAM/BAM: optional|comment|quality|auxiliary|multi
+        /// DICOM: private|metadata|sequence|pixel_lsb|multi
         /// PNG/TIFF: lsb|adaptive|edge|dct
-        /// WAV: timedomain|frequency|phase|spread
+        /// WAV: timedomain|frequency|phase|spread|echo
         #[arg(long)]
         strategy: Option<String>,
         /// Encryption cipher (aes256gcm, chacha20). Auto-detected on extract.
@@ -63,7 +64,9 @@ pub enum Commands {
         gpu: bool,
         /// Format-specific extraction strategy (must match the strategy used during embed).
         /// VCF: info|quality|sample|id|multi
-        /// SAM/BAM: optional|comment|quality|multi
+        /// SAM/BAM: optional|comment|quality|auxiliary|multi
+        /// DICOM: private|metadata|sequence|pixel_lsb|multi
+        /// WAV: timedomain|frequency|phase|spread|echo
         #[arg(long)]
         strategy: Option<String>,
     },

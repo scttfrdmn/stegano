@@ -435,6 +435,206 @@ pub unsafe extern "C" fn stegano_extract(
     }
 }
 
+/// Embed payload into carrier data (v2: accepts JSON format-specific options)
+///
+/// `format_specific_json` is an optional null-terminated UTF-8 JSON object,
+/// e.g. `{"sam_strategy":"auxiliary"}` or `{"signal_strategy":"echo"}`.
+/// Pass NULL or an empty JSON object `{}` for default behaviour (equivalent to
+/// calling `stegano_embed`).
+///
+/// # Safety
+/// Same as `stegano_embed`, plus:
+/// - `format_specific_json` is either null or a valid null-terminated C string
+///   containing a JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn stegano_embed_v2(
+    carrier_data: *mut u8,
+    carrier_len: c_uint,
+    payload_data: *const u8,
+    payload_len: c_uint,
+    format: CDataFormat,
+    password: *const c_char,
+    format_specific_json: *const c_char,
+    result_out: *mut CEmbedResult,
+) -> SteganoErrorCode {
+    if carrier_data.is_null()
+        || payload_data.is_null()
+        || result_out.is_null()
+        || carrier_len == 0
+        || payload_len == 0
+    {
+        return SteganoErrorCode::InvalidParameter;
+    }
+
+    let carrier_slice = unsafe { slice::from_raw_parts_mut(carrier_data, carrier_len as usize) };
+    let payload_slice = unsafe { slice::from_raw_parts(payload_data, payload_len as usize) };
+    let rust_format = from_c_format(format);
+
+    let encryption_key = if password.is_null() {
+        vec![]
+    } else {
+        let c_str = unsafe { CStr::from_ptr(password) };
+        c_str.to_bytes().to_vec()
+    };
+
+    // Parse optional format-specific JSON
+    let format_specific: HashMap<String, serde_json::Value> = if format_specific_json.is_null() {
+        HashMap::new()
+    } else {
+        let json_str = unsafe { CStr::from_ptr(format_specific_json) };
+        match json_str.to_str() {
+            Ok(s) if !s.is_empty() => {
+                match serde_json::from_str::<HashMap<String, serde_json::Value>>(s) {
+                    Ok(map) => map,
+                    Err(_) => return SteganoErrorCode::InvalidParameter,
+                }
+            }
+            _ => HashMap::new(),
+        }
+    };
+
+    let mut carrier = CarrierData {
+        format: rust_format,
+        raw_data: carrier_slice.to_vec(),
+        metadata: HashMap::new(),
+        dimensions: None,
+        sampling_rate: None,
+    };
+
+    let params = EmbedParams {
+        encryption_key,
+        error_correction_level: ECLevel::Medium,
+        stealth_level: StealthLevel::Low,
+        use_gpu: false,
+        format_specific,
+        enable_validation: false,
+        cipher_kind: Default::default(),
+    };
+
+    let registry = HandlerRegistry::new();
+
+    match registry.get_handler(&carrier.format) {
+        Some(handler) => {
+            let rt = ffi_runtime();
+            match rt.block_on(handler.embed(&mut carrier, payload_slice, &params)) {
+                Ok(result) => {
+                    let copy_len = std::cmp::min(carrier.raw_data.len(), carrier_len as usize);
+                    unsafe {
+                        ptr::copy_nonoverlapping(carrier.raw_data.as_ptr(), carrier_data, copy_len);
+                        *result_out = CEmbedResult {
+                            success: result.success,
+                            bytes_embedded: result.bytes_embedded as c_uint,
+                            carrier_modified: result.carrier_modified,
+                            embedding_time_ms: result.performance_stats.embedding_time_ms
+                                as c_uint,
+                            memory_usage_bytes: result.performance_stats.memory_usage_bytes
+                                as c_uint,
+                        };
+                    }
+                    SteganoErrorCode::Success
+                }
+                Err(error) => to_c_error(&error),
+            }
+        }
+        None => SteganoErrorCode::FormatNotSupported,
+    }
+}
+
+/// Extract payload from carrier data (v2: accepts JSON format-specific options)
+///
+/// `format_specific_json` must match the JSON used during `stegano_embed_v2`
+/// (e.g. same `sam_strategy`).  Pass NULL for default behaviour.
+///
+/// # Safety
+/// Same as `stegano_extract`, plus:
+/// - `format_specific_json` is either null or a valid null-terminated C string
+///   containing a JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn stegano_extract_v2(
+    carrier_data: *const u8,
+    carrier_len: c_uint,
+    format: CDataFormat,
+    password: *const c_char,
+    format_specific_json: *const c_char,
+    payload_out: *mut *mut u8,
+    payload_len_out: *mut c_uint,
+) -> SteganoErrorCode {
+    if carrier_data.is_null()
+        || payload_out.is_null()
+        || payload_len_out.is_null()
+        || carrier_len == 0
+    {
+        return SteganoErrorCode::InvalidParameter;
+    }
+
+    let carrier_slice = unsafe { slice::from_raw_parts(carrier_data, carrier_len as usize) };
+    let rust_format = from_c_format(format);
+
+    let encryption_key = if password.is_null() {
+        vec![]
+    } else {
+        let c_str = unsafe { CStr::from_ptr(password) };
+        c_str.to_bytes().to_vec()
+    };
+
+    let format_specific: HashMap<String, serde_json::Value> = if format_specific_json.is_null() {
+        HashMap::new()
+    } else {
+        let json_str = unsafe { CStr::from_ptr(format_specific_json) };
+        match json_str.to_str() {
+            Ok(s) if !s.is_empty() => {
+                match serde_json::from_str::<HashMap<String, serde_json::Value>>(s) {
+                    Ok(map) => map,
+                    Err(_) => return SteganoErrorCode::InvalidParameter,
+                }
+            }
+            _ => HashMap::new(),
+        }
+    };
+
+    let carrier = CarrierData {
+        format: rust_format,
+        raw_data: carrier_slice.to_vec(),
+        metadata: HashMap::new(),
+        dimensions: None,
+        sampling_rate: None,
+    };
+
+    let params = EmbedParams {
+        encryption_key,
+        error_correction_level: ECLevel::Medium,
+        stealth_level: StealthLevel::Low,
+        use_gpu: false,
+        format_specific,
+        enable_validation: false,
+        cipher_kind: Default::default(),
+    };
+
+    let registry = HandlerRegistry::new();
+
+    match registry.get_handler(&carrier.format) {
+        Some(handler) => {
+            let rt = ffi_runtime();
+            match rt.block_on(handler.extract(&carrier, &params)) {
+                Ok(payload) => {
+                    let payload_ptr = unsafe { libc::malloc(payload.len()) as *mut u8 };
+                    if payload_ptr.is_null() {
+                        return SteganoErrorCode::Unknown;
+                    }
+                    unsafe {
+                        ptr::copy_nonoverlapping(payload.as_ptr(), payload_ptr, payload.len());
+                        *payload_out = payload_ptr;
+                        *payload_len_out = payload.len() as c_uint;
+                    }
+                    SteganoErrorCode::Success
+                }
+                Err(error) => to_c_error(&error),
+            }
+        }
+        None => SteganoErrorCode::FormatNotSupported,
+    }
+}
+
 /// Free memory allocated by stegano_extract
 ///
 /// # Arguments

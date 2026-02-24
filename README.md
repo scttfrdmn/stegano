@@ -9,10 +9,11 @@
 
 **Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
 
-## 🎯 Version 0.5.0 - Latest Production Release
+## 🎯 Version 0.5.1 - Latest Production Release
 
-Stegano v0.5.0 completes all previously stubbed strategies and adds performance infrastructure:
-- ✅ **416 Tests Passing** — all strategies fully implemented and covered
+Stegano v0.5.1 adds WebAssembly bindings and ships all previously completed strategies:
+- ✅ **428 Tests Passing** — all strategies fully implemented and covered
+- ✅ **WebAssembly (WASM) bindings** — `wasm-bindgen` async API for browser/Node.js via `--features wasm`. Resolves [#25](https://github.com/scttfrdmn/stegano/issues/25).
 - ✅ **SAM/BAM `AuxiliaryData` strategy** — hex-encoded payload in `Xs:Z:` optional fields. Resolves [#22](https://github.com/scttfrdmn/stegano/issues/22).
 - ✅ **DICOM `UnusedMetadata` strategy** — embeds up to 120 bytes in the 128-byte DICOM preamble. Resolves [#20](https://github.com/scttfrdmn/stegano/issues/20).
 - ✅ **DICOM `SequencePadding` strategy** — uses `(FFFC,FFFC)` Data Set Trailing Padding element. Resolves [#21](https://github.com/scttfrdmn/stegano/issues/21).

@@ -98,12 +98,24 @@ extern SteganoErrorCode stegano_extract(
     const unsigned char* carrier_data, uint32_t carrier_len,
     CDataFormat format, const char* password,
     unsigned char** payload_out, uint32_t* payload_len_out);
+extern SteganoErrorCode stegano_embed_v2(
+    unsigned char* carrier_data, uint32_t carrier_len,
+    const unsigned char* payload_data, uint32_t payload_len,
+    CDataFormat format, const char* password,
+    const char* format_specific_json,
+    CEmbedResult* result_out);
+extern SteganoErrorCode stegano_extract_v2(
+    const unsigned char* carrier_data, uint32_t carrier_len,
+    CDataFormat format, const char* password,
+    const char* format_specific_json,
+    unsigned char** payload_out, uint32_t* payload_len_out);
 extern void        stegano_free(void* ptr);
 extern const char* stegano_version();
 */
 import "C"
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"unsafe"
@@ -225,6 +237,8 @@ func codeToError(code C.SteganoErrorCode, op string) *Error {
 type options struct {
 	password string
 	format   *Format // nil = auto-detect
+	strategy string  // format-specific strategy key (e.g. "auxiliary", "echo")
+	cipher   string  // encryption cipher override (e.g. "chacha20")
 }
 
 // Option configures an Embed or Extract call.
@@ -241,6 +255,25 @@ func WithPassword(password string) Option {
 // (e.g. raw binary data that should be treated as SAM).
 func WithFormat(format Format) Option {
 	return func(o *options) { o.format = &format }
+}
+
+// WithStrategy sets a format-specific embedding/extraction strategy.
+// The strategy is passed as the appropriate JSON key for the carrier format:
+//   - SAM/BAM:  "optional", "comment", "quality", "auxiliary"
+//   - DICOM:    "private", "metadata", "sequence", "pixel_lsb"
+//   - WAV:      "timedomain", "frequency", "phase", "spread", "echo"
+//   - PNG/TIFF: "lsb", "adaptive", "edge", "dct"
+//
+// When a strategy is set, Embed and Extract automatically use the v2 FFI.
+func WithStrategy(strategy string) Option {
+	return func(o *options) { o.strategy = strategy }
+}
+
+// WithCipher selects the encryption cipher ("aes256gcm" or "chacha20").
+// Only meaningful when a password is also set via WithPassword.
+// Default is "aes256gcm".
+func WithCipher(cipher string) Option {
+	return func(o *options) { o.cipher = cipher }
 }
 
 func applyOptions(opts []Option) options {
@@ -394,15 +427,32 @@ func Embed(carrier, payload []byte, opts ...Option) ([]byte, error) {
 	}
 
 	var result C.CEmbedResult
-	code := C.stegano_embed(
-		(*C.uchar)(unsafe.Pointer(&buf[0])),
-		carrierLen,
-		(*C.uchar)(unsafe.Pointer(&payload[0])),
-		payloadLen,
-		C.CDataFormat(format),
-		cPassword,
-		&result,
-	)
+	var code C.SteganoErrorCode
+	if needsV2(o) {
+		jsonStr := formatSpecificJSON(o, format)
+		cJSON := C.CString(jsonStr)
+		defer C.free(unsafe.Pointer(cJSON))
+		code = C.stegano_embed_v2(
+			(*C.uchar)(unsafe.Pointer(&buf[0])),
+			carrierLen,
+			(*C.uchar)(unsafe.Pointer(&payload[0])),
+			payloadLen,
+			C.CDataFormat(format),
+			cPassword,
+			cJSON,
+			&result,
+		)
+	} else {
+		code = C.stegano_embed(
+			(*C.uchar)(unsafe.Pointer(&buf[0])),
+			carrierLen,
+			(*C.uchar)(unsafe.Pointer(&payload[0])),
+			payloadLen,
+			C.CDataFormat(format),
+			cPassword,
+			&result,
+		)
+	}
 	if code != C.SteganoSuccess {
 		return nil, codeToError(code, "Embed")
 	}
@@ -435,14 +485,30 @@ func Extract(carrier []byte, opts ...Option) ([]byte, error) {
 
 	var payloadPtr *C.uchar
 	var payloadLen C.uint32_t
-	code := C.stegano_extract(
-		(*C.uchar)(unsafe.Pointer(&carrier[0])),
-		carrierLen,
-		C.CDataFormat(format),
-		cPassword,
-		&payloadPtr,
-		&payloadLen,
-	)
+	var code C.SteganoErrorCode
+	if needsV2(o) {
+		jsonStr := formatSpecificJSON(o, format)
+		cJSON := C.CString(jsonStr)
+		defer C.free(unsafe.Pointer(cJSON))
+		code = C.stegano_extract_v2(
+			(*C.uchar)(unsafe.Pointer(&carrier[0])),
+			carrierLen,
+			C.CDataFormat(format),
+			cPassword,
+			cJSON,
+			&payloadPtr,
+			&payloadLen,
+		)
+	} else {
+		code = C.stegano_extract(
+			(*C.uchar)(unsafe.Pointer(&carrier[0])),
+			carrierLen,
+			C.CDataFormat(format),
+			cPassword,
+			&payloadPtr,
+			&payloadLen,
+		)
+	}
 	if code != C.SteganoSuccess {
 		return nil, codeToError(code, "Extract")
 	}
@@ -464,4 +530,37 @@ func resolveFormat(carrier []byte, o options) (Format, error) {
 		return *o.format, nil
 	}
 	return DetectFormat(carrier)
+}
+
+// formatSpecificJSON builds the format_specific JSON string for the v2 FFI,
+// or returns "" if no v2 options are set (caller should use v1 FFI instead).
+// The returned string is valid JSON or empty.
+func formatSpecificJSON(o options, format Format) string {
+	m := map[string]string{}
+	if o.strategy != "" {
+		// Map to the correct JSON key for the carrier format.
+		switch format {
+		case FormatSAM, FormatBAM:
+			m["sam_strategy"] = o.strategy
+		case FormatDICOM:
+			m["dicom_strategy"] = o.strategy
+		case FormatWAV:
+			m["signal_strategy"] = o.strategy
+		default:
+			m["strategy"] = o.strategy
+		}
+	}
+	if o.cipher != "" && o.cipher != "aes256gcm" {
+		m["cipher"] = o.cipher
+	}
+	if len(m) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// needsV2 reports whether the options require the v2 FFI functions.
+func needsV2(o options) bool {
+	return o.strategy != "" || (o.cipher != "" && o.cipher != "aes256gcm")
 }

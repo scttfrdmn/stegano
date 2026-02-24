@@ -274,6 +274,51 @@ func TestExtract_WrongPassword(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// WithStrategy / WithCipher (v2 FFI)
+// ---------------------------------------------------------------------------
+
+func TestEmbedExtract_WithStrategy(t *testing.T) {
+	// Binary carrier treated as generic binary; strategy "lsb" should work.
+	carrier := genericCarrier(4096)
+	payload := []byte("strategy roundtrip")
+
+	modified, err := stegano.Embed(carrier, payload, stegano.WithStrategy("lsb"))
+	if err != nil {
+		t.Fatalf("Embed (WithStrategy) error: %v", err)
+	}
+
+	got, err := stegano.Extract(modified, stegano.WithStrategy("lsb"))
+	if err != nil {
+		t.Fatalf("Extract (WithStrategy) error: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("payload mismatch: got %q, want %q", got, payload)
+	}
+}
+
+func TestEmbedExtract_WithCipher(t *testing.T) {
+	carrier := genericCarrier(8192)
+	payload := []byte("chacha20 cipher roundtrip")
+
+	modified, err := stegano.Embed(carrier, payload,
+		stegano.WithPassword("test_key"),
+		stegano.WithCipher("chacha20"))
+	if err != nil {
+		t.Fatalf("Embed (WithCipher) error: %v", err)
+	}
+
+	got, err := stegano.Extract(modified,
+		stegano.WithPassword("test_key"),
+		stegano.WithCipher("chacha20"))
+	if err != nil {
+		t.Fatalf("Extract (WithCipher) error: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("payload mismatch: got %q, want %q", got, payload)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 
