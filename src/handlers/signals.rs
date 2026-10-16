@@ -1394,6 +1394,17 @@ mod tests {
         if password.is_some() {
             let wrong = params(strategy, Some("wrong password"));
             assert!(handler.extract(&c, &wrong).await.is_err());
+            // Unkeyed strategies still find the header without a password, so
+            // the codec's EncryptionError comes through. (Keyed SS/echo cannot
+            // find their header at all without the key.)
+            if matches!(strategy, "timedomain" | "frequency" | "phase") {
+                let none = params(strategy, None);
+                let r = handler.extract(&c, &none).await;
+                assert!(
+                    matches!(r, Err(SteganoError::EncryptionError(_))),
+                    "{strategy}: {r:?}"
+                );
+            }
         }
     }
 
