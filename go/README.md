@@ -46,7 +46,7 @@ fmt.Printf("Format: %s  Total: %d bits  Recommended: %d bits\n",
 fmt, err := stegano.DetectFormat(carrier)
 
 // Library version.
-fmt.Println(stegano.Version()) // "0.5.1"
+fmt.Println(stegano.Version()) // crate version, e.g. "0.5.1"
 ```
 
 ## Supported formats
@@ -69,10 +69,12 @@ fmt.Println(stegano.Version()) // "0.5.1"
 
 | Option | Description |
 |--------|-------------|
-| `WithPassword(string)` | AES-256-GCM encryption password. Empty = no encryption. |
+| `WithPassword(string)` | Encryption password. Empty = no encryption. |
 | `WithFormat(Format)` | Override auto-detected format. |
-| `WithStrategy(string)` | Format-specific embedding strategy (uses v2 FFI). SAM/BAM: `optional\|comment\|quality\|auxiliary`. DICOM: `private\|metadata\|sequence\|pixel_lsb`. WAV: `timedomain\|frequency\|phase\|spread\|echo`. PNG/TIFF: `lsb\|adaptive\|edge\|dct`. |
-| `WithCipher(string)` | Encryption cipher: `aes256gcm` (default) or `chacha20`. Requires `WithPassword`. Uses v2 FFI when set to `chacha20`. |
+| `WithStrategy(string)` | Format-specific strategy, sent under the key the handler reads. PNG/TIFF (`imagery_strategy`): `lsb\|adaptive\|edge\|dct`. VCF (`vcf_strategy`): `info\|quality\|format\|id\|multi`. SAM/BAM (`sam_strategy`): `optional\|comment\|quality\|auxiliary\|multi`. DICOM (`dicom_strategy`): `private\|metadata\|sequence\|pixel_lsb\|multi`. WAV (`signal_strategy`): `timedomain\|frequency\|phase\|spread\|echo`. FASTA/FASTQ: `genomics_strategy`. Other formats return `ErrInvalidParameter`. Pass the same strategy to `Extract`. |
+| `WithCipher(string)` | Encryption cipher: `aes256gcm` (default) or `chacha20`. Requires `WithPassword`; auto-detected on `Extract`. |
+| `WithStealth(string)` | `low\|medium\|high\|maximum` (default `high`). |
+| `WithECLevel(string)` | Reed-Solomon level `none\|low\|medium\|high\|maximum` (default `none`). Without a password, `Extract` needs a non-`none` level too if one was used for `Embed`. |
 
 ## Error handling
 
@@ -90,10 +92,17 @@ if err != nil {
 
 ## Notes
 
-- The FFI uses `StealthLevel::Low` and AES-256-GCM by default.
-- Carrier bytes are never modified in place; `Embed` always returns a new slice.
-- `stegano_free` is called automatically via `defer` after `Extract`.
-- Thread-safe: the underlying Rust FFI uses a shared Tokio runtime (`OnceLock`).
+- The C declarations come from the cbindgen-generated `include/stegano.h`
+  (via `#cgo CFLAGS: -I${SRCDIR}/../include`), so build from a checkout of
+  the repository.
+- Defaults are shared with the CLI, C FFI, Python and WASM bindings:
+  `high` stealth, `none` error correction, AES-256-GCM. (Before v0.6 the Go
+  binding used `low` stealth and `medium` EC; to read old password-less
+  carriers pass `WithECLevel("medium")`.)
+- `Embed` returns the complete embedded carrier, which can be longer than the
+  input (SAM, BAM, VCF, DICOM). The input slice is never modified.
+- Library-allocated buffers are freed automatically.
+- Thread-safe: the underlying Rust FFI uses one shared Tokio runtime.
 
 ## License
 

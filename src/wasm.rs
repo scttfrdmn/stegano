@@ -35,34 +35,26 @@
 //! const info = stegano_estimate_capacity(carrier);
 //! console.log(`Format: ${info.format()}, Total bits: ${info.total_bits}`);
 //!
-//! console.log(stegano_version()); // '0.5.0'
+//! console.log(stegano_version()); // crate version, e.g. '0.5.1'
 //! ```
 
 #[cfg(any(target_arch = "wasm32", test))]
-use std::collections::HashMap;
-
+use crate::carrier::{self, carrier_from_content};
 #[cfg(any(target_arch = "wasm32", test))]
-use crate::core::{CarrierData, CipherKind, DataFormat, ECLevel, EmbedParams, StealthLevel};
+use crate::core::{DataFormat, EmbedParams};
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::embedding::SteganoEmbedder;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 use crate::handlers::HandlerRegistry;
 
 // ---------------------------------------------------------------------------
 // Internal helpers — compiled for wasm32 and for test builds
 // ---------------------------------------------------------------------------
 
-/// Detect DataFormat from raw bytes by querying each registered handler.
-/// Falls back to `DataFormat::BINARY` for unrecognised data.
-#[cfg(any(target_arch = "wasm32", test))]
+/// Detect DataFormat from raw bytes (shared detection, see [`crate::carrier`]).
+#[cfg(test)]
 fn detect_format(data: &[u8]) -> DataFormat {
-    let registry = HandlerRegistry::new();
-    for handler in registry.get_handlers() {
-        if let Some(fmt) = handler.detect_format(data) {
-            return fmt;
-        }
-    }
-    DataFormat::BINARY
+    carrier::detect_format_from_content(data)
 }
 
 /// Return a static human-readable name for a DataFormat variant.
@@ -89,57 +81,34 @@ fn format_name(fmt: &DataFormat) -> &'static str {
 
 /// Build an [`EmbedParams`] from string options provided by JavaScript.
 ///
-/// Invalid / unknown values fall back to sensible defaults:
-/// - `stealth`   → `High`
-/// - `ec_level`  → `None`
-/// - `cipher`    → `Aes256Gcm`
+/// Empty strings select the shared front-end defaults (see
+/// [`crate::carrier`]); unknown names are rejected.
 #[cfg(any(target_arch = "wasm32", test))]
-fn make_params(password: &str, stealth: &str, ec_level: &str, cipher: &str) -> EmbedParams {
-    let key = if password.is_empty() {
-        vec![]
-    } else {
-        password.as_bytes().to_vec()
-    };
-
-    let stealth_level = match stealth.to_lowercase().as_str() {
-        "low" => StealthLevel::Low,
-        "medium" => StealthLevel::Medium,
-        "high" => StealthLevel::High,
-        "maximum" => StealthLevel::Maximum,
-        _ => StealthLevel::High,
-    };
-
-    let error_correction_level = match ec_level.to_lowercase().as_str() {
-        "none" => ECLevel::None,
-        "low" => ECLevel::Low,
-        "medium" => ECLevel::Medium,
-        "high" => ECLevel::High,
-        "maximum" => ECLevel::Maximum,
-        _ => ECLevel::None,
-    };
-
-    let cipher_kind = match cipher
-        .to_lowercase()
-        .replace(['-', '_'], "")
-        .as_str()
-    {
-        "chacha20" | "chacha20poly1305" => CipherKind::ChaCha20Poly1305,
-        _ => CipherKind::Aes256Gcm,
-    };
-
-    EmbedParams {
-        encryption_key: key,
-        error_correction_level,
-        stealth_level,
-        use_gpu: false,
-        enable_validation: false,
-        format_specific: HashMap::new(),
-        cipher_kind,
+fn make_params(
+    password: &str,
+    stealth: &str,
+    ec_level: &str,
+    cipher: &str,
+) -> anyhow::Result<EmbedParams> {
+    fn or_default<'a>(s: &'a str, default: &'a str) -> &'a str {
+        if s.trim().is_empty() {
+            default
+        } else {
+            s
+        }
     }
+    carrier::params_from_names(
+        password,
+        or_default(stealth, carrier::DEFAULT_STEALTH_NAME),
+        or_default(ec_level, carrier::DEFAULT_EC_NAME),
+        or_default(cipher, carrier::DEFAULT_CIPHER_NAME),
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 /// Embed `payload` into `carrier` — shared async implementation used by both
-/// the WASM exports and the native unit tests.
+/// the WASM exports and the native unit tests. The result may be longer than
+/// `carrier` (SAM, VCF, DICOM).
 #[cfg(any(target_arch = "wasm32", test))]
 async fn embed_internal(
     carrier: &[u8],
@@ -149,15 +118,8 @@ async fn embed_internal(
     ec_level: &str,
     cipher: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    let params = make_params(password, stealth, ec_level, cipher);
-    let format = detect_format(carrier);
-    let mut carrier_data = CarrierData {
-        format,
-        raw_data: carrier.to_vec(),
-        metadata: HashMap::new(),
-        dimensions: None,
-        sampling_rate: None,
-    };
+    let params = make_params(password, stealth, ec_level, cipher)?;
+    let mut carrier_data = carrier_from_content(carrier.to_vec());
     let embedder = SteganoEmbedder::new();
     embedder.embed(&mut carrier_data, payload, &params).await?;
     Ok(carrier_data.raw_data)
@@ -171,15 +133,8 @@ async fn extract_internal(
     ec_level: &str,
     cipher: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    let params = make_params(password, "high", ec_level, cipher);
-    let format = detect_format(carrier);
-    let carrier_data = CarrierData {
-        format,
-        raw_data: carrier.to_vec(),
-        metadata: HashMap::new(),
-        dimensions: None,
-        sampling_rate: None,
-    };
+    let params = make_params(password, carrier::DEFAULT_STEALTH_NAME, ec_level, cipher)?;
+    let carrier_data = carrier_from_content(carrier.to_vec());
     let embedder = SteganoEmbedder::new();
     Ok(embedder.extract(&carrier_data, &params).await?)
 }
@@ -230,8 +185,11 @@ impl WasmCapacityInfo {
 /// - `carrier`  — Carrier file bytes (PNG, FASTA, WAV, FITS, DICOM, …).
 /// - `payload`  — Secret bytes to embed.
 /// - `password` — Encryption password.  Empty string disables encryption.
-/// - `stealth`  — `"low"` | `"medium"` | `"high"` | `"maximum"` (default: `"high"`).
-/// - `ec_level` — `"none"` | `"low"` | `"medium"` | `"high"` | `"maximum"` (default: `"none"`).
+/// - `stealth`  — `"low"` | `"medium"` | `"high"` | `"maximum"` (`""` = shared default, `"high"`).
+/// - `ec_level` — `"none"` | `"low"` | `"medium"` | `"high"` | `"maximum"` (`""` = shared default, `"none"`).
+///
+/// The result may be longer than `carrier` (SAM, VCF, DICOM). Unknown
+/// option names reject the promise.
 /// - `cipher`   — `"aes256gcm"` (default) | `"chacha20"`.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -257,7 +215,9 @@ pub async fn stegano_embed(
 /// # Arguments
 /// - `carrier`  — Carrier bytes that contain an embedded payload.
 /// - `password` — Decryption password (must match the one used during embed).
-/// - `ec_level` — Error-correction level used during embedding.
+/// - `ec_level` — Only matters without a password: use any non-`"none"` value
+///   if EC was used at embed time (the level itself is read from the payload).
+///   `""` = shared default.
 /// - `cipher`   — Cipher hint; the header is usually sufficient for auto-detection.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -282,18 +242,11 @@ pub async fn stegano_extract(
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn stegano_estimate_capacity(carrier: &[u8]) -> Result<WasmCapacityInfo, JsError> {
-    let format = detect_format(carrier);
-    let carrier_data = CarrierData {
-        format: format.clone(),
-        raw_data: carrier.to_vec(),
-        metadata: HashMap::new(),
-        dimensions: None,
-        sampling_rate: None,
-    };
+    let carrier_data = carrier_from_content(carrier.to_vec());
 
     let registry = HandlerRegistry::new();
     let handler = registry
-        .get_handler(&format)
+        .get_handler(&carrier_data.format)
         .ok_or_else(|| JsError::new("Unsupported carrier format"))?;
 
     let cap = handler
@@ -303,11 +256,11 @@ pub fn stegano_estimate_capacity(carrier: &[u8]) -> Result<WasmCapacityInfo, JsE
     Ok(WasmCapacityInfo {
         total_bits: cap.total_bits,
         recommended_bits: cap.recommended_bits,
-        format_str: format_name(&format).to_string(),
+        format_str: format_name(&carrier_data.format).to_string(),
     })
 }
 
-/// Return the stegano library version string (e.g. `"0.5.0"`).
+/// Return the stegano library version string (the crate version).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn stegano_version() -> String {
@@ -350,18 +303,25 @@ mod tests {
 
     // --- make_params ---
 
+    use crate::core::{CipherKind, ECLevel, StealthLevel};
+
     #[test]
     fn test_make_params_defaults() {
-        let p = make_params("", "high", "none", "aes256gcm");
+        let p = make_params("", "high", "none", "aes256gcm").unwrap();
         assert!(p.encryption_key.is_empty());
         assert_eq!(p.stealth_level, StealthLevel::High);
         assert_eq!(p.error_correction_level, ECLevel::None);
         assert_eq!(p.cipher_kind, CipherKind::Aes256Gcm);
+        // Empty strings select the shared defaults.
+        let d = make_params("", "", "", "").unwrap();
+        assert_eq!(d.stealth_level, carrier::DEFAULT_STEALTH_LEVEL);
+        assert_eq!(d.error_correction_level, carrier::DEFAULT_EC_LEVEL);
+        assert_eq!(d.cipher_kind, carrier::DEFAULT_CIPHER_KIND);
     }
 
     #[test]
     fn test_make_params_chacha20() {
-        let p = make_params("mypassword", "maximum", "medium", "chacha20");
+        let p = make_params("mypassword", "maximum", "medium", "chacha20").unwrap();
         assert_eq!(p.encryption_key, b"mypassword".to_vec());
         assert_eq!(p.stealth_level, StealthLevel::Maximum);
         assert_eq!(p.error_correction_level, ECLevel::Medium);
@@ -370,16 +330,15 @@ mod tests {
 
     #[test]
     fn test_make_params_chacha20_hyphenated() {
-        let p = make_params("k", "low", "low", "chacha20-poly1305");
+        let p = make_params("k", "low", "low", "chacha20-poly1305").unwrap();
         assert_eq!(p.cipher_kind, CipherKind::ChaCha20Poly1305);
     }
 
     #[test]
-    fn test_make_params_unknown_values_use_defaults() {
-        let p = make_params("", "ultra", "extreme", "xorcrypt");
-        assert_eq!(p.stealth_level, StealthLevel::High);
-        assert_eq!(p.error_correction_level, ECLevel::None);
-        assert_eq!(p.cipher_kind, CipherKind::Aes256Gcm);
+    fn test_make_params_unknown_values_rejected() {
+        assert!(make_params("", "ultra", "none", "aes256gcm").is_err());
+        assert!(make_params("", "high", "extreme", "aes256gcm").is_err());
+        assert!(make_params("", "high", "none", "xorcrypt").is_err());
     }
 
     // --- format_name ---
@@ -430,9 +389,16 @@ mod tests {
         let carrier = generic_carrier(8192);
         let payload = b"Encrypted WASM binding test";
 
-        let modified = embed_internal(&carrier, payload, "wasm_secret", "high", "none", "aes256gcm")
-            .await
-            .expect("embed should succeed");
+        let modified = embed_internal(
+            &carrier,
+            payload,
+            "wasm_secret",
+            "high",
+            "none",
+            "aes256gcm",
+        )
+        .await
+        .expect("embed should succeed");
 
         let extracted = extract_internal(&modified, "wasm_secret", "none", "aes256gcm")
             .await

@@ -1,4 +1,20 @@
-use clap::{Parser, Subcommand};
+use crate::carrier::{DEFAULT_CIPHER_NAME, DEFAULT_EC_NAME, DEFAULT_STEALTH_NAME};
+use clap::{Args, Parser, Subcommand};
+
+/// Process exit codes used by the `stegano` binary.
+///
+/// `2` is avoided because clap uses it for usage errors.
+pub mod exit_code {
+    /// Success (`detect`: hidden data found).
+    pub const SUCCESS: i32 = 0;
+    /// Command failed (`detect`: no hidden data found).
+    pub const FAILURE: i32 = 1;
+    /// `detect` could not inspect the file (I/O error, unsupported format, ...).
+    pub const DETECT_ERROR: i32 = 3;
+}
+
+/// Name of the environment variable read for the password.
+pub const PASSWORD_ENV: &str = "STEGANO_PASSWORD";
 
 #[derive(Parser)]
 #[command(name = "stegano")]
@@ -6,6 +22,24 @@ use clap::{Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+}
+
+/// Password sources, in order of precedence: `--password-file`,
+/// `--password` (visible in `ps`/shell history; warns), the
+/// `STEGANO_PASSWORD` environment variable, then `--password-prompt`.
+#[derive(Args, Debug, Clone, Default)]
+pub struct PasswordArgs {
+    /// Encryption password. WARNING: visible to other users via `ps` and kept
+    /// in shell history; prefer --password-file, STEGANO_PASSWORD or
+    /// --password-prompt.
+    #[arg(long, conflicts_with_all = ["password_file", "password_prompt"])]
+    pub password: Option<String>,
+    /// Read the password from the first line of this file.
+    #[arg(long, value_name = "PATH", conflicts_with = "password_prompt")]
+    pub password_file: Option<String>,
+    /// Prompt for the password on the terminal (input is not echoed).
+    #[arg(long)]
+    pub password_prompt: bool,
 }
 
 #[derive(Subcommand)]
@@ -21,9 +55,8 @@ pub enum Commands {
         /// Output file with embedded data
         #[arg(short, long)]
         output: String,
-        /// Encryption password
-        #[arg(long)]
-        password: Option<String>,
+        #[command(flatten)]
+        password: PasswordArgs,
         /// Enable statistical validation analysis
         #[arg(long)]
         validate: bool,
@@ -31,13 +64,15 @@ pub enum Commands {
         #[arg(long)]
         gpu: bool,
         /// Stealth level (maximum, high, medium, low)
-        #[arg(long, default_value = "high")]
+        #[arg(long, default_value = DEFAULT_STEALTH_NAME)]
         stealth: String,
-        /// Error-correction level (none, low, medium, high, maximum)
-        #[arg(long, default_value = "none")]
+        /// Error-correction level (none, low, medium, high, maximum).
+        /// Without a password, extract must then be run with a non-"none"
+        /// --ec-level too (the actual level is read from the payload).
+        #[arg(long, default_value = DEFAULT_EC_NAME)]
         ec_level: String,
         /// Format-specific embedding strategy.
-        /// VCF: info|quality|sample|id|multi
+        /// VCF: info|quality|format|id|multi
         /// SAM/BAM: optional|comment|quality|auxiliary|multi
         /// DICOM: private|metadata|sequence|pixel_lsb|multi
         /// PNG/TIFF: lsb|adaptive|edge|dct
@@ -45,7 +80,7 @@ pub enum Commands {
         #[arg(long)]
         strategy: Option<String>,
         /// Encryption cipher (aes256gcm, chacha20). Auto-detected on extract.
-        #[arg(long, default_value = "aes256gcm")]
+        #[arg(long, default_value = DEFAULT_CIPHER_NAME)]
         cipher: String,
     },
     /// Extract secret data from carrier file
@@ -56,17 +91,21 @@ pub enum Commands {
         /// Output file for extracted data
         #[arg(short, long)]
         output: String,
-        /// Decryption password
-        #[arg(long)]
-        password: Option<String>,
+        #[command(flatten)]
+        password: PasswordArgs,
         /// Enable GPU acceleration
         #[arg(long)]
         gpu: bool,
+        /// Error-correction level. Only matters for password-less payloads:
+        /// use any non-"none" value if --ec-level was set at embed time (the
+        /// actual level is read from the payload).
+        #[arg(long, default_value = DEFAULT_EC_NAME)]
+        ec_level: String,
         /// Format-specific extraction strategy (must match the strategy used during embed).
-        /// VCF: info|quality|sample|id|multi
+        /// VCF: info|quality|format|id|multi
         /// SAM/BAM: optional|comment|quality|auxiliary|multi
         /// DICOM: private|metadata|sequence|pixel_lsb|multi
-        /// WAV: timedomain|frequency|phase|spread|echo
+        /// WAV: timedomain|frequency|phase|spread|echo (auto-detected)
         #[arg(long)]
         strategy: Option<String>,
     },
@@ -79,7 +118,8 @@ pub enum Commands {
         #[arg(long)]
         validate: bool,
     },
-    /// Detect whether a carrier file contains hidden data
+    /// Detect whether a carrier file contains hidden data.
+    /// Exit status: 0 = hidden data found, 1 = not found, 3 = error.
     Detect {
         /// Input carrier file to inspect
         #[arg(short, long)]

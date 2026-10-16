@@ -59,6 +59,7 @@
 //! may change or be removed in any release.
 
 pub mod capacity;
+pub mod carrier;
 pub mod cli;
 pub mod codec;
 pub mod core;

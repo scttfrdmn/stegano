@@ -97,6 +97,8 @@ getrandom = { version = "0.2", optional = true, features = ["js"] }
 # module). Neither compiles on wasm32.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", default-features = false, features = ["rt-multi-thread", "process"] }
+# Interactive password prompt for the CLI.
+rpassword = "7"
 
 # Metal support for macOS
 [target.'cfg(target_os = "macos")'.dependencies]

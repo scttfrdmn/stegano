@@ -25,23 +25,35 @@
 //! payload  = stegano.extract(modified, password="mykey")
 //! assert payload == b"secret payload"
 //!
-//! # Class-based API (reuses the Tokio runtime)
+//! # Class-based API
 //! s = stegano.Stegano()
 //! modified = s.embed(carrier, b"secret", password="mykey", stealth="maximum")
 //! payload  = s.extract(modified, password="mykey")
 //! info     = s.estimate_capacity(carrier)
 //! print(info["total_bits"], info["format"])
 //! ```
+//!
+//! Defaults (`stealth`, `ec_level`, `cipher`) are the shared front-end
+//! defaults from [`crate::carrier`], identical to the CLI, C FFI, Go and
+//! WASM bindings. All calls share one Tokio runtime and release the GIL
+//! while embedding/extracting.
 
-use pyo3::exceptions::PyRuntimeError;
+// pyo3 0.22's #[pyfunction]/#[pymethods] expansion trips this lint on every
+// `PyResult` return with recent clippy; it is not in our code.
+#![allow(clippy::useless_conversion)]
+
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-use std::collections::HashMap;
+use std::sync::OnceLock;
 
-use crate::core::{
-    CarrierData, CipherKind, DataFormat, ECLevel, EmbedParams, StealthLevel,
+use crate::carrier::{
+    self, carrier_from_content, DEFAULT_CIPHER_NAME, DEFAULT_EC_NAME, DEFAULT_STEALTH_NAME,
 };
+#[cfg(test)]
+use crate::core::{CipherKind, ECLevel, StealthLevel};
+use crate::core::{DataFormat, EmbedParams};
 use crate::embedding::SteganoEmbedder;
 use crate::handlers::HandlerRegistry;
 
@@ -49,16 +61,20 @@ use crate::handlers::HandlerRegistry;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Detect DataFormat from raw bytes by asking each handler in order.
-/// Falls back to `DataFormat::BINARY` for unknown data.
+/// One Tokio runtime shared by every Python call.
+static RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> = OnceLock::new();
+
+fn runtime() -> PyResult<&'static tokio::runtime::Runtime> {
+    RUNTIME
+        .get_or_init(|| tokio::runtime::Runtime::new().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {e}")))
+}
+
+/// Detect DataFormat from raw bytes (shared detection, see [`crate::carrier`]).
+#[cfg(test)]
 fn detect_format(data: &[u8]) -> DataFormat {
-    let registry = HandlerRegistry::new();
-    for handler in registry.get_handlers() {
-        if let Some(fmt) = handler.detect_format(data) {
-            return fmt;
-        }
-    }
-    DataFormat::BINARY
+    carrier::detect_format_from_content(data)
 }
 
 /// Return a static human-readable name for a DataFormat variant.
@@ -83,54 +99,39 @@ fn format_name(fmt: &DataFormat) -> &'static str {
 }
 
 /// Build an [`EmbedParams`] from string options coming from Python.
-///
-/// Invalid / unknown values silently fall back to sensible defaults:
-/// - stealth  → `High`
-/// - ec_level → `None`
-/// - cipher   → `Aes256Gcm`
-fn make_params(password: &str, stealth: &str, ec_level: &str, cipher: &str) -> EmbedParams {
-    let key = if password.is_empty() {
-        vec![]
-    } else {
-        password.as_bytes().to_vec()
-    };
+/// Unknown names raise `ValueError`.
+fn make_params(
+    password: &str,
+    stealth: &str,
+    ec_level: &str,
+    cipher: &str,
+) -> std::result::Result<EmbedParams, String> {
+    carrier::params_from_names(password, stealth, ec_level, cipher)
+}
 
-    let stealth_level = match stealth.to_lowercase().as_str() {
-        "low" => StealthLevel::Low,
-        "medium" => StealthLevel::Medium,
-        "high" => StealthLevel::High,
-        "maximum" => StealthLevel::Maximum,
-        _ => StealthLevel::High,
-    };
+fn embed_bytes(
+    carrier: Vec<u8>,
+    payload: &[u8],
+    params: &EmbedParams,
+) -> crate::core::Result<Vec<u8>> {
+    let rt = tokio_runtime_for_worker()?;
+    let mut carrier_data = carrier_from_content(carrier);
+    rt.block_on(SteganoEmbedder::new().embed(&mut carrier_data, payload, params))?;
+    Ok(carrier_data.raw_data)
+}
 
-    let error_correction_level = match ec_level.to_lowercase().as_str() {
-        "none" => ECLevel::None,
-        "low" => ECLevel::Low,
-        "medium" => ECLevel::Medium,
-        "high" => ECLevel::High,
-        "maximum" => ECLevel::Maximum,
-        _ => ECLevel::None,
-    };
+fn extract_bytes(carrier: Vec<u8>, params: &EmbedParams) -> crate::core::Result<Vec<u8>> {
+    let rt = tokio_runtime_for_worker()?;
+    let carrier_data = carrier_from_content(carrier);
+    rt.block_on(SteganoEmbedder::new().extract(&carrier_data, params))
+}
 
-    let cipher_kind = match cipher
-        .to_lowercase()
-        .replace('-', "")
-        .replace('_', "")
-        .as_str()
-    {
-        "chacha20" | "chacha20poly1305" => CipherKind::ChaCha20Poly1305,
-        _ => CipherKind::Aes256Gcm,
-    };
-
-    EmbedParams {
-        encryption_key: key,
-        error_correction_level,
-        stealth_level,
-        use_gpu: false,
-        enable_validation: false,
-        format_specific: HashMap::new(),
-        cipher_kind,
-    }
+/// The shared runtime, as a library error (used inside `allow_threads`).
+fn tokio_runtime_for_worker() -> crate::core::Result<&'static tokio::runtime::Runtime> {
+    RUNTIME
+        .get_or_init(|| tokio::runtime::Runtime::new().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|e| crate::core::SteganoError::InvalidParameter(format!("runtime: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +140,8 @@ fn make_params(password: &str, stealth: &str, ec_level: &str, cipher: &str) -> E
 
 /// Main stegano class providing embed / extract operations.
 ///
-/// Maintains a reusable Tokio runtime so creating one instance and calling
-/// it repeatedly is more efficient than the module-level one-shot functions.
+/// All instances share one Tokio runtime; the class exists for API
+/// compatibility and convenience.
 ///
 /// Example::
 ///
@@ -149,22 +150,15 @@ fn make_params(password: &str, stealth: &str, ec_level: &str, cipher: &str) -> E
 ///     modified = s.embed(carrier, b"secret", password="key")
 ///     payload  = s.extract(modified, password="key")
 #[pyclass]
-pub struct Stegano {
-    embedder: SteganoEmbedder,
-    rt: tokio::runtime::Runtime,
-}
+pub struct Stegano;
 
 #[pymethods]
 impl Stegano {
     /// Create a new ``Stegano`` instance.
     #[new]
     pub fn new() -> PyResult<Self> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {e}")))?;
-        Ok(Self {
-            embedder: SteganoEmbedder::new(),
-            rt,
-        })
+        runtime()?;
+        Ok(Self)
     }
 
     /// Embed *payload* into *carrier* bytes.
@@ -173,13 +167,15 @@ impl Stegano {
     ///     carrier:  Carrier file bytes (PNG, FASTA, WAV, FITS, …).
     ///     payload:  Secret bytes to embed.
     ///     password: Encryption password.  Empty string disables encryption.
-    ///     stealth:  ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
-    ///     ec_level: ``"none"`` | ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
+    ///     stealth:  ``"low"`` | ``"medium"`` | ``"high"`` (default) | ``"maximum"``.
+    ///     ec_level: ``"none"`` (default) | ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
     ///     cipher:   ``"aes256gcm"`` (default) | ``"chacha20"``.
     ///
     /// Returns:
     ///     Modified carrier bytes (``bytes``) with the payload embedded.
-    #[pyo3(signature = (carrier, payload, password="", stealth="high", ec_level="none", cipher="aes256gcm"))]
+    ///     The result may be longer than *carrier* (SAM, VCF, DICOM).
+    #[pyo3(signature = (carrier, payload, password="", stealth=DEFAULT_STEALTH_NAME, ec_level=DEFAULT_EC_NAME, cipher=DEFAULT_CIPHER_NAME))]
+    #[allow(clippy::too_many_arguments)]
     pub fn embed<'py>(
         &self,
         py: Python<'py>,
@@ -190,21 +186,7 @@ impl Stegano {
         ec_level: &str,
         cipher: &str,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let params = make_params(password, stealth, ec_level, cipher);
-        let format = detect_format(carrier);
-        let mut carrier_data = CarrierData {
-            format,
-            raw_data: carrier.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        self.rt
-            .block_on(self.embedder.embed(&mut carrier_data, payload, &params))
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        Ok(PyBytes::new_bound(py, &carrier_data.raw_data))
+        embed(py, carrier, payload, password, stealth, ec_level, cipher)
     }
 
     /// Extract the embedded payload from *carrier* bytes.
@@ -212,12 +194,13 @@ impl Stegano {
     /// Args:
     ///     carrier:  Carrier bytes containing the embedded payload.
     ///     password: Decryption password (must match the one used during embed).
-    ///     ec_level: Error-correction level used during embedding.
+    ///     ec_level: Use any non-``"none"`` value if EC was used at embed time
+    ///               without a password (the actual level is read from the payload).
     ///     cipher:   Cipher hint; auto-detected from embedded header in practice.
     ///
     /// Returns:
     ///     Extracted payload as ``bytes``.
-    #[pyo3(signature = (carrier, password="", ec_level="none", cipher="aes256gcm"))]
+    #[pyo3(signature = (carrier, password="", ec_level=DEFAULT_EC_NAME, cipher=DEFAULT_CIPHER_NAME))]
     pub fn extract<'py>(
         &self,
         py: Python<'py>,
@@ -226,22 +209,7 @@ impl Stegano {
         ec_level: &str,
         cipher: &str,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let params = make_params(password, "high", ec_level, cipher);
-        let format = detect_format(carrier);
-        let carrier_data = CarrierData {
-            format,
-            raw_data: carrier.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let result = self
-            .rt
-            .block_on(self.embedder.extract(&carrier_data, &params))
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        Ok(PyBytes::new_bound(py, &result))
+        extract(py, carrier, password, ec_level, cipher)
     }
 
     /// Estimate the embedding capacity of *carrier* bytes.
@@ -253,29 +221,7 @@ impl Stegano {
         py: Python<'py>,
         carrier: &[u8],
     ) -> PyResult<Bound<'py, PyDict>> {
-        let format = detect_format(carrier);
-        let carrier_data = CarrierData {
-            format: format.clone(),
-            raw_data: carrier.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let registry = HandlerRegistry::new();
-        let handler = registry
-            .get_handler(&format)
-            .ok_or_else(|| PyRuntimeError::new_err("Unsupported carrier format"))?;
-
-        let cap = handler
-            .estimate_capacity(&carrier_data)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-
-        let dict = PyDict::new_bound(py);
-        dict.set_item("total_bits", cap.total_bits)?;
-        dict.set_item("recommended_bits", cap.recommended_bits)?;
-        dict.set_item("format", format_name(&format))?;
-        Ok(dict)
+        estimate_capacity(py, carrier)
     }
 
     fn __repr__(&self) -> &'static str {
@@ -289,20 +235,18 @@ impl Stegano {
 
 /// Embed *payload* into *carrier* bytes.
 ///
-/// One-shot convenience wrapper around :class:`Stegano`.
-///
 /// Args:
 ///     carrier:  Carrier file bytes (PNG, FASTA, WAV, FITS, …).
 ///     payload:  Secret bytes to embed.
 ///     password: Encryption password.  Empty string disables encryption.
-///     stealth:  ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
-///     ec_level: ``"none"`` | ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
+///     stealth:  ``"low"`` | ``"medium"`` | ``"high"`` (default) | ``"maximum"``.
+///     ec_level: ``"none"`` (default) | ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
 ///     cipher:   ``"aes256gcm"`` (default) | ``"chacha20"``.
 ///
 /// Returns:
 ///     Modified carrier bytes (``bytes``) with the payload embedded.
 #[pyfunction]
-#[pyo3(signature = (carrier, payload, password="", stealth="high", ec_level="none", cipher="aes256gcm"))]
+#[pyo3(signature = (carrier, payload, password="", stealth=DEFAULT_STEALTH_NAME, ec_level=DEFAULT_EC_NAME, cipher=DEFAULT_CIPHER_NAME))]
 pub fn embed<'py>(
     py: Python<'py>,
     carrier: &[u8],
@@ -312,24 +256,29 @@ pub fn embed<'py>(
     ec_level: &str,
     cipher: &str,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let s = Stegano::new()?;
-    s.embed(py, carrier, payload, password, stealth, ec_level, cipher)
+    let params = make_params(password, stealth, ec_level, cipher).map_err(PyValueError::new_err)?;
+    runtime()?;
+    let carrier = carrier.to_vec();
+    let payload = payload.to_vec();
+    let out = py
+        .allow_threads(move || embed_bytes(carrier, &payload, &params))
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(PyBytes::new_bound(py, &out))
 }
 
 /// Extract the embedded payload from *carrier* bytes.
 ///
-/// One-shot convenience wrapper around :class:`Stegano`.
-///
 /// Args:
 ///     carrier:  Carrier bytes containing the embedded payload.
 ///     password: Decryption password (empty = no decryption).
-///     ec_level: Error-correction level used during embedding.
+///     ec_level: Use any non-``"none"`` value if EC was used at embed time
+///               without a password.
 ///     cipher:   Cipher hint; auto-detected from embedded header in practice.
 ///
 /// Returns:
 ///     Extracted payload as ``bytes``.
 #[pyfunction]
-#[pyo3(signature = (carrier, password="", ec_level="none", cipher="aes256gcm"))]
+#[pyo3(signature = (carrier, password="", ec_level=DEFAULT_EC_NAME, cipher=DEFAULT_CIPHER_NAME))]
 pub fn extract<'py>(
     py: Python<'py>,
     carrier: &[u8],
@@ -337,8 +286,14 @@ pub fn extract<'py>(
     ec_level: &str,
     cipher: &str,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let s = Stegano::new()?;
-    s.extract(py, carrier, password, ec_level, cipher)
+    let params = make_params(password, DEFAULT_STEALTH_NAME, ec_level, cipher)
+        .map_err(PyValueError::new_err)?;
+    runtime()?;
+    let carrier = carrier.to_vec();
+    let out = py
+        .allow_threads(move || extract_bytes(carrier, &params))
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(PyBytes::new_bound(py, &out))
 }
 
 /// Estimate the embedding capacity of *carrier* bytes.
@@ -346,12 +301,22 @@ pub fn extract<'py>(
 /// Returns:
 ///     ``dict`` with keys ``total_bits``, ``recommended_bits``, and ``format``.
 #[pyfunction]
-pub fn estimate_capacity<'py>(
-    py: Python<'py>,
-    carrier: &[u8],
-) -> PyResult<Bound<'py, PyDict>> {
-    let s = Stegano::new()?;
-    s.estimate_capacity(py, carrier)
+pub fn estimate_capacity<'py>(py: Python<'py>, carrier: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let carrier_data = carrier_from_content(carrier.to_vec());
+    let registry = HandlerRegistry::new();
+    let handler = registry
+        .get_handler(&carrier_data.format)
+        .ok_or_else(|| PyRuntimeError::new_err("Unsupported carrier format"))?;
+
+    let cap = handler
+        .estimate_capacity(&carrier_data)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+    let dict = PyDict::new_bound(py);
+    dict.set_item("total_bits", cap.total_bits)?;
+    dict.set_item("recommended_bits", cap.recommended_bits)?;
+    dict.set_item("format", format_name(&carrier_data.format))?;
+    Ok(dict)
 }
 
 /// Return the stegano library version string.
@@ -409,7 +374,13 @@ mod tests {
 
     #[test]
     fn test_make_params_defaults() {
-        let p = make_params("", "high", "none", "aes256gcm");
+        let p = make_params(
+            "",
+            DEFAULT_STEALTH_NAME,
+            DEFAULT_EC_NAME,
+            DEFAULT_CIPHER_NAME,
+        )
+        .unwrap();
         assert!(p.encryption_key.is_empty());
         assert_eq!(p.stealth_level, StealthLevel::High);
         assert_eq!(p.error_correction_level, ECLevel::None);
@@ -418,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_make_params_chacha20() {
-        let p = make_params("mypassword", "maximum", "medium", "chacha20");
+        let p = make_params("mypassword", "maximum", "medium", "chacha20").unwrap();
         assert_eq!(p.encryption_key, b"mypassword".to_vec());
         assert_eq!(p.stealth_level, StealthLevel::Maximum);
         assert_eq!(p.error_correction_level, ECLevel::Medium);
@@ -428,8 +399,15 @@ mod tests {
     #[test]
     fn test_make_params_chacha20_hyphenated() {
         // Hyphen/underscore normalised
-        let p = make_params("k", "low", "low", "chacha20-poly1305");
+        let p = make_params("k", "low", "low", "chacha20-poly1305").unwrap();
         assert_eq!(p.cipher_kind, CipherKind::ChaCha20Poly1305);
+    }
+
+    #[test]
+    fn test_make_params_unknown_values_rejected() {
+        assert!(make_params("", "ultra", "none", "aes256gcm").is_err());
+        assert!(make_params("", "high", "extreme", "aes256gcm").is_err());
+        assert!(make_params("", "high", "none", "xorcrypt").is_err());
     }
 
     #[test]
@@ -455,94 +433,34 @@ mod tests {
         }
     }
 
-    /// Test the embed/extract roundtrip using the same logic the Python
-    /// bindings invoke, but without needing the PyO3 GIL.
-    #[tokio::test]
-    async fn test_binding_embed_extract_roundtrip() {
-        let carrier_bytes = generic_carrier(4096);
+    /// Roundtrips through the same helpers the Python functions call
+    /// (inside `allow_threads`), without needing the GIL.
+    #[test]
+    fn test_binding_embed_extract_roundtrip() {
         let payload = b"Python binding roundtrip test payload";
-        let params = make_params("", "high", "none", "aes256gcm");
-        let format = detect_format(&carrier_bytes);
-
-        let mut carrier_data = CarrierData {
-            format,
-            raw_data: carrier_bytes,
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let embedder = SteganoEmbedder::new();
-        embedder
-            .embed(&mut carrier_data, payload, &params)
-            .await
-            .expect("embed should succeed");
-
-        let extracted = embedder
-            .extract(&carrier_data, &params)
-            .await
-            .expect("extract should succeed");
-
+        let params = make_params("", "high", "none", "aes256gcm").unwrap();
+        let out = embed_bytes(generic_carrier(4096), payload, &params).expect("embed");
+        let extracted = extract_bytes(out, &params).expect("extract");
         assert_eq!(extracted, payload.to_vec());
     }
 
     /// Test roundtrip with encryption (AES-256-GCM).
-    #[tokio::test]
-    async fn test_binding_embed_extract_encrypted() {
-        let carrier_bytes = generic_carrier(8192);
+    #[test]
+    fn test_binding_embed_extract_encrypted() {
         let payload = b"Encrypted Python binding test";
-        let params = make_params("super_secret", "high", "none", "aes256gcm");
-        let format = detect_format(&carrier_bytes);
-
-        let mut carrier_data = CarrierData {
-            format,
-            raw_data: carrier_bytes,
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let embedder = SteganoEmbedder::new();
-        embedder
-            .embed(&mut carrier_data, payload, &params)
-            .await
-            .expect("embed should succeed");
-
-        let extracted = embedder
-            .extract(&carrier_data, &params)
-            .await
-            .expect("extract should succeed");
-
+        let params = make_params("super_secret", "high", "none", "aes256gcm").unwrap();
+        let out = embed_bytes(generic_carrier(8192), payload, &params).expect("embed");
+        let extracted = extract_bytes(out, &params).expect("extract");
         assert_eq!(extracted, payload.to_vec());
     }
 
     /// Test roundtrip with ChaCha20-Poly1305.
-    #[tokio::test]
-    async fn test_binding_embed_extract_chacha20() {
-        let carrier_bytes = generic_carrier(8192);
+    #[test]
+    fn test_binding_embed_extract_chacha20() {
         let payload = b"ChaCha20 Python binding test";
-        let params = make_params("chacha_key", "high", "none", "chacha20");
-        let format = detect_format(&carrier_bytes);
-
-        let mut carrier_data = CarrierData {
-            format,
-            raw_data: carrier_bytes,
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let embedder = SteganoEmbedder::new();
-        embedder
-            .embed(&mut carrier_data, payload, &params)
-            .await
-            .expect("embed should succeed");
-
-        let extracted = embedder
-            .extract(&carrier_data, &params)
-            .await
-            .expect("extract should succeed");
-
+        let params = make_params("chacha_key", "high", "none", "chacha20").unwrap();
+        let out = embed_bytes(generic_carrier(8192), payload, &params).expect("embed");
+        let extracted = extract_bytes(out, &params).expect("extract");
         assert_eq!(extracted, payload.to_vec());
     }
 }

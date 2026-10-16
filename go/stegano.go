@@ -15,6 +15,10 @@
 //	export DYLD_LIBRARY_PATH="$(pwd)/target/release"   # macOS
 //	export LD_LIBRARY_PATH="$(pwd)/target/release"      # Linux
 //
+// The C declarations come from the cbindgen-generated header
+// include/stegano.h in the repository root, so this package must be built
+// from a checkout of the stegano repository.
+//
 // # Usage
 //
 //	import stegano "github.com/scttfrdmn/stegano/go"
@@ -31,86 +35,12 @@
 package stegano
 
 /*
+#cgo CFLAGS: -I${SRCDIR}/../include
 #cgo LDFLAGS: -lstegano
 #cgo darwin LDFLAGS: -framework Security -framework Foundation
 
 #include <stdlib.h>
-#include <stdint.h>
-#include <stdbool.h>
-
-typedef enum {
-    SteganoSuccess               = 0,
-    SteganoInvalidParameter      = 1,
-    SteganoInsufficientCapacity  = 2,
-    SteganoCryptographicFailure  = 3,
-    SteganoFormatNotSupported    = 4,
-    SteganoDataCorrupted         = 5,
-    SteganoGpuError              = 6,
-    SteganoIoError               = 7,
-    SteganoUnknown               = 999,
-} SteganoErrorCode;
-
-typedef enum {
-    DataFormatFasta          = 0,
-    DataFormatFastq          = 1,
-    DataFormatVcf            = 2,
-    DataFormatSam            = 3,
-    DataFormatBam            = 4,
-    DataFormatPng            = 5,
-    DataFormatTiff           = 6,
-    DataFormatMicroscopy     = 7,
-    DataFormatDicom          = 8,
-    DataFormatWav            = 9,
-    DataFormatBinarySignal   = 10,
-    DataFormatCsvTimeseries  = 11,
-    DataFormatBinary         = 12,
-    DataFormatText           = 13,
-    DataFormatFits           = 14,
-} CDataFormat;
-
-typedef struct {
-    bool     success;
-    uint32_t bytes_embedded;
-    bool     carrier_modified;
-    uint32_t embedding_time_ms;
-    uint32_t memory_usage_bytes;
-} CEmbedResult;
-
-typedef struct {
-    uint32_t total_bits;
-    uint32_t recommended_bits;
-    double   steganographic_ratio;
-} CCapacityInfo;
-
-extern SteganoErrorCode stegano_init();
-extern SteganoErrorCode stegano_detect_format(
-    const unsigned char* data, uint32_t data_len,
-    CDataFormat* format_out);
-extern SteganoErrorCode stegano_estimate_capacity(
-    const unsigned char* data, uint32_t data_len,
-    CDataFormat format, CCapacityInfo* info_out);
-extern SteganoErrorCode stegano_embed(
-    unsigned char* carrier_data, uint32_t carrier_len,
-    const unsigned char* payload_data, uint32_t payload_len,
-    CDataFormat format, const char* password,
-    CEmbedResult* result_out);
-extern SteganoErrorCode stegano_extract(
-    const unsigned char* carrier_data, uint32_t carrier_len,
-    CDataFormat format, const char* password,
-    unsigned char** payload_out, uint32_t* payload_len_out);
-extern SteganoErrorCode stegano_embed_v2(
-    unsigned char* carrier_data, uint32_t carrier_len,
-    const unsigned char* payload_data, uint32_t payload_len,
-    CDataFormat format, const char* password,
-    const char* format_specific_json,
-    CEmbedResult* result_out);
-extern SteganoErrorCode stegano_extract_v2(
-    const unsigned char* carrier_data, uint32_t carrier_len,
-    CDataFormat format, const char* password,
-    const char* format_specific_json,
-    unsigned char** payload_out, uint32_t* payload_len_out);
-extern void        stegano_free(void* ptr);
-extern const char* stegano_version();
+#include "stegano.h"
 */
 import "C"
 
@@ -129,21 +59,21 @@ import (
 type Format int32
 
 const (
-	FormatFASTA         Format = 0
-	FormatFASTQ         Format = 1
-	FormatVCF           Format = 2
-	FormatSAM           Format = 3
-	FormatBAM           Format = 4
-	FormatPNG           Format = 5
-	FormatTIFF          Format = 6
-	FormatMicroscopy    Format = 7
-	FormatDICOM         Format = 8
-	FormatWAV           Format = 9
-	FormatBinarySignal  Format = 10
-	FormatCSVTimeseries Format = 11
-	FormatBinary        Format = 12
-	FormatText          Format = 13
-	FormatFITS          Format = 14
+	FormatFASTA         Format = C.CDataFormat_Fasta
+	FormatFASTQ         Format = C.CDataFormat_Fastq
+	FormatVCF           Format = C.CDataFormat_Vcf
+	FormatSAM           Format = C.CDataFormat_Sam
+	FormatBAM           Format = C.CDataFormat_Bam
+	FormatPNG           Format = C.CDataFormat_Png
+	FormatTIFF          Format = C.CDataFormat_Tiff
+	FormatMicroscopy    Format = C.CDataFormat_Microscopy
+	FormatDICOM         Format = C.CDataFormat_Dicom
+	FormatWAV           Format = C.CDataFormat_Wav
+	FormatBinarySignal  Format = C.CDataFormat_BinarySignal
+	FormatCSVTimeseries Format = C.CDataFormat_CsvTimeseries
+	FormatBinary        Format = C.CDataFormat_Binary
+	FormatText          Format = C.CDataFormat_Text
+	FormatFITS          Format = C.CDataFormat_Fits
 )
 
 // String returns a human-readable name for the format.
@@ -184,6 +114,28 @@ func (f Format) String() string {
 	}
 }
 
+// strategyKey returns the format_specific JSON key the Rust handler for
+// format reads its strategy from, or "" if the format has no strategies.
+// Must match strategy_key() in src/carrier.rs.
+func strategyKey(format Format) string {
+	switch format {
+	case FormatPNG, FormatTIFF, FormatMicroscopy:
+		return "imagery_strategy"
+	case FormatVCF:
+		return "vcf_strategy"
+	case FormatSAM, FormatBAM:
+		return "sam_strategy"
+	case FormatDICOM:
+		return "dicom_strategy"
+	case FormatWAV:
+		return "signal_strategy"
+	case FormatFASTA, FormatFASTQ:
+		return "genomics_strategy"
+	default:
+		return ""
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -192,14 +144,16 @@ func (f Format) String() string {
 type ErrorCode int
 
 const (
-	ErrInvalidParameter     ErrorCode = 1
-	ErrInsufficientCapacity ErrorCode = 2
-	ErrCryptographic        ErrorCode = 3
-	ErrFormatNotSupported   ErrorCode = 4
-	ErrDataCorrupted        ErrorCode = 5
-	ErrGPU                  ErrorCode = 6
-	ErrIO                   ErrorCode = 7
-	ErrUnknown              ErrorCode = 999
+	ErrInvalidParameter     ErrorCode = C.SteganoErrorCode_InvalidParameter
+	ErrInsufficientCapacity ErrorCode = C.SteganoErrorCode_InsufficientCapacity
+	ErrCryptographic        ErrorCode = C.SteganoErrorCode_CryptographicFailure
+	ErrFormatNotSupported   ErrorCode = C.SteganoErrorCode_FormatNotSupported
+	ErrDataCorrupted        ErrorCode = C.SteganoErrorCode_DataCorrupted
+	ErrGPU                  ErrorCode = C.SteganoErrorCode_GpuError
+	ErrIO                   ErrorCode = C.SteganoErrorCode_IoError
+	ErrOutputSizeChanged    ErrorCode = C.SteganoErrorCode_OutputSizeChanged
+	ErrPanic                ErrorCode = C.SteganoErrorCode_Panic
+	ErrUnknown              ErrorCode = C.SteganoErrorCode_Unknown
 )
 
 // Error is returned when a stegano FFI operation fails.
@@ -212,18 +166,21 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("stegano: %s (code %d)", e.Message, e.Code)
 }
 
-func codeToError(code C.SteganoErrorCode, op string) *Error {
-	descriptions := map[C.SteganoErrorCode]string{
-		C.SteganoInvalidParameter:     "invalid parameter",
-		C.SteganoInsufficientCapacity: "insufficient carrier capacity for payload",
-		C.SteganoCryptographicFailure: "cryptographic failure",
-		C.SteganoFormatNotSupported:   "format not supported",
-		C.SteganoDataCorrupted:        "data corrupted or no payload found",
-		C.SteganoGpuError:             "GPU error",
-		C.SteganoIoError:              "I/O error",
-		C.SteganoUnknown:              "unknown error",
+// codeToError maps an FFI return code (C `enum SteganoErrorCode`) to an *Error.
+func codeToError(code uint32, op string) *Error {
+	descriptions := map[ErrorCode]string{
+		ErrInvalidParameter:     "invalid parameter",
+		ErrInsufficientCapacity: "insufficient carrier capacity for payload",
+		ErrCryptographic:        "cryptographic failure",
+		ErrFormatNotSupported:   "format not supported",
+		ErrDataCorrupted:        "data corrupted or no payload found",
+		ErrGPU:                  "GPU error",
+		ErrIO:                   "I/O error",
+		ErrOutputSizeChanged:    "embedded output size differs from input",
+		ErrPanic:                "internal error (panic in stegano library)",
+		ErrUnknown:              "unknown error",
 	}
-	desc, ok := descriptions[code]
+	desc, ok := descriptions[ErrorCode(code)]
 	if !ok {
 		desc = fmt.Sprintf("error code %d", int(code))
 	}
@@ -237,14 +194,16 @@ func codeToError(code C.SteganoErrorCode, op string) *Error {
 type options struct {
 	password string
 	format   *Format // nil = auto-detect
-	strategy string  // format-specific strategy key (e.g. "auxiliary", "echo")
+	strategy string  // format-specific strategy name (e.g. "auxiliary", "echo")
 	cipher   string  // encryption cipher override (e.g. "chacha20")
+	stealth  string  // stealth level override
+	ecLevel  string  // error-correction level override
 }
 
 // Option configures an Embed or Extract call.
 type Option func(*options)
 
-// WithPassword sets the AES-256-GCM encryption password.
+// WithPassword sets the encryption password.
 // An empty string disables encryption (default).
 func WithPassword(password string) Option {
 	return func(o *options) { o.password = password }
@@ -257,23 +216,40 @@ func WithFormat(format Format) Option {
 	return func(o *options) { o.format = &format }
 }
 
-// WithStrategy sets a format-specific embedding/extraction strategy.
-// The strategy is passed as the appropriate JSON key for the carrier format:
-//   - SAM/BAM:  "optional", "comment", "quality", "auxiliary"
-//   - DICOM:    "private", "metadata", "sequence", "pixel_lsb"
-//   - WAV:      "timedomain", "frequency", "phase", "spread", "echo"
-//   - PNG/TIFF: "lsb", "adaptive", "edge", "dct"
+// WithStrategy sets a format-specific embedding/extraction strategy. It is
+// sent under the JSON key the handler for the carrier format reads:
+//   - PNG/TIFF (imagery_strategy): "lsb", "adaptive", "edge", "dct"
+//   - VCF (vcf_strategy):          "info", "quality", "format", "id", "multi"
+//   - SAM/BAM (sam_strategy):      "optional", "comment", "quality", "auxiliary", "multi"
+//   - DICOM (dicom_strategy):      "private", "metadata", "sequence", "pixel_lsb", "multi"
+//   - WAV (signal_strategy):       "timedomain", "frequency", "phase", "spread", "echo"
+//   - FASTA/FASTQ (genomics_strategy)
 //
-// When a strategy is set, Embed and Extract automatically use the v2 FFI.
+// Using WithStrategy with any other format returns ErrInvalidParameter.
+// Pass the same strategy to Extract.
 func WithStrategy(strategy string) Option {
 	return func(o *options) { o.strategy = strategy }
 }
 
 // WithCipher selects the encryption cipher ("aes256gcm" or "chacha20").
-// Only meaningful when a password is also set via WithPassword.
-// Default is "aes256gcm".
+// Only meaningful when a password is also set via WithPassword; the cipher
+// is auto-detected on Extract. Default is "aes256gcm".
 func WithCipher(cipher string) Option {
 	return func(o *options) { o.cipher = cipher }
+}
+
+// WithStealth sets the stealth level: "low", "medium", "high" (default)
+// or "maximum".
+func WithStealth(level string) Option {
+	return func(o *options) { o.stealth = level }
+}
+
+// WithECLevel sets the Reed-Solomon error-correction level: "none"
+// (default), "low", "medium", "high" or "maximum". Without a password,
+// Extract must also be given a non-"none" level if one was used for Embed
+// (the actual level is read from the payload).
+func WithECLevel(level string) Option {
+	return func(o *options) { o.ecLevel = level }
 }
 
 func applyOptions(opts []Option) options {
@@ -305,24 +281,83 @@ type CapacityInfo struct {
 // ---------------------------------------------------------------------------
 
 func init() {
-	if code := C.stegano_init(); code != C.SteganoSuccess {
-		// Non-fatal: the library still functions; init() is a no-op in v0.5.1.
-		_ = code
-	}
+	// Non-fatal: stegano_init only warms up the shared runtime.
+	_ = C.stegano_init()
 }
 
 // ---------------------------------------------------------------------------
-// Size conversion helper
+// Helpers
 // ---------------------------------------------------------------------------
 
 func toUint32(n int, label string) (C.uint32_t, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("stegano: %s cannot be negative (%d)", label, n)
 	}
-	if n > math.MaxUint32 {
+	if uint64(n) > math.MaxUint32 {
 		return 0, fmt.Errorf("stegano: %s (%d) exceeds uint32 max", label, n)
 	}
 	return C.uint32_t(n), nil
+}
+
+func bytesPtr(b []byte) *C.uint8_t {
+	return (*C.uint8_t)(unsafe.Pointer(&b[0]))
+}
+
+// cString returns a C copy of s (or nil for ""), and a function to free it.
+func cString(s string) (*C.char, func()) {
+	if s == "" {
+		return nil, func() {}
+	}
+	cs := C.CString(s)
+	return cs, func() { C.free(unsafe.Pointer(cs)) }
+}
+
+// takeBuffer copies a library-allocated buffer into Go memory and frees it.
+func takeBuffer(p *C.uint8_t, n C.uint32_t) []byte {
+	if p == nil {
+		return nil
+	}
+	defer C.stegano_free(unsafe.Pointer(p))
+	return C.GoBytes(unsafe.Pointer(p), C.int(n))
+}
+
+// optionsJSON builds the JSON options object for the v2 FFI functions.
+func optionsJSON(o options, format Format) (string, error) {
+	m := map[string]string{}
+	if o.strategy != "" {
+		key := strategyKey(format)
+		if key == "" {
+			return "", &Error{
+				Code:    ErrInvalidParameter,
+				Message: fmt.Sprintf("WithStrategy: format %s has no selectable strategies", format),
+			}
+		}
+		m[key] = o.strategy
+	}
+	if o.cipher != "" {
+		m["cipher"] = o.cipher
+	}
+	if o.stealth != "" {
+		m["stealth"] = o.stealth
+	}
+	if o.ecLevel != "" {
+		m["ec_level"] = o.ecLevel
+	}
+	if len(m) == 0 {
+		return "", nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func resolveFormat(carrier []byte, o options) (Format, error) {
+	if o.format != nil {
+		return *o.format, nil
+	}
+	return DetectFormat(carrier)
 }
 
 // ---------------------------------------------------------------------------
@@ -344,13 +379,9 @@ func DetectFormat(carrier []byte) (Format, error) {
 	if err != nil {
 		return FormatBinary, err
 	}
-	var fmtOut C.CDataFormat
-	code := C.stegano_detect_format(
-		(*C.uchar)(unsafe.Pointer(&carrier[0])),
-		n,
-		&fmtOut,
-	)
-	if code != C.SteganoSuccess {
+	var fmtOut C.uint32_t
+	code := C.stegano_detect_format(bytesPtr(carrier), n, &fmtOut)
+	if code != C.SteganoErrorCode_Success {
 		return FormatBinary, codeToError(code, "DetectFormat")
 	}
 	return Format(fmtOut), nil
@@ -374,13 +405,8 @@ func EstimateCapacity(carrier []byte, opts ...Option) (CapacityInfo, error) {
 	}
 
 	var capOut C.CCapacityInfo
-	code := C.stegano_estimate_capacity(
-		(*C.uchar)(unsafe.Pointer(&carrier[0])),
-		n,
-		C.CDataFormat(format),
-		&capOut,
-	)
-	if code != C.SteganoSuccess {
+	code := C.stegano_estimate_capacity(bytesPtr(carrier), n, C.uint32_t(format), &capOut)
+	if code != C.SteganoErrorCode_Success {
 		return CapacityInfo{}, codeToError(code, "EstimateCapacity")
 	}
 	return CapacityInfo{
@@ -391,9 +417,11 @@ func EstimateCapacity(carrier []byte, opts ...Option) (CapacityInfo, error) {
 	}, nil
 }
 
-// Embed embeds payload into carrier and returns the modified carrier bytes.
-// Format is auto-detected unless WithFormat is specified.
-// Password-based AES-256-GCM encryption is applied when WithPassword is used.
+// Embed embeds payload into carrier and returns the embedded carrier bytes.
+//
+// The returned slice may be longer than carrier: SAM, BAM, VCF and DICOM
+// output grows. carrier itself is never modified. Format is auto-detected
+// unless WithFormat is specified.
 func Embed(carrier, payload []byte, opts ...Option) ([]byte, error) {
 	if len(carrier) == 0 {
 		return nil, &Error{Code: ErrInvalidParameter, Message: "Embed: carrier is empty"}
@@ -415,53 +443,39 @@ func Embed(carrier, payload []byte, opts ...Option) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Work on a copy so the caller's slice is not modified on failure.
-	buf := make([]byte, len(carrier))
-	copy(buf, carrier)
-
-	var cPassword *C.char
-	if o.password != "" {
-		cPassword = C.CString(o.password)
-		defer C.free(unsafe.Pointer(cPassword))
+	jsonStr, err := optionsJSON(o, format)
+	if err != nil {
+		return nil, err
 	}
 
-	var result C.CEmbedResult
-	var code C.SteganoErrorCode
-	if needsV2(o) {
-		jsonStr := formatSpecificJSON(o, format)
-		cJSON := C.CString(jsonStr)
-		defer C.free(unsafe.Pointer(cJSON))
-		code = C.stegano_embed_v2(
-			(*C.uchar)(unsafe.Pointer(&buf[0])),
-			carrierLen,
-			(*C.uchar)(unsafe.Pointer(&payload[0])),
-			payloadLen,
-			C.CDataFormat(format),
-			cPassword,
-			cJSON,
-			&result,
-		)
-	} else {
-		code = C.stegano_embed(
-			(*C.uchar)(unsafe.Pointer(&buf[0])),
-			carrierLen,
-			(*C.uchar)(unsafe.Pointer(&payload[0])),
-			payloadLen,
-			C.CDataFormat(format),
-			cPassword,
-			&result,
-		)
-	}
-	if code != C.SteganoSuccess {
+	cPassword, freePassword := cString(o.password)
+	defer freePassword()
+	cJSON, freeJSON := cString(jsonStr)
+	defer freeJSON()
+
+	var outPtr *C.uint8_t
+	var outLen C.uint32_t
+	code := C.stegano_embed_v2(
+		bytesPtr(carrier),
+		carrierLen,
+		bytesPtr(payload),
+		payloadLen,
+		C.uint32_t(format),
+		cPassword,
+		cJSON,
+		&outPtr,
+		&outLen,
+		nil,
+	)
+	if code != C.SteganoErrorCode_Success {
 		return nil, codeToError(code, "Embed")
 	}
-	return buf, nil
+	return takeBuffer(outPtr, outLen), nil
 }
 
 // Extract extracts the embedded payload from carrier.
 // Format is auto-detected unless WithFormat is specified.
-// The same password used during Embed must be provided via WithPassword.
+// The same password (and strategy, if any) used during Embed must be given.
 func Extract(carrier []byte, opts ...Option) ([]byte, error) {
 	if len(carrier) == 0 {
 		return nil, &Error{Code: ErrInvalidParameter, Message: "Extract: carrier is empty"}
@@ -476,91 +490,33 @@ func Extract(carrier []byte, opts ...Option) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var cPassword *C.char
-	if o.password != "" {
-		cPassword = C.CString(o.password)
-		defer C.free(unsafe.Pointer(cPassword))
+	jsonStr, err := optionsJSON(o, format)
+	if err != nil {
+		return nil, err
 	}
 
-	var payloadPtr *C.uchar
+	cPassword, freePassword := cString(o.password)
+	defer freePassword()
+	cJSON, freeJSON := cString(jsonStr)
+	defer freeJSON()
+
+	var payloadPtr *C.uint8_t
 	var payloadLen C.uint32_t
-	var code C.SteganoErrorCode
-	if needsV2(o) {
-		jsonStr := formatSpecificJSON(o, format)
-		cJSON := C.CString(jsonStr)
-		defer C.free(unsafe.Pointer(cJSON))
-		code = C.stegano_extract_v2(
-			(*C.uchar)(unsafe.Pointer(&carrier[0])),
-			carrierLen,
-			C.CDataFormat(format),
-			cPassword,
-			cJSON,
-			&payloadPtr,
-			&payloadLen,
-		)
-	} else {
-		code = C.stegano_extract(
-			(*C.uchar)(unsafe.Pointer(&carrier[0])),
-			carrierLen,
-			C.CDataFormat(format),
-			cPassword,
-			&payloadPtr,
-			&payloadLen,
-		)
-	}
-	if code != C.SteganoSuccess {
+	code := C.stegano_extract_v2(
+		bytesPtr(carrier),
+		carrierLen,
+		C.uint32_t(format),
+		cPassword,
+		cJSON,
+		&payloadPtr,
+		&payloadLen,
+	)
+	if code != C.SteganoErrorCode_Success {
 		return nil, codeToError(code, "Extract")
 	}
-	if payloadPtr == nil || payloadLen == 0 {
+	result := takeBuffer(payloadPtr, payloadLen)
+	if len(result) == 0 {
 		return nil, &Error{Code: ErrDataCorrupted, Message: "Extract: no payload found"}
 	}
-	defer C.stegano_free(unsafe.Pointer(payloadPtr))
-
-	result := C.GoBytes(unsafe.Pointer(payloadPtr), C.int(payloadLen))
 	return result, nil
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-func resolveFormat(carrier []byte, o options) (Format, error) {
-	if o.format != nil {
-		return *o.format, nil
-	}
-	return DetectFormat(carrier)
-}
-
-// formatSpecificJSON builds the format_specific JSON string for the v2 FFI,
-// or returns "" if no v2 options are set (caller should use v1 FFI instead).
-// The returned string is valid JSON or empty.
-func formatSpecificJSON(o options, format Format) string {
-	m := map[string]string{}
-	if o.strategy != "" {
-		// Map to the correct JSON key for the carrier format.
-		switch format {
-		case FormatSAM, FormatBAM:
-			m["sam_strategy"] = o.strategy
-		case FormatDICOM:
-			m["dicom_strategy"] = o.strategy
-		case FormatWAV:
-			m["signal_strategy"] = o.strategy
-		default:
-			m["strategy"] = o.strategy
-		}
-	}
-	if o.cipher != "" && o.cipher != "aes256gcm" {
-		m["cipher"] = o.cipher
-	}
-	if len(m) == 0 {
-		return ""
-	}
-	b, _ := json.Marshal(m)
-	return string(b)
-}
-
-// needsV2 reports whether the options require the v2 FFI functions.
-func needsV2(o options) bool {
-	return o.strategy != "" || (o.cipher != "" && o.cipher != "aes256gcm")
 }
