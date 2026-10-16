@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **README headline** updated to reflect v0.5.1 (was incorrectly showing v0.5.0).
+- **Relicensed to Apache-2.0.** `LICENSE` now contains the Apache License 2.0 text, a `NOTICE`
+  file was added, `Cargo.toml`/`pyproject.toml` declare `Apache-2.0`, and the contradictory
+  "proprietary and confidential" source headers were replaced with
+  `SPDX-License-Identifier: Apache-2.0`. Resolves [#37](https://github.com/scttfrdmn/stegano/issues/37).
+- **Docs reorganized.** README rewritten to describe actual capabilities and current status
+  (experimental GPU/ML modules, upcoming v0.6.0 format and wire-format changes). Historical
+  planning, roadmap, business and session documents moved from the repo root to
+  `docs/archive/`; `CONTRIBUTING.md` moved to the repo root.
+- `cobertura.xml` is no longer tracked; `scripts/build/build.sh` removed in favour of
+  `scripts/build-wasm.sh`.
 
 ## [0.5.1] - 2026-02-23
 

@@ -354,8 +354,8 @@ print_usage() {
     print_info "Documentation:"
     echo "  docs/README.md                       # Documentation index"
     echo "  docs/guides/getting-started.md       # Getting started guide"
-    echo "  DEVELOPMENT_STRATEGY.md              # Development workflow"
-    echo "  ROADMAP_0_2_0.md                     # Implementation roadmap"
+    echo "  docs/archive/DEVELOPMENT_STRATEGY.md # Development workflow (historical)"
+    echo "  docs/archive/ROADMAP_0_2_0.md        # Implementation roadmap (historical)"
 }
 
 # Main execution

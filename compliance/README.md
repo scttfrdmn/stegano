@@ -5,7 +5,7 @@ This directory contains the comprehensive enterprise compliance framework for St
 ## 📋 Documentation Overview
 
 ### Core Framework Documents
-- **[COMPLIANCE_FRAMEWORK.md](../COMPLIANCE_FRAMEWORK.md)** - Master compliance framework (50+ pages)
+- **[COMPLIANCE_FRAMEWORK.md](../docs/archive/COMPLIANCE_FRAMEWORK.md)** - Master compliance framework (50+ pages)
 - **[COMPLIANCE_ROADMAP.md](COMPLIANCE_ROADMAP.md)** - 24-month multi-framework implementation strategy
 - **[SECURITY_CONTROLS_MATRIX.md](SECURITY_CONTROLS_MATRIX.md)** - 64 security controls mapped to all frameworks
 - **[SOC2_IMPLEMENTATION_PLAN.md](SOC2_IMPLEMENTATION_PLAN.md)** - Detailed SOC 2 Type II roadmap
@@ -150,8 +150,8 @@ This directory contains the comprehensive enterprise compliance framework for St
 ### Stegano Project Documentation
 - [Main README](../README.md) - Project overview
 - [Security Policy](../SECURITY.md) - Security practices
-- [Development Guidelines](../DEVELOPMENT_GUIDELINES.md) - Development standards
-- [Project Roadmap](../ROADMAP.md) - Technical roadmap
+- [Development Guidelines](../docs/archive/DEVELOPMENT_GUIDELINES.md) - Development standards
+- [Project Roadmap](../docs/archive/ROADMAP.md) - Technical roadmap
 
 ### Compliance References
 - [SOC 2 Trust Services Criteria](https://www.aicpa.org/content/dam/aicpa/interestareas/frc/assuranceadvisoryservices/downloadabledocuments/trust-services-criteria.pdf)
