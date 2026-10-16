@@ -32,7 +32,7 @@ chr1	1110696	rs6040355	A	G,T	92.1	PASS	AC=1,1;AN=8;AF=0.125,0.125;DP=156	GT:DP:G
 chr2	4370	rs9876543	C	T	68.4	PASS	AC=4;AN=8;AF=0.5;DP=142;HWP=0.234	GT:DP:GQ:AD	1|1:36:82:0,36	0|1:35:79:18,17	1|1:37:84:0,37	0|1:34:77:16,18
 chr2	87654	rs5432109	G	C	94.8	PASS	AC=1;AN=8;AF=0.125;DP=167;HWP=0.891	GT:DP:GQ:AD	0|0:41:96:41,0	0|1:43:89:22,21	0|0:42:94:42,0	0|0:41:93:41,0
 "#;
-    vcf_content.as_bytes().to_vec()
+    replicate_records(vcf_content, FIXTURE_REPEATS)
 }
 
 /// Helper to create realistic DICOM data for integrity testing
@@ -121,7 +121,7 @@ r006	147	chr1	700	60	100M	=	500	-300	CGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGA
 r007	99	chr2	100	45	90M10S	=	400	390	ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGAAAAAAAAAA	IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIHHHHHHHHHHH	AS:i:180	XS:i:150	MD:Z:90	NM:i:0	RG:Z:sample2
 r008	147	chr2	400	45	100M	=	100	-390	TTTTTTTTTTCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGAT	HHHHHHHHHIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII	AS:i:200	XS:i:170	MD:Z:100	NM:i:0	RG:Z:sample2
 "#;
-    sam_content.as_bytes().to_vec()
+    replicate_records(sam_content, FIXTURE_REPEATS)
 }
 
 #[tokio::test]
@@ -152,6 +152,7 @@ async fn test_vcf_allele_frequency_preservation() {
         encryption_key: b"allele_freq_test".to_vec(),
         use_gpu: false,
         enable_validation: false,
+        ..Default::default()
     };
 
     let handler = VcfHandler::new();
@@ -229,6 +230,7 @@ async fn test_vcf_population_genetics_integrity() {
         encryption_key: b"population_genetics_test".to_vec(),
         use_gpu: false,
         enable_validation: false,
+        ..Default::default()
     };
 
     let handler = VcfHandler::new();
@@ -309,6 +311,7 @@ async fn test_dicom_diagnostic_quality_preservation() {
         encryption_key: b"diagnostic_quality_test".to_vec(),
         use_gpu: false,
         enable_validation: false,
+        ..Default::default()
     };
 
     let handler = DicomHandler::new();
@@ -417,6 +420,7 @@ async fn test_dicom_medical_compliance() {
         encryption_key: b"medical_compliance_test".to_vec(),
         use_gpu: false,
         enable_validation: false,
+        ..Default::default()
     };
 
     let handler = DicomHandler::new();
@@ -522,6 +526,7 @@ async fn test_sam_alignment_quality_preservation() {
         encryption_key: b"alignment_quality_test".to_vec(),
         use_gpu: false,
         enable_validation: false,
+        ..Default::default()
     };
 
     let handler = SamBamHandler::new();
@@ -608,6 +613,7 @@ async fn test_sam_variant_calling_compatibility() {
         encryption_key: b"variant_calling_test".to_vec(),
         use_gpu: false,
         enable_validation: false,
+        ..Default::default()
     };
 
     let handler = SamBamHandler::new();
@@ -676,8 +682,8 @@ fn extract_allele_frequencies(vcf_data: &[u8]) -> Vec<f64> {
         if fields.len() >= 8 {
             let info_field = fields[7];
             for info_item in info_field.split(';') {
-                if info_item.starts_with("AF=") {
-                    if let Ok(af) = info_item[3..].parse::<f64>() {
+                if let Some(af) = info_item.strip_prefix("AF=") {
+                    if let Ok(af) = af.parse::<f64>() {
                         allele_frequencies.push(af);
                         break;
                     }
@@ -696,7 +702,7 @@ fn verify_hardy_weinberg_equilibrium(vcf_data: &[u8]) {
     for &af in &allele_frequencies {
         // Basic HWE check: allele frequencies should be between 0 and 1
         assert!(
-            af >= 0.0 && af <= 1.0,
+            (0.0..=1.0).contains(&af),
             "Allele frequency {} out of valid range",
             af
         );
@@ -708,7 +714,7 @@ fn verify_hardy_weinberg_equilibrium(vcf_data: &[u8]) {
 
         // Heterozygote frequency should be reasonable
         assert!(
-            expected_het >= 0.0 && expected_het <= 1.0,
+            (0.0..=1.0).contains(&expected_het),
             "Expected heterozygote frequency {} invalid for AF {}",
             expected_het,
             af
@@ -741,8 +747,8 @@ fn analyze_population_structure(vcf_data: &[u8]) -> PopulationStructureStats {
             // Extract AC (allele count) from INFO field
             let info_field = fields[7];
             for info_item in info_field.split(';') {
-                if info_item.starts_with("AC=") {
-                    if let Ok(ac) = info_item[3..].parse::<i32>() {
+                if let Some(ac) = info_item.strip_prefix("AC=") {
+                    if let Ok(ac) = ac.parse::<i32>() {
                         total_alleles += ac;
                         break;
                     }
@@ -750,11 +756,11 @@ fn analyze_population_structure(vcf_data: &[u8]) -> PopulationStructureStats {
             }
 
             // Count heterozygous genotypes
-            for i in 9..fields.len() {
-                let genotype = fields[i].split(':').next().unwrap_or("");
+            for sample in fields.iter().skip(9) {
+                let genotype = sample.split(':').next().unwrap_or("");
                 if genotype.contains('|') || genotype.contains('/') {
                     total_genotyped_sites += 1;
-                    let alleles: Vec<&str> = genotype.split(|c| c == '|' || c == '/').collect();
+                    let alleles: Vec<&str> = genotype.split(['|', '/']).collect();
                     if alleles.len() == 2 && alleles[0] != alleles[1] {
                         heterozygous_sites += 1;
                     }
@@ -799,7 +805,7 @@ fn analyze_dicom_image_quality(dicom_data: &[u8]) -> DicomImageQualityMetrics {
     let pixel_data = &dicom_data[pixel_data_start..];
 
     let mut intensities = Vec::new();
-    for chunk in pixel_data.chunks_exact(2) {
+    for chunk in pixel_data.as_chunks::<2>().0 {
         if chunk.len() == 2 {
             let intensity = u16::from_le_bytes([chunk[0], chunk[1]]) as f64;
             if intensity > 0.0 && intensity < 65535.0 {
@@ -862,7 +868,12 @@ fn calculate_pixel_differences(original: &[u8], modified: &[u8]) -> Vec<f64> {
     let orig_pixels = &original[pixel_start..];
     let mod_pixels = &modified[pixel_start..];
 
-    for (orig_chunk, mod_chunk) in orig_pixels.chunks_exact(2).zip(mod_pixels.chunks_exact(2)) {
+    for (orig_chunk, mod_chunk) in orig_pixels
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(mod_pixels.as_chunks::<2>().0)
+    {
         if orig_chunk.len() == 2 && mod_chunk.len() == 2 {
             let orig_val = u16::from_le_bytes([orig_chunk[0], orig_chunk[1]]) as f64;
             let mod_val = u16::from_le_bytes([mod_chunk[0], mod_chunk[1]]) as f64;
@@ -1023,8 +1034,8 @@ fn analyze_sam_alignment_quality(sam_data: &[u8]) -> SamAlignmentQualityMetrics 
 
             // Extract alignment score from optional fields
             for field in &fields[11..] {
-                if field.starts_with("AS:i:") {
-                    if let Ok(as_score) = field[5..].parse::<i32>() {
+                if let Some(as_score) = field.strip_prefix("AS:i:") {
+                    if let Ok(as_score) = as_score.parse::<i32>() {
                         total_as += as_score;
                     }
                 }
@@ -1149,4 +1160,30 @@ fn assert_relative_eq(a: f64, b: f64, tolerance: f64) {
         relative_diff,
         tolerance
     );
+}
+
+/// Number of times the data records of the text fixtures are repeated.
+///
+/// The encrypted + Reed-Solomon framed payload (>= 49-byte cipher envelope plus
+/// a 255-byte RS block) needs far more records than the original handful, so
+/// the fixtures repeat their records to give the handlers enough capacity.
+const FIXTURE_REPEATS: usize = 120;
+
+/// Keep header lines (`#` / `@`) once and repeat the data records `times` times.
+fn replicate_records(content: &str, times: usize) -> Vec<u8> {
+    let (header, records): (Vec<&str>, Vec<&str>) = content
+        .lines()
+        .partition(|l| l.starts_with('#') || l.starts_with('@'));
+    let mut out = String::new();
+    for line in header {
+        out.push_str(line);
+        out.push('\n');
+    }
+    for _ in 0..times {
+        for line in &records {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.into_bytes()
 }

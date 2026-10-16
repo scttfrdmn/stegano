@@ -2462,8 +2462,8 @@ mod tests {
         assert_eq!(score_inf, 0.0);
 
         // Low EC + Low stealth should score higher than Maximum EC + Maximum stealth
-        let score_low = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Low, false), &carrier, &vec![0u8; 10]).unwrap();
-        let score_high_ec = obj.evaluate(&make_params(ECLevel::Maximum, StealthLevel::Low, false), &carrier, &vec![0u8; 10]).unwrap();
+        let score_low = obj.evaluate(&make_params(ECLevel::None, StealthLevel::Low, false), &carrier, &[0u8; 10]).unwrap();
+        let score_high_ec = obj.evaluate(&make_params(ECLevel::Maximum, StealthLevel::Low, false), &carrier, &[0u8; 10]).unwrap();
         assert!(score_low > score_high_ec, "low EC should outscore high EC");
     }
 

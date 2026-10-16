@@ -838,7 +838,7 @@ mod tests {
     #[tokio::test]
     async fn test_train_gpu_updates_loss() {
         let mut net = CudaNeuralNetwork::new(vec![10, 16, 3], 0.01).await.unwrap();
-        let carrier = CarrierData {
+        let _carrier = CarrierData {
             format: DataFormat::PNG,
             raw_data: vec![42u8; 1000],
             metadata: HashMap::new(),
@@ -976,7 +976,7 @@ mod tests {
         let cpu_out = net.cpu_forward(&raw_input);
 
         // predict_optimal_params should internally call cpu_forward
-        let features = CarrierFeatures {
+        let _features = CarrierFeatures {
             format: DataFormat::PNG,
             size: 1000,
             entropy: 4.0,

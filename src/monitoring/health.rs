@@ -609,33 +609,29 @@ mod tests {
     fn test_memory_usage_check() {
         let result = HealthChecker::check_memory_usage();
         // Should return some value or error, but not panic
-        match result {
-            Ok(memory) => assert!(memory > 0),
-            Err(_) => {} // Error is acceptable for testing
+        // Error is acceptable for testing
+        if let Ok(memory) = result {
+            assert!(memory > 0);
         }
     }
 
     #[tokio::test]
     async fn test_cpu_usage_check() {
         let result = HealthChecker::check_cpu_usage().await;
-        match result {
-            Ok(cpu) => {
-                assert!(cpu >= 0.0);
-                assert!(cpu <= 100.0);
-            }
-            Err(_) => {} // Error is acceptable for testing
+        // Error is acceptable for testing
+        if let Ok(cpu) = result {
+            assert!(cpu >= 0.0);
+            assert!(cpu <= 100.0);
         }
     }
 
     #[test]
     fn test_disk_usage_check() {
         let result = HealthChecker::check_disk_usage();
-        match result {
-            Ok(disk) => {
-                assert!(disk >= 0.0);
-                assert!(disk <= 100.0);
-            }
-            Err(_) => {} // Error is acceptable for testing
+        // Error is acceptable for testing
+        if let Ok(disk) = result {
+            assert!(disk >= 0.0);
+            assert!(disk <= 100.0);
         }
     }
 }

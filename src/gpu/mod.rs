@@ -156,16 +156,17 @@ mod tests {
         // Should always have at least CPU backend
         match best_backend {
             #[cfg(all(target_os = "macos", feature = "metal"))]
-            GpuBackend::Metal => assert!(true),
+            GpuBackend::Metal => {}
             #[cfg(feature = "cuda")]
-            GpuBackend::Cuda => assert!(true),
+            GpuBackend::Cuda => {}
             #[cfg(feature = "gpu")]
-            GpuBackend::Wgpu => assert!(true),
-            GpuBackend::Cpu => assert!(true),
+            GpuBackend::Wgpu => {}
+            GpuBackend::Cpu => {}
         }
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_accelerator_embedding() {
         let accelerator = GpuAccelerator::default();
         let mut data = vec![0u8; 1000];

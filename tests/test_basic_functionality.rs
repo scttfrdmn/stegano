@@ -33,6 +33,7 @@ async fn test_basic_steganography_roundtrip() {
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        ..Default::default()
     };
 
     // Get handler

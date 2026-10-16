@@ -247,14 +247,14 @@ impl MetricsCollector {
         }
 
         // Trim custom metrics
-        for (_, metric_queue) in metrics.custom_metrics.iter_mut() {
+        for metric_queue in metrics.custom_metrics.values_mut() {
             while metric_queue.len() > retention_limit {
                 metric_queue.pop_front();
             }
         }
 
         // Trim histograms
-        for (_, histogram) in metrics.histograms.iter_mut() {
+        for histogram in metrics.histograms.values_mut() {
             if histogram.len() > retention_limit {
                 histogram.drain(0..histogram.len() - retention_limit);
             }
@@ -424,7 +424,7 @@ impl MetricsCollector {
             .collect();
 
         // Sort by count (most frequent first)
-        top_ops.sort_by(|a, b| b.count.cmp(&a.count));
+        top_ops.sort_by_key(|a| std::cmp::Reverse(a.count));
 
         // Take top 10
         top_ops.truncate(10);

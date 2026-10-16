@@ -348,6 +348,7 @@ impl Dimensions {
 ///     use_gpu: false,
 ///     format_specific: format_params,
 ///     enable_validation: false,
+///     ..Default::default()
 /// };
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

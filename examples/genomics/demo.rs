@@ -89,6 +89,7 @@ TTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAATTAA";
             specific
         },
         enable_validation: false,
+        ..Default::default()
     };
 
     // Note: For this demo, we'll use the generic handler since genomics-specific

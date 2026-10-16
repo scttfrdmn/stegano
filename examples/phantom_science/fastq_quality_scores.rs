@@ -464,7 +464,7 @@ fn validate_fastq_structure(fastq_data: &[u8]) -> bool {
     let fastq_str = String::from_utf8_lossy(fastq_data);
     let lines: Vec<&str> = fastq_str.lines().collect();
 
-    if lines.len() % 4 != 0 {
+    if !lines.len().is_multiple_of(4) {
         return false;
     }
 

@@ -2022,7 +2022,7 @@ mod tests {
             .steganalysis
             .wavelet_structural_analysis(&data)
             .unwrap();
-        assert!(result.energy_distribution.len() > 0);
+        assert!(!result.energy_distribution.is_empty());
         assert!(result.anomaly_score >= 0.0);
     }
 
@@ -2110,7 +2110,7 @@ mod tests {
         // p-values must be in [0, 1]
         for &chi2 in &[0.0, 1.0, 5.0, 10.0, 50.0] {
             let p = ct.chi_square_p_value(chi2, 4);
-            assert!(p >= 0.0 && p <= 1.0, "p out of range for χ²={}: {}", chi2, p);
+            assert!((0.0..=1.0).contains(&p), "p out of range for χ²={}: {}", chi2, p);
         }
     }
 
@@ -2160,7 +2160,7 @@ mod tests {
         );
         // All fold AUCs should be in [0, 1]
         for &auc in &result.fold_aucs {
-            assert!(auc >= 0.0 && auc <= 1.0, "AUC out of range: {}", auc);
+            assert!((0.0..=1.0).contains(&auc), "AUC out of range: {}", auc);
         }
     }
 
@@ -2267,6 +2267,6 @@ mod tests {
             .expect("WAV domain validation should not fail");
         assert!(results.audio_quality.is_some());
         let q = results.audio_quality.unwrap();
-        assert!(q >= 0.0 && q <= 1.0, "audio quality must be in [0,1]");
+        assert!((0.0..=1.0).contains(&q), "audio quality must be in [0,1]");
     }
 }

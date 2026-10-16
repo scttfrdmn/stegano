@@ -310,6 +310,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_parallel_lsb_embedding() {
         let foundation = GpuFoundation::default();
         let mut data = vec![0xAAu8; 1000]; // 10101010 pattern
@@ -334,6 +335,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_parallel_lsb_extraction() {
         let foundation = GpuFoundation::default();
         let mut data = vec![0xAAu8; 1000]; // 10101010 pattern

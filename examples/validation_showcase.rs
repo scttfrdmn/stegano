@@ -267,7 +267,7 @@ fn generate_classification_data(size: usize) -> (Vec<bool>, Vec<f64>) {
         .map(|i| {
             let base_score = if true_labels[i] { 0.7 } else { 0.3 };
             let noise = ((i * 7919) % 1000) as f64 / 2500.0; // ±0.4 noise
-            (base_score + noise - 0.2).max(0.0).min(1.0)
+            (base_score + noise - 0.2).clamp(0.0, 1.0)
         })
         .collect();
 

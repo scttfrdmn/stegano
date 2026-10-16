@@ -1660,8 +1660,8 @@ mod tests {
         assert!(summary.distribution.goodness_of_fit.contains_key("normal"));
         assert!(summary.distribution.goodness_of_fit.contains_key("uniform"));
         // p-values should be in [0, 1]
-        for (_, &p) in &summary.distribution.test_p_values {
-            assert!(p >= 0.0 && p <= 1.0, "p-value out of range: {}", p);
+        for &p in summary.distribution.test_p_values.values() {
+            assert!((0.0..=1.0).contains(&p), "p-value out of range: {}", p);
         }
     }
 

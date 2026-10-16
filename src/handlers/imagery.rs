@@ -970,7 +970,7 @@ mod tests {
 
         // Create carrier with valid header
         let mut carrier_data = vec![0u8; 1000];
-        let header_bits = [b'I', b'M', b'S', b'J']
+        let header_bits = b"IMSJ"
             .iter()
             .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
             .collect::<Vec<u8>>();
@@ -1197,7 +1197,7 @@ mod tests {
     fn test_dct_embed_extract_bits() {
         // Embed 8 bits and check we get the same bits back
         let bits_in: Vec<u8> = vec![1, 0, 1, 1, 0, 0, 1, 0];
-        let mut data = vec![100u8; 16]; // 2 DCT blocks → 8 bits capacity
+        let _data = [100u8; 16]; // 2 DCT blocks → 8 bits capacity
         // Manually embed
         let payload_byte = 0b0100_1101u8; // bits[0..8] = [1,0,1,1,0,0,1,0] LSB-first
         let payload = [payload_byte];

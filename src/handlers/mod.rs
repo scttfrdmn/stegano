@@ -12,6 +12,8 @@ pub mod vcf;
 use crate::core::*;
 use async_trait::async_trait;
 
+// async_trait adds `#[must_use]` to the boxed future it returns.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait DataHandler: Send + Sync {
     /// Detect if this handler can process the given data

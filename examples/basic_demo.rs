@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        ..Default::default()
     };
 
     // Get handler and estimate capacity

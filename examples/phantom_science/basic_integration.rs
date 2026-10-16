@@ -77,7 +77,7 @@ impl PhantomScienceIntegration {
         output_file: &Path,
     ) -> Result<EmbedResult> {
         // Read the genomics file
-        let genomics_data = fs::read(genomics_file).map_err(|e| SteganoError::IoError(e))?;
+        let genomics_data = fs::read(genomics_file).map_err(SteganoError::IoError)?;
 
         // Detect format
         let mut carrier = CarrierData {
@@ -99,6 +99,7 @@ impl PhantomScienceIntegration {
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            ..Default::default()
         };
 
         // Get appropriate handler
@@ -111,7 +112,7 @@ impl PhantomScienceIntegration {
         let result = handler.embed(&mut carrier, &metadata_json, &params).await?;
 
         // Write output file
-        fs::write(output_file, &carrier.raw_data).map_err(|e| SteganoError::IoError(e))?;
+        fs::write(output_file, &carrier.raw_data).map_err(SteganoError::IoError)?;
 
         Ok(result)
     }
@@ -123,7 +124,7 @@ impl PhantomScienceIntegration {
         password: Option<&str>,
     ) -> Result<PhantomScienceMetadata> {
         // Read the genomics file
-        let genomics_data = fs::read(genomics_file).map_err(|e| SteganoError::IoError(e))?;
+        let genomics_data = fs::read(genomics_file).map_err(SteganoError::IoError)?;
 
         // Detect format
         let carrier = CarrierData {
@@ -142,6 +143,7 @@ impl PhantomScienceIntegration {
             use_gpu: false,
             format_specific: HashMap::new(),
             enable_validation: false,
+            ..Default::default()
         };
 
         // Get appropriate handler
@@ -160,7 +162,7 @@ impl PhantomScienceIntegration {
     /// Analyze capacity for phantom-science metadata
     pub fn analyze_capacity(&self, genomics_file: &Path) -> Result<CapacityInfo> {
         // Read the genomics file
-        let genomics_data = fs::read(genomics_file).map_err(|e| SteganoError::IoError(e))?;
+        let genomics_data = fs::read(genomics_file).map_err(SteganoError::IoError)?;
 
         // Create carrier data
         let carrier = CarrierData {
@@ -186,7 +188,13 @@ impl PhantomScienceIntegration {
         let handler = handlers::genomics::GenomicsHandler::new();
         handler
             .detect_format(data)
-            .ok_or_else(|| SteganoError::UnsupportedFormat(DataFormat::BINARY))
+            .ok_or(SteganoError::UnsupportedFormat(DataFormat::BINARY))
+    }
+}
+
+impl Default for PhantomScienceIntegration {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

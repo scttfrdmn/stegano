@@ -153,7 +153,9 @@ impl SignalHandler {
 
     /// Convert audio data to samples
     fn bytes_to_samples(&self, data: &[u8]) -> Vec<f32> {
-        data.chunks_exact(2)
+        data.as_chunks::<2>()
+            .0
+            .iter()
             .map(|chunk| {
                 let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
                 sample as f32 / 32767.0 // Normalize to match embedding/extraction
@@ -1107,7 +1109,7 @@ mod tests {
 
         // Create carrier with valid header in time domain
         let mut audio_data = vec![0u8; 2000];
-        let header_bits = [b'S', b'G', b'S', b'J']
+        let header_bits = b"SGSJ"
             .iter()
             .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
             .collect::<Vec<u8>>();
