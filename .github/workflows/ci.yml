@@ -110,3 +110,18 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
           DYLD_LIBRARY_PATH: ${{ github.workspace }}/target/release
         run: go test ./...
+
+  c-header:
+    name: C header up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          # Pinned: output formatting can change between cbindgen releases.
+          tool: cbindgen@0.29.4
+      - name: Regenerate include/stegano.h
+        run: cbindgen --config cbindgen.toml --output include/stegano.h src/ffi.rs
+      - name: Fail if the checked-in header is stale
+        run: git diff --exit-code -- include/stegano.h

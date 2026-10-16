@@ -19,7 +19,6 @@ fn test_cli_help() {
 }
 
 #[test]
-#[ignore = "bug: CLI embed defaults to ec-level none but extract assumes Medium, dropping first byte of keyless payload (see #39)"]
 fn test_cli_embed_extract_roundtrip() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -203,7 +202,6 @@ fn test_cli_analyze_command() {
 }
 
 #[test]
-#[ignore] // TODO: Fix password validation in CLI
 fn test_cli_extract_with_wrong_password_fails() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -357,4 +355,244 @@ fn test_cli_different_file_formats() {
             String::from_utf8_lossy(&analyze_output.stderr)
         );
     }
+}
+
+/// Run the `stegano` binary with `args` (and optional extra environment).
+fn run_stegano(args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--quiet", "--bin", "stegano", "--"])
+        .args(args);
+    cmd.env_remove("STEGANO_PASSWORD");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.output().expect("Failed to execute stegano")
+}
+
+fn embed_args<'a>(carrier: &'a str, payload: &'a str, output: &'a str) -> Vec<&'a str> {
+    vec!["embed", "-i", carrier, "-p", payload, "-o", output]
+}
+
+#[test]
+fn test_cli_detect_exit_codes() {
+    let temp_dir = TempDir::new().unwrap();
+    let carrier = temp_dir.path().join("carrier.bin");
+    let payload = temp_dir.path().join("payload.txt");
+    let stego = temp_dir.path().join("stego.bin");
+    // All-ones LSBs decode to an impossible length, so the generic handler's
+    // heuristic reports "no hidden data" (an all-zero LSB carrier reads as a
+    // valid zero-length payload).
+    fs::write(&carrier, vec![0xFFu8; 5000]).unwrap();
+    fs::write(&payload, "detect me").unwrap();
+    let (c, p, s) = (
+        carrier.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+
+    // 1 = no hidden data
+    let out = run_stegano(&["detect", "-i", c], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = run_stegano(&embed_args(c, p, s), &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 0 = hidden data found
+    let out = run_stegano(&["detect", "-i", s], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 3 = error (missing file), distinct from clap's usage error 2
+    let missing = temp_dir.path().join("missing.bin");
+    let out = run_stegano(&["detect", "-i", missing.to_str().unwrap()], &[]);
+    assert_eq!(out.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("IO error"),
+        "expected IoError, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_cli_password_from_env_and_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let carrier = temp_dir.path().join("carrier.bin");
+    let payload = temp_dir.path().join("payload.txt");
+    let stego = temp_dir.path().join("stego.bin");
+    let extracted = temp_dir.path().join("extracted.txt");
+    let pw_file = temp_dir.path().join("pw.txt");
+    fs::write(&carrier, vec![0x55u8; 8000]).unwrap();
+    fs::write(&payload, "env and file password").unwrap();
+    fs::write(&pw_file, "s3cret\n").unwrap();
+    let (c, p, s) = (
+        carrier.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+
+    // Embed with STEGANO_PASSWORD.
+    let out = run_stegano(&embed_args(c, p, s), &[("STEGANO_PASSWORD", "s3cret")]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("--password is visible"));
+
+    // Extracting without any password must not yield the plaintext.
+    let out = run_stegano(
+        &["extract", "-i", s, "-o", extracted.to_str().unwrap()],
+        &[],
+    );
+    if out.status.success() {
+        assert_ne!(fs::read(&extracted).unwrap(), b"env and file password");
+    }
+
+    // Extract with --password-file.
+    let out = run_stegano(
+        &[
+            "extract",
+            "-i",
+            s,
+            "-o",
+            extracted.to_str().unwrap(),
+            "--password-file",
+            pw_file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&extracted).unwrap(),
+        "env and file password"
+    );
+}
+
+#[test]
+fn test_cli_password_flag_warns() {
+    let temp_dir = TempDir::new().unwrap();
+    let carrier = temp_dir.path().join("carrier.bin");
+    let payload = temp_dir.path().join("payload.txt");
+    let stego = temp_dir.path().join("stego.bin");
+    fs::write(&carrier, vec![0x55u8; 8000]).unwrap();
+    fs::write(&payload, "warned").unwrap();
+
+    let mut args = embed_args(
+        carrier.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+    args.extend(["--password", "visible"]);
+    let out = run_stegano(&args, &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--password is visible"));
+}
+
+#[test]
+fn test_cli_capacity_error_uses_bits() {
+    let temp_dir = TempDir::new().unwrap();
+    let carrier = temp_dir.path().join("small.bin");
+    let payload = temp_dir.path().join("large.txt");
+    let stego = temp_dir.path().join("out.bin");
+    fs::write(&carrier, vec![0x11u8; 100]).unwrap();
+    fs::write(&payload, "A".repeat(1000)).unwrap();
+
+    let out = run_stegano(
+        &embed_args(
+            carrier.to_str().unwrap(),
+            payload.to_str().unwrap(),
+            stego.to_str().unwrap(),
+        ),
+        &[],
+    );
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // 1000 bytes = 8000 bits needed; "available" is also reported in bits.
+    assert!(stderr.contains("need 8000 bits"), "{stderr}");
+}
+
+#[test]
+fn test_cli_ec_level_roundtrip_without_password() {
+    let temp_dir = TempDir::new().unwrap();
+    let carrier = temp_dir.path().join("carrier.bin");
+    let payload = temp_dir.path().join("payload.txt");
+    let stego = temp_dir.path().join("stego.bin");
+    let extracted = temp_dir.path().join("extracted.txt");
+    fs::write(&carrier, vec![0x80u8; 8000]).unwrap();
+    fs::write(&payload, "reed-solomon protected").unwrap();
+
+    let mut args = embed_args(
+        carrier.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+    args.extend(["--ec-level", "medium"]);
+    let out = run_stegano(&args, &[]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = run_stegano(
+        &[
+            "extract",
+            "-i",
+            stego.to_str().unwrap(),
+            "-o",
+            extracted.to_str().unwrap(),
+            "--ec-level",
+            "medium",
+        ],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&extracted).unwrap(),
+        "reed-solomon protected"
+    );
+}
+
+#[test]
+fn test_cli_rejects_unknown_stealth() {
+    let temp_dir = TempDir::new().unwrap();
+    let carrier = temp_dir.path().join("carrier.bin");
+    let payload = temp_dir.path().join("payload.txt");
+    let stego = temp_dir.path().join("o.bin");
+    fs::write(&carrier, vec![0x80u8; 5000]).unwrap();
+    fs::write(&payload, "x").unwrap();
+    let mut args = embed_args(
+        carrier.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+    args.extend(["--stealth", "ultra"]);
+    let out = run_stegano(&args, &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown stealth level"));
 }
