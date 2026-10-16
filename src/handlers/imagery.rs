@@ -1369,6 +1369,24 @@ mod tests {
             !err.to_string().contains("No stegano imagery payload"),
             "expected decrypt error, got {err}"
         );
+
+        // Password mismatch in either direction surfaces the codec's
+        // EncryptionError rather than a generic "not found".
+        for (embed_pw, extract_pw) in [(None, Some("pw")), (Some("pw"), None)] {
+            let mut c = carrier_for(Layout::PngRgb8, make_cover(Layout::PngRgb8, 64, 64));
+            handler
+                .embed(&mut c, b"secret", &params(embed_pw, "dct"))
+                .await
+                .unwrap();
+            let err = handler
+                .extract(&c, &params(extract_pw, "dct"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, SteganoError::EncryptionError(_)),
+                "{embed_pw:?}->{extract_pw:?}: expected EncryptionError, got {err:?}"
+            );
+        }
     }
 
     #[tokio::test]
