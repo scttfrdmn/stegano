@@ -354,7 +354,7 @@ impl SignalLayout {
         if sample_rate == 0 {
             return Err(invalid("WAV file declares a sample rate of 0 Hz"));
         }
-        if bits % 8 != 0 || bits == 0 {
+        if !bits.is_multiple_of(8) || bits == 0 {
             return Err(invalid(format!("unsupported WAV bit depth {bits}")));
         }
         let bytes = (bits / 8) as usize;
@@ -1102,41 +1102,45 @@ impl SignalHandler {
         ))
     }
 
-    /// Returns `Ok(None)` if no header for `strategy` is present, `Ok(Some)` if
-    /// the payload decodes, and `Err` if a header was found but the payload is invalid.
+    /// Returns `None` if no header for `strategy` is present. Otherwise returns
+    /// the result of decoding the payload, which is an `Err` if the header
+    /// is valid but the payload is not.
     fn extract_with_strategy(
         layout: &SignalLayout,
         data: &[u8],
         strategy: SignalEmbedStrategy,
         params: &EmbedParams,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Option<Result<Vec<u8>>> {
         let cap = layout.capacity_bits(strategy);
         if cap < HEADER_BITS {
-            return Ok(None);
+            return None;
         }
         let seed = pn_seed(&params.encryption_key);
         let header = bytes_of(&extract_bits(layout, data, strategy, HEADER_BITS, seed));
         if &header[0..4] != MAGIC || header[8] != strategy.to_u8() {
-            return Ok(None);
+            return None;
         }
         if header[9] != FORMAT_VERSION {
-            return Err(SteganoError::IntegrityError(format!(
+            return Some(Err(SteganoError::IntegrityError(format!(
                 "unsupported signal payload version {} (expected {FORMAT_VERSION})",
                 header[9]
-            )));
+            ))));
         }
         let len = le_u32(&header, 4) as usize;
-        let total_bits = len
+        let total_bits = match len
             .checked_add(HEADER_LEN)
             .and_then(|t| t.checked_mul(8))
             .filter(|&t| t <= cap)
-            .ok_or_else(|| {
-                SteganoError::IntegrityError(format!(
+        {
+            Some(t) => t,
+            None => {
+                return Some(Err(SteganoError::IntegrityError(format!(
                     "declared payload length {len} exceeds carrier capacity ({cap} bits)"
-                ))
-            })?;
+                ))))
+            }
+        };
         let all = bytes_of(&extract_bits(layout, data, strategy, total_bits, seed));
-        codec::decode_payload(&all[HEADER_LEN..], params).map(Some)
+        Some(codec::decode_payload(&all[HEADER_LEN..], params))
     }
 }
 
@@ -1194,20 +1198,22 @@ impl DataHandler for SignalHandler {
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        // The extraction is self-describing: every strategy is tried in turn.
-        // A strategy only matches if the magic and the strategy tag agree.
+        // The extraction is self-describing. Each strategy's header is probed
+        // in turn, which is cheap: a strategy matches only if both the magic and
+        // the strategy tag agree. The first match is decoded exactly once, and
+        // its result is returned, including codec errors such as
+        // EncryptionError for a wrong or missing password.
+        //
+        // SpreadSpectrum and EchoHiding headers can only be found with the key
+        // that was used to embed, because the PN sequence depends on it.
         let layout = SignalLayout::from_carrier(carrier)?;
-        let mut first_err = None;
         for s in SignalEmbedStrategy::ALL {
-            match Self::extract_with_strategy(&layout, &carrier.raw_data, s, params) {
-                Ok(Some(v)) => return Ok(v),
-                Ok(None) => {}
-                Err(e) => {
-                    first_err.get_or_insert(e);
-                }
+            if let Some(result) = Self::extract_with_strategy(&layout, &carrier.raw_data, s, params)
+            {
+                return result;
             }
         }
-        Err(first_err.unwrap_or_else(|| invalid("No valid extraction strategy found")))
+        Err(invalid("No valid extraction strategy found"))
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {
