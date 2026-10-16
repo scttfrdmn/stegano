@@ -1,37 +1,195 @@
-//! Signal data format handlers with advanced frequency domain steganography
+//! Signal carrier handler: RIFF/WAVE audio and raw 16-bit sample streams.
+//!
+//! # Carrier layouts
+//!
+//! * [`DataFormat::WAV`]: the bytes are parsed as a RIFF/WAVE file. The
+//!   `fmt ` and `data` chunks are located by walking the chunk list (odd-sized
+//!   chunks are padded as the RIFF spec requires). Supported encodings:
+//!   * integer PCM at 8 (unsigned), 16, 24 and 32 bits per sample, either as
+//!     `WAVE_FORMAT_PCM` or as `WAVE_FORMAT_EXTENSIBLE`. With the extensible
+//!     format, `wValidBitsPerSample` is honoured, so a 24-in-32 container is
+//!     modified at bit 8 and the padding bits are left alone;
+//!   * IEEE float at 32 or 64 bits (`WAVE_FORMAT_IEEE_FLOAT` or extensible).
+//!     Every float sample must be finite. A NaN or infinity is rejected
+//!     rather than risk turning an infinity into a NaN;
+//!   * any number of channels.
+//!
+//!   Only bytes inside the `data` chunk payload are ever modified. The RIFF
+//!   header, the `fmt ` chunk, every other chunk (`LIST`, `fact`, `cue `, …),
+//!   chunk order, and any trailing bytes are preserved byte for byte. The
+//!   sample count never changes. A trailing partial frame in the `data`
+//!   chunk is left untouched. A `data` chunk whose declared size runs past the
+//!   end of the file (common for streamed recordings) is clamped to the bytes
+//!   that are actually present.
+//! * [`DataFormat::BinarySignal`] and [`DataFormat::CsvTimeseries`] keep the
+//!   historical raw semantics: the bytes are treated as mono 16-bit
+//!   little-endian samples with no header. If the length is odd, the final
+//!   byte is not part of any sample and is preserved unchanged. The sample
+//!   rate is `carrier.sampling_rate`, or 44 100 Hz if that is absent. The
+//!   rate only affects the echo-hiding delays.
+//!
+//! # Wire format
+//!
+//! The embedded bit stream is a 10-byte header, `b"SGSJ"`, followed by the
+//! payload length (u32 LE), the strategy tag, and the format version (`2`).
+//! The header is followed by the output of
+//! [`codec::encode_payload`]. Bits are written LSB first. There is no legacy
+//! or raw mode: every payload goes through the codec.
+//!
+//! # Strategies and honest robustness
+//!
+//! None of the strategies is claimed to survive lossy compression (MP3, AAC,
+//! Opus), resampling, gain changes, filtering or D/A–A/D conversion. All of
+//! them are designed for, and tested against, bit-exact lossless storage
+//! only. Embedding always ends by extracting from the *quantised* output and
+//! comparing the result with what was meant to be written. If the carrier
+//! cannot hold the bits reliably (it clips, is silent, or is too short), the
+//! embed fails with an error instead of producing output that cannot be
+//! extracted.
+//!
+//! | Strategy | Capacity (bits) | Measured SNR, 16-bit test signal |
+//! |---|---|---|
+//! | TimeDomainLSB | 1 per sample (all channels) | ≈ 88 dB (≤ 1 LSB per sample) |
+//! | FrequencyDomain | 256 per 1024-frame chunk per channel | ≈ 65 dB, upper quarter band only |
+//! | PhaseModulation | 128 per 1024-frame chunk per channel | ≈ 50 dB, band fs/8 to fs/4 |
+//! | SpreadSpectrum | 1 per 512-frame chip per channel | ≈ 29 dB (white noise) |
+//! | EchoHiding | 1 per 1024-frame segment per channel | ≈ 15 dB (audible echo, gain 0.1–0.8) |
+//!
+//! The SNR figures were measured with an encrypted payload of about 100 bytes
+//! on a multi-tone plus noise signal at 44.1 kHz. Spread-spectrum and echo
+//! hiding fill almost the whole carrier at that size. All strategies work on
+//! noisy, broadband audio. EchoHiding usually *fails at embed time* on pure
+//! tones (about 20 of 24 single-sine carriers in testing). It also fails on
+//! silence.
+//!
+//! The SpreadSpectrum and EchoHiding strategies take their keyed
+//! pseudo-noise (PN) sequence from a seed derived with BLAKE3 from
+//! `params.encryption_key`. With an empty key, the seed is derived from the
+//! empty string, which is fixed and public, so it provides no secrecy.
+//! See [`SignalEmbedStrategy`] for details of each strategy.
 
 use super::DataHandler;
+use crate::codec;
 use crate::core::*;
-use crate::crypto::CryptoLayer;
 use async_trait::async_trait;
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
+use std::sync::Arc;
 use std::time::Instant;
 
-/// Handler for digital signal carrier files (WAV, binary signal).
-///
-/// Supports time-domain LSB, frequency-domain, phase modulation,
-/// spread-spectrum, and echo-hiding embedding strategies. The strategy
-/// is selected from [`EmbedParams::stealth_level`].
-pub struct SignalHandler {
-    crypto: Option<CryptoLayer>,
-}
+/// Magic bytes that open every embedded header.
+const MAGIC: &[u8; 4] = b"SGSJ";
+/// Header length in bytes: magic(4) + length(4) + strategy(1) + version(1).
+const HEADER_LEN: usize = 10;
+const HEADER_BITS: usize = HEADER_LEN * 8;
+/// Wire-format version stored in header byte 9 (2 = codec pipeline).
+const FORMAT_VERSION: u8 = 2;
 
-#[derive(Debug, Clone)]
+/// Default sample rate for raw (headerless) carriers without `sampling_rate`.
+const DEFAULT_RAW_RATE: u32 = 44_100;
+
+/// FFT size for the FrequencyDomain and PhaseModulation strategies.
+const FFT_CHUNK: usize = 1024;
+/// Positive-frequency bins used by FrequencyDomain (`[256, 512)`).
+const MAG_BINS: (usize, usize) = (FFT_CHUNK / 4, FFT_CHUNK / 2);
+/// Positive-frequency bins used by PhaseModulation (`[128, 256)`).
+const PHASE_BINS: (usize, usize) = (FFT_CHUNK / 8, FFT_CHUNK / 4);
+/// Magnitude quantisation step, in sample units. Re-quantising 1024 samples
+/// to integers adds per-bin noise with an RMS of about 9 units, which a
+/// half-step of 256 swamps. The step is also large enough that a single-bin
+/// change is not simply rounded away. If it is, the embedder refines the
+/// chunk and then self-verifies.
+const MAG_STEP: f64 = 512.0;
+/// Phase quantisation step, in radians.
+const PHASE_STEP: f64 = 0.1;
+/// Highest phase unit used, so that `PHASE_MAX_UNIT * PHASE_STEP` < 2π − margin.
+const PHASE_MAX_UNIT: i64 = 61;
+/// Minimum bin magnitude forced before phase coding. This keeps the phase
+/// error caused by re-quantisation well below `PHASE_STEP / 2`.
+const PHASE_NORM_MIN: f64 = 4096.0;
+
+/// Spread-spectrum chip length, in frames per bit.
+const SS_CHIP: usize = 512;
+/// Spread-spectrum target correlation, as a fraction of the chip's RMS.
+const SS_REL_AMPLITUDE: f64 = 0.01;
+/// Lower bound on the target correlation, in sample units.
+const SS_MIN_AMPLITUDE: f64 = 1.0;
+
+/// Echo-hiding segment length, in frames per bit.
+const ECHO_SEGMENT: usize = 1024;
+/// Echo gains tried in order until the segment decodes with margin.
+const ECHO_ALPHAS: [f64; 7] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.65, 0.8];
+/// Minimum |c[d1] − c[d0]| cepstral difference that is accepted at embed time.
+const ECHO_MARGIN: f64 = 0.02;
+
+/// One sample unit for float carriers: a float sample `v` is handled as
+/// `v * FLOAT_UNIT_SCALE`, so the constants above behave as they do for 16-bit.
+const FLOAT_UNIT_SCALE: f64 = 32768.0;
+
+/// Handler for digital signal carriers (WAV audio and raw binary signals).
+///
+/// The strategy comes from [`EmbedParams::stealth_level`]. It can be
+/// overridden with `format_specific["signal_strategy"]`, which accepts
+/// `timedomain`, `frequency`, `phase`, `spread` or `echo`.
+pub struct SignalHandler;
+
+/// Signal embedding strategy.
+///
+/// # Robustness
+///
+/// The robustness claims are limited to bit-exact lossless storage. See the
+/// [module documentation](self).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalEmbedStrategy {
-    /// Simple LSB in time domain samples
+    /// Replaces the least significant bit of each sample, interleaved
+    /// across channels. For float samples, this is the mantissa LSB (1 ULP).
+    /// It carries 1 bit per sample, changes each sample by at most 1 LSB,
+    /// and does not survive any modification of the samples.
     TimeDomainLSB,
-    /// Embedding in frequency domain (FFT coefficients)
+    /// Uses parity quantisation of the FFT magnitudes in bins
+    /// `[256, 512)` of each 1024-frame chunk, per channel. The quantisation
+    /// step is 128 sample units.
     FrequencyDomain,
-    /// Phase modulation in frequency domain
+    /// Uses parity quantisation of the FFT phases (0.1 rad steps) in bins
+    /// `[128, 256)` of each 1024-frame chunk, per channel.
     PhaseModulation,
-    /// Spread spectrum embedding
+    /// Uses informed (host-interference-cancelling) spread spectrum. Each
+    /// bit is spread over a 512-frame chip of keyed ±1 pseudo-noise `p`.
+    /// The embedder measures the host correlation `ρ = <x,p>/L` and adds
+    /// only enough `k·p` to make `b·<y,p>/L ≥ a`, where
+    /// `a = max(1 % of the chip RMS, 1 unit)`.
+    ///
+    /// Chips whose host correlation already has the right sign and enough
+    /// margin are not touched at all. Otherwise the added noise has an
+    /// amplitude of roughly `|ρ|` (about RMS/√512, or −27 dB below the
+    /// signal), plus `a`.
+    ///
+    /// Detection only needs the key. Margins are small, so expect bit errors
+    /// after anything other than lossless storage.
     SpreadSpectrum,
-    /// Echo hiding with controlled delay
+    /// Uses keyed echo hiding. Each 1024-frame segment gets an echo of
+    /// sign `s` (taken from the keyed PN) at delay `d0` (bit 0) or `d1` (bit 1).
+    /// The delays are about 1 ms and 1.5 ms, derived from the real sample rate
+    /// and clamped to 8–160 frames.
+    ///
+    /// Detection is blind: it compares `s·(c[d1] − c[d0])` over the
+    /// Hann-windowed real cepstrum. The embedder tries echo gains from 0.1 to
+    /// 0.8 and keeps the smallest one that decodes with margin after
+    /// quantisation. If no gain works (for example on silent or clipped
+    /// segments), embedding fails with an error. Echoes at these gains are
+    /// audible as colouration.
     EchoHiding,
 }
 
 impl SignalEmbedStrategy {
-    fn to_u8(&self) -> u8 {
+    const ALL: [SignalEmbedStrategy; 5] = [
+        SignalEmbedStrategy::TimeDomainLSB,
+        SignalEmbedStrategy::FrequencyDomain,
+        SignalEmbedStrategy::PhaseModulation,
+        SignalEmbedStrategy::SpreadSpectrum,
+        SignalEmbedStrategy::EchoHiding,
+    ];
+
+    fn to_u8(self) -> u8 {
         match self {
             SignalEmbedStrategy::TimeDomainLSB => 0,
             SignalEmbedStrategy::FrequencyDomain => 1,
@@ -43,813 +201,987 @@ impl SignalEmbedStrategy {
 
     #[allow(dead_code)]
     pub(crate) fn from_u8(v: u8) -> Option<Self> {
-        match v {
-            0 => Some(SignalEmbedStrategy::TimeDomainLSB),
-            1 => Some(SignalEmbedStrategy::FrequencyDomain),
-            2 => Some(SignalEmbedStrategy::PhaseModulation),
-            3 => Some(SignalEmbedStrategy::SpreadSpectrum),
-            4 => Some(SignalEmbedStrategy::EchoHiding),
-            _ => None,
+        Self::ALL.into_iter().find(|s| s.to_u8() == v)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Carrier layout
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SampleKind {
+    /// 8-bit unsigned PCM (offset 128).
+    U8,
+    /// Signed little-endian PCM in a `bytes`-byte container. The value sits in
+    /// the top `valid_bits`, and the low `shift` bits are padding.
+    Int {
+        bytes: usize,
+        shift: u32,
+        valid_bits: u32,
+    },
+    F32,
+    F64,
+}
+
+impl SampleKind {
+    fn bytes(self) -> usize {
+        match self {
+            SampleKind::U8 => 1,
+            SampleKind::Int { bytes, .. } => bytes,
+            SampleKind::F32 => 4,
+            SampleKind::F64 => 8,
         }
     }
 }
 
-impl SignalHandler {
-    pub fn new() -> Self {
-        Self { crypto: None }
+/// Where the samples live inside the carrier bytes and how to read them.
+#[derive(Debug, Clone)]
+struct SignalLayout {
+    data_offset: usize,
+    /// Length in bytes of the sample region. Always a multiple of the frame size.
+    data_len: usize,
+    channels: usize,
+    sample_rate: u32,
+    kind: SampleKind,
+}
+
+fn le_u16(d: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([d[at], d[at + 1]])
+}
+
+fn le_u32(d: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]])
+}
+
+fn invalid(msg: impl Into<String>) -> SteganoError {
+    SteganoError::InvalidParameter(msg.into())
+}
+
+impl SignalLayout {
+    /// Build the layout for a carrier according to its declared format.
+    fn from_carrier(carrier: &CarrierData) -> Result<Self> {
+        match carrier.format {
+            DataFormat::WAV => Self::parse_wav(&carrier.raw_data),
+            _ => {
+                let rate = carrier
+                    .sampling_rate
+                    .filter(|r| r.is_finite() && *r >= 1.0 && *r <= u32::MAX as f64)
+                    .map(|r| r as u32)
+                    .unwrap_or(DEFAULT_RAW_RATE);
+                Ok(Self {
+                    data_offset: 0,
+                    data_len: carrier.raw_data.len() & !1,
+                    channels: 1,
+                    sample_rate: rate,
+                    kind: SampleKind::Int {
+                        bytes: 2,
+                        shift: 0,
+                        valid_bits: 16,
+                    },
+                })
+            }
+        }
     }
 
-    pub fn with_encryption(password: &str) -> Result<Self> {
-        Ok(Self {
-            crypto: Some(CryptoLayer::new_from_password(password)?),
+    /// Parse a RIFF/WAVE file and locate the `fmt ` and `data` chunks.
+    fn parse_wav(d: &[u8]) -> Result<Self> {
+        if d.len() < 12 || &d[0..4] != b"RIFF" || &d[8..12] != b"WAVE" {
+            return Err(invalid("WAV carrier is not a RIFF/WAVE file"));
+        }
+
+        let mut fmt: Option<(usize, usize)> = None;
+        let mut data: Option<(usize, usize)> = None;
+        let mut pos = 12usize;
+        while pos.checked_add(8).is_some_and(|e| e <= d.len()) {
+            let id = &d[pos..pos + 4];
+            let size = le_u32(d, pos + 4) as usize;
+            let body = pos + 8;
+            let declared_end = body.checked_add(size);
+            if id == b"data" {
+                // Clamp the data chunk to what is actually present (streamed WAVs).
+                let end = declared_end.map_or(d.len(), |e| e.min(d.len()));
+                data = Some((body, end - body));
+                if fmt.is_some() {
+                    break;
+                }
+            } else {
+                if declared_end.is_none_or(|e| e > d.len()) {
+                    return Err(invalid("WAV chunk extends past end of file"));
+                }
+                if id == b"fmt " && fmt.is_none() {
+                    fmt = Some((body, size));
+                }
+                if fmt.is_some() && data.is_some() {
+                    break;
+                }
+            }
+            // Advance past the body plus the RIFF pad byte for odd sizes.
+            match declared_end.and_then(|e| e.checked_add(size & 1)) {
+                Some(next) => pos = next,
+                None => break,
+            }
+        }
+
+        let (fmt_at, fmt_len) = fmt.ok_or_else(|| invalid("WAV file has no fmt chunk"))?;
+        let (data_at, data_len) = data.ok_or_else(|| invalid("WAV file has no data chunk"))?;
+        if fmt_len < 16 {
+            return Err(invalid("WAV fmt chunk is too short"));
+        }
+
+        let mut format_tag = le_u16(d, fmt_at);
+        let channels = le_u16(d, fmt_at + 2) as usize;
+        let sample_rate = le_u32(d, fmt_at + 4);
+        let block_align = le_u16(d, fmt_at + 12) as usize;
+        let bits = le_u16(d, fmt_at + 14) as u32;
+        let mut valid_bits = bits;
+
+        if format_tag == 0xFFFE {
+            if fmt_len < 40 {
+                return Err(invalid("WAVE_FORMAT_EXTENSIBLE fmt chunk is too short"));
+            }
+            let vb = le_u16(d, fmt_at + 18) as u32;
+            if vb != 0 {
+                valid_bits = vb;
+            }
+            // The first two bytes of the SubFormat GUID hold the format code.
+            format_tag = le_u16(d, fmt_at + 24);
+        }
+
+        if channels == 0 {
+            return Err(invalid("WAV file declares zero channels"));
+        }
+        if sample_rate == 0 {
+            return Err(invalid("WAV file declares a sample rate of 0 Hz"));
+        }
+        if !bits.is_multiple_of(8) || bits == 0 {
+            return Err(invalid(format!("unsupported WAV bit depth {bits}")));
+        }
+        let bytes = (bits / 8) as usize;
+        if channels.checked_mul(bytes) != Some(block_align) {
+            return Err(invalid(format!(
+                "WAV block_align {block_align} does not match {channels} channels × {bits} bits"
+            )));
+        }
+
+        let kind = match (format_tag, bits) {
+            (1, 8) => SampleKind::U8,
+            (1, 16 | 24 | 32) => {
+                if valid_bits < 2 || valid_bits > bits {
+                    return Err(invalid(format!(
+                        "invalid wValidBitsPerSample {valid_bits} for {bits}-bit container"
+                    )));
+                }
+                SampleKind::Int {
+                    bytes,
+                    shift: bits - valid_bits,
+                    valid_bits,
+                }
+            }
+            (3, 32) => SampleKind::F32,
+            (3, 64) => SampleKind::F64,
+            (1, _) => return Err(invalid(format!("unsupported PCM bit depth {bits}"))),
+            (3, _) => return Err(invalid(format!("unsupported float bit depth {bits}"))),
+            (tag, _) => {
+                return Err(invalid(format!(
+                    "unsupported WAV format tag 0x{tag:04X} (only PCM and IEEE float)"
+                )))
+            }
+        };
+
+        let layout = Self {
+            data_offset: data_at,
+            data_len: data_len - data_len % block_align,
+            channels,
+            sample_rate,
+            kind,
+        };
+        layout.check_finite(d)?;
+        Ok(layout)
+    }
+
+    fn check_finite(&self, d: &[u8]) -> Result<()> {
+        if matches!(self.kind, SampleKind::F32 | SampleKind::F64) {
+            for i in 0..self.num_samples() {
+                if !self.read_units(d, i).is_finite() {
+                    return Err(invalid(
+                        "float WAV contains NaN/Inf samples; refusing to embed/extract",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn num_samples(&self) -> usize {
+        self.data_len / self.kind.bytes()
+    }
+
+    fn frames(&self) -> usize {
+        self.num_samples() / self.channels
+    }
+
+    fn at(&self, i: usize) -> usize {
+        self.data_offset + i * self.kind.bytes()
+    }
+
+    fn int_range(&self) -> (i64, i64) {
+        match self.kind {
+            SampleKind::U8 => (-128, 127),
+            SampleKind::Int { valid_bits, .. } => {
+                let half = 1i64 << (valid_bits - 1);
+                (-half, half - 1)
+            }
+            _ => (i64::MIN, i64::MAX),
+        }
+    }
+
+    /// Read the integer sample code (with the padding shift removed).
+    fn read_code(&self, d: &[u8], i: usize) -> i64 {
+        let a = self.at(i);
+        match self.kind {
+            SampleKind::U8 => d[a] as i64 - 128,
+            SampleKind::Int { bytes, shift, .. } => {
+                let mut raw: i64 = 0;
+                for b in 0..bytes {
+                    raw |= (d[a + b] as i64) << (8 * b);
+                }
+                let width = 8 * bytes as u32;
+                // Sign-extend from the container width.
+                raw = (raw << (64 - width)) >> (64 - width);
+                raw >> shift
+            }
+            _ => unreachable!("read_code on float layout"),
+        }
+    }
+
+    fn write_code(&self, d: &mut [u8], i: usize, code: i64) {
+        let a = self.at(i);
+        match self.kind {
+            SampleKind::U8 => d[a] = (code + 128) as u8,
+            SampleKind::Int { bytes, shift, .. } => {
+                let mut old: i64 = 0;
+                for b in 0..bytes {
+                    old |= (d[a + b] as i64) << (8 * b);
+                }
+                let pad_mask = (1i64 << shift) - 1;
+                let raw = (code << shift) | (old & pad_mask);
+                for b in 0..bytes {
+                    d[a + b] = (raw >> (8 * b)) as u8;
+                }
+            }
+            _ => unreachable!("write_code on float layout"),
+        }
+    }
+
+    /// Read a sample in "units": integer LSBs for PCM, `v * 32768` for float.
+    fn read_units(&self, d: &[u8], i: usize) -> f64 {
+        let a = self.at(i);
+        match self.kind {
+            SampleKind::F32 => {
+                f32::from_le_bytes([d[a], d[a + 1], d[a + 2], d[a + 3]]) as f64 * FLOAT_UNIT_SCALE
+            }
+            SampleKind::F64 => {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&d[a..a + 8]);
+                f64::from_le_bytes(b) * FLOAT_UNIT_SCALE
+            }
+            _ => self.read_code(d, i) as f64,
+        }
+    }
+
+    /// The value `u` will have after it is written and read back.
+    fn quantize(&self, u: f64) -> f64 {
+        match self.kind {
+            SampleKind::F32 => ((u / FLOAT_UNIT_SCALE) as f32) as f64 * FLOAT_UNIT_SCALE,
+            SampleKind::F64 => u,
+            _ => {
+                let (lo, hi) = self.int_range();
+                u.round().clamp(lo as f64, hi as f64)
+            }
+        }
+    }
+
+    fn write_units(&self, d: &mut [u8], i: usize, u: f64) {
+        let a = self.at(i);
+        match self.kind {
+            SampleKind::F32 => {
+                d[a..a + 4].copy_from_slice(&((u / FLOAT_UNIT_SCALE) as f32).to_le_bytes())
+            }
+            SampleKind::F64 => d[a..a + 8].copy_from_slice(&(u / FLOAT_UNIT_SCALE).to_le_bytes()),
+            _ => {
+                let q = self.quantize(u) as i64;
+                self.write_code(d, i, q);
+            }
+        }
+    }
+
+    fn read_lsb(&self, d: &[u8], i: usize) -> u8 {
+        let a = self.at(i);
+        match self.kind {
+            SampleKind::F32 | SampleKind::F64 => d[a] & 1,
+            _ => (self.read_code(d, i) & 1) as u8,
+        }
+    }
+
+    fn write_lsb(&self, d: &mut [u8], i: usize, bit: u8) {
+        let a = self.at(i);
+        match self.kind {
+            // Little-endian: the mantissa LSB is bit 0 of the first byte.
+            // The exponent is untouched, so a finite value stays finite.
+            SampleKind::F32 | SampleKind::F64 => d[a] = (d[a] & !1) | (bit & 1),
+            _ => {
+                let code = (self.read_code(d, i) & !1) | (bit & 1) as i64;
+                self.write_code(d, i, code);
+            }
+        }
+    }
+
+    /// Read `count` frames of channel `ch` starting at frame `start`.
+    fn read_lane(&self, d: &[u8], ch: usize, start: usize, count: usize) -> Vec<f64> {
+        (start..start + count)
+            .map(|f| self.read_units(d, f * self.channels + ch))
+            .collect()
+    }
+
+    /// Write frames back to channel `ch`, touching only samples whose value changed.
+    fn write_lane(&self, d: &mut [u8], ch: usize, start: usize, old: &[f64], new: &[f64]) {
+        for (j, (&o, &n)) in old.iter().zip(new).enumerate() {
+            let q = self.quantize(n);
+            if q != o {
+                self.write_units(d, (start + j) * self.channels + ch, q);
+            }
+        }
+    }
+
+    /// Echo delays `(d0, d1)` in frames, derived from the real sample rate.
+    fn echo_delays(&self) -> (usize, usize) {
+        let d0 = (self.sample_rate as usize / 1000).clamp(8, 160);
+        let d1 = (d0 + d0 / 2).max(d0 + 1);
+        (d0, d1)
+    }
+
+    /// Capacity in bits for `strategy`, header included.
+    fn capacity_bits(&self, strategy: SignalEmbedStrategy) -> usize {
+        let per_lane = |unit: usize, bits: usize| (self.frames() / unit) * bits * self.channels;
+        match strategy {
+            SignalEmbedStrategy::TimeDomainLSB => self.num_samples(),
+            SignalEmbedStrategy::FrequencyDomain => per_lane(FFT_CHUNK, MAG_BINS.1 - MAG_BINS.0),
+            SignalEmbedStrategy::PhaseModulation => {
+                per_lane(FFT_CHUNK, PHASE_BINS.1 - PHASE_BINS.0)
+            }
+            SignalEmbedStrategy::SpreadSpectrum => per_lane(SS_CHIP, 1),
+            SignalEmbedStrategy::EchoHiding => per_lane(ECHO_SEGMENT, 1),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyed PN
+// ---------------------------------------------------------------------------
+
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Derive the 64-bit PN seed from the key. An empty key gives a fixed public seed.
+fn pn_seed(key: &[u8]) -> u64 {
+    let mut h = blake3::Hasher::new_derive_key("stegano signals PN seed v1");
+    h.update(key);
+    let out = h.finalize();
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&out.as_bytes()[..8]);
+    u64::from_le_bytes(b)
+}
+
+/// Keyed ±1 chips for spread-spectrum unit `unit`.
+fn pn_chips(seed: u64, unit: usize, len: usize) -> Vec<f64> {
+    let mut st = seed ^ (unit as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93);
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        let r = splitmix64(&mut st);
+        for b in 0..64 {
+            if out.len() == len {
+                break;
+            }
+            out.push(if (r >> b) & 1 == 1 { 1.0 } else { -1.0 });
+        }
+    }
+    out
+}
+
+/// Keyed echo sign (±1) for echo segment `unit`.
+fn echo_sign(seed: u64, unit: usize) -> f64 {
+    let mut st = (seed ^ 0xA5A5_5A5A_C3C3_3C3C) ^ (unit as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    if splitmix64(&mut st) & 1 == 1 {
+        1.0
+    } else {
+        -1.0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FFT helpers
+// ---------------------------------------------------------------------------
+
+struct FftPair {
+    fwd: Arc<dyn Fft<f64>>,
+    inv: Arc<dyn Fft<f64>>,
+}
+
+impl FftPair {
+    fn new(n: usize) -> Self {
+        let mut p = FftPlanner::new();
+        Self {
+            fwd: p.plan_fft_forward(n),
+            inv: p.plan_fft_inverse(n),
+        }
+    }
+
+    fn forward(&self, x: &[f64]) -> Vec<Complex<f64>> {
+        let mut b: Vec<Complex<f64>> = x.iter().map(|&v| Complex::new(v, 0.0)).collect();
+        self.fwd.process(&mut b);
+        b
+    }
+
+    fn inverse_real(&self, mut b: Vec<Complex<f64>>) -> Vec<f64> {
+        self.inv.process(&mut b);
+        let n = b.len() as f64;
+        b.iter().map(|c| c.re / n).collect()
+    }
+}
+
+fn mag_bit(c: Complex<f64>) -> u8 {
+    let units = (c.norm().max(MAG_STEP) / MAG_STEP).round() as u64;
+    (units % 2) as u8
+}
+
+fn phase_offset(c: Complex<f64>) -> f64 {
+    (c.arg() + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI)
+}
+
+fn phase_bit(c: Complex<f64>) -> u8 {
+    let units = (phase_offset(c) / PHASE_STEP).round() as i64;
+    (units.rem_euclid(2)) as u8
+}
+
+/// Hann-windowed real cepstrum difference `c[d1] − c[d0]`.
+fn cepstral_diff(fft: &FftPair, seg: &[f64], d0: usize, d1: usize) -> f64 {
+    let n = seg.len();
+    let windowed: Vec<f64> = seg
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            let w = 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos();
+            v * w
+        })
+        .collect();
+    let spec = fft.forward(&windowed);
+    let peak = spec.iter().map(|c| c.norm()).fold(0.0f64, f64::max);
+    if peak <= 0.0 {
+        return 0.0;
+    }
+    let eps = peak * 1e-6;
+    let logmag: Vec<Complex<f64>> = spec
+        .iter()
+        .map(|c| Complex::new((c.norm() + eps).ln(), 0.0))
+        .collect();
+    let ceps = fft.inverse_real(logmag);
+    ceps[d1] - ceps[d0]
+}
+
+// ---------------------------------------------------------------------------
+// Bit extraction (shared by extract and embed self-verification)
+// ---------------------------------------------------------------------------
+
+/// Extract `nbits` bits with `strategy`. The caller guarantees that
+/// `nbits <= layout.capacity_bits(strategy)`.
+fn extract_bits(
+    layout: &SignalLayout,
+    d: &[u8],
+    strategy: SignalEmbedStrategy,
+    nbits: usize,
+    seed: u64,
+) -> Vec<u8> {
+    let nbits = nbits.min(layout.capacity_bits(strategy));
+    let mut bits = Vec::with_capacity(nbits);
+    if strategy == SignalEmbedStrategy::TimeDomainLSB {
+        bits.extend((0..nbits).map(|i| layout.read_lsb(d, i)));
+        return bits;
+    }
+
+    let (unit_len, fft) = match strategy {
+        SignalEmbedStrategy::SpreadSpectrum => (SS_CHIP, None),
+        SignalEmbedStrategy::EchoHiding => (ECHO_SEGMENT, Some(FftPair::new(ECHO_SEGMENT))),
+        _ => (FFT_CHUNK, Some(FftPair::new(FFT_CHUNK))),
+    };
+    let (d0, d1) = layout.echo_delays();
+    let units_per_lane = layout.frames() / unit_len;
+    let mut unit = 0usize;
+
+    'outer: for ch in 0..layout.channels {
+        for u in 0..units_per_lane {
+            if bits.len() >= nbits {
+                break 'outer;
+            }
+            let seg = layout.read_lane(d, ch, u * unit_len, unit_len);
+            match strategy {
+                SignalEmbedStrategy::FrequencyDomain | SignalEmbedStrategy::PhaseModulation => {
+                    let spec = fft.as_ref().expect("fft").forward(&seg);
+                    let (lo, hi) = if strategy == SignalEmbedStrategy::FrequencyDomain {
+                        MAG_BINS
+                    } else {
+                        PHASE_BINS
+                    };
+                    for &c in &spec[lo..hi] {
+                        if bits.len() >= nbits {
+                            break;
+                        }
+                        bits.push(if strategy == SignalEmbedStrategy::FrequencyDomain {
+                            mag_bit(c)
+                        } else {
+                            phase_bit(c)
+                        });
+                    }
+                }
+                SignalEmbedStrategy::SpreadSpectrum => {
+                    let pn = pn_chips(seed, unit, unit_len);
+                    let c: f64 = seg.iter().zip(&pn).map(|(x, p)| x * p).sum();
+                    bits.push((c > 0.0) as u8);
+                }
+                SignalEmbedStrategy::EchoHiding => {
+                    let diff = cepstral_diff(fft.as_ref().expect("fft"), &seg, d0, d1);
+                    bits.push((echo_sign(seed, unit) * diff > 0.0) as u8);
+                }
+                SignalEmbedStrategy::TimeDomainLSB => unreachable!(),
+            }
+            unit += 1;
+        }
+    }
+    bits
+}
+
+// ---------------------------------------------------------------------------
+// Embedding
+// ---------------------------------------------------------------------------
+
+fn embed_lsb(layout: &SignalLayout, out: &mut [u8], bits: &[u8]) {
+    for (i, &b) in bits.iter().enumerate() {
+        layout.write_lsb(out, i, b);
+    }
+}
+
+fn embed_fft(
+    layout: &SignalLayout,
+    out: &mut [u8],
+    bits: &[u8],
+    strategy: SignalEmbedStrategy,
+) -> Result<()> {
+    let fft = FftPair::new(FFT_CHUNK);
+    let units_per_lane = layout.frames() / FFT_CHUNK;
+    let mut idx = 0usize;
+    let phase_mode = strategy == SignalEmbedStrategy::PhaseModulation;
+    let (lo, hi) = if phase_mode { PHASE_BINS } else { MAG_BINS };
+
+    'outer: for ch in 0..layout.channels {
+        for u in 0..units_per_lane {
+            if idx >= bits.len() {
+                break 'outer;
+            }
+            let start = u * FFT_CHUNK;
+            let seg = layout.read_lane(out, ch, start, FFT_CHUNK);
+            let mut spec = fft.forward(&seg);
+            let n_here = (hi - lo).min(bits.len() - idx);
+            let chunk_bits = &bits[idx..idx + n_here];
+            let mut targets = Vec::with_capacity(n_here);
+            for (j, &bit) in chunk_bits.iter().enumerate() {
+                let k = lo + j;
+                let t = fft_target(spec[k], bit, phase_mode);
+                spec[k] = t;
+                spec[FFT_CHUNK - k] = t.conj();
+                targets.push(t);
+            }
+            let quantized =
+                |v: Vec<f64>| -> Vec<f64> { v.into_iter().map(|x| layout.quantize(x)).collect() };
+            let mut q = quantized(fft.inverse_real(spec));
+            // Re-quantising to integers can partly cancel small per-bin changes
+            // (the rounding error is correlated with a sub-LSB modification).
+            // Refine: push each still-failing bin past its target by the residual.
+            for _ in 0..8 {
+                let mut sq = fft.forward(&q);
+                let mut wrong = false;
+                for (j, &bit) in chunk_bits.iter().enumerate() {
+                    let k = lo + j;
+                    if fft_bit(sq[k], phase_mode) != bit {
+                        wrong = true;
+                        let t = targets[j] + (targets[j] - sq[k]);
+                        sq[k] = t;
+                        sq[FFT_CHUNK - k] = t.conj();
+                    }
+                }
+                if !wrong {
+                    break;
+                }
+                q = quantized(fft.inverse_real(sq));
+            }
+            layout.write_lane(out, ch, start, &seg, &q);
+            idx += n_here;
+        }
+    }
+    Ok(())
+}
+
+/// Target coefficient for FFT bin `c` so that it carries `bit`.
+fn fft_target(c: Complex<f64>, bit: u8, phase_mode: bool) -> Complex<f64> {
+    let bit = bit as i64;
+    if phase_mode {
+        // Choose the allowed unit (1..=61) with the right parity that is
+        // circularly nearest to the current phase.
+        let off = phase_offset(c);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let dist = |u: i64| {
+            let d = (u as f64 * PHASE_STEP - off).abs();
+            d.min(two_pi - d)
+        };
+        let best = (1..=PHASE_MAX_UNIT)
+            .filter(|u| u % 2 == bit)
+            .min_by(|&a, &b| dist(a).total_cmp(&dist(b)))
+            .expect("non-empty unit set");
+        let phase = best as f64 * PHASE_STEP - std::f64::consts::PI;
+        Complex::from_polar(c.norm().max(PHASE_NORM_MIN), phase)
+    } else {
+        let units = (c.norm().max(MAG_STEP) / MAG_STEP).round() as i64;
+        let new_units = if units % 2 == bit { units } else { units + 1 };
+        Complex::from_polar(new_units as f64 * MAG_STEP, c.arg())
+    }
+}
+
+fn fft_bit(c: Complex<f64>, phase_mode: bool) -> u8 {
+    if phase_mode {
+        phase_bit(c)
+    } else {
+        mag_bit(c)
+    }
+}
+
+fn embed_spread(layout: &SignalLayout, out: &mut [u8], bits: &[u8], seed: u64) -> Result<()> {
+    let units_per_lane = layout.frames() / SS_CHIP;
+    let mut unit = 0usize;
+    'outer: for ch in 0..layout.channels {
+        for u in 0..units_per_lane {
+            if unit >= bits.len() {
+                break 'outer;
+            }
+            let start = u * SS_CHIP;
+            let x = layout.read_lane(out, ch, start, SS_CHIP);
+            let pn = pn_chips(seed, unit, SS_CHIP);
+            let l = SS_CHIP as f64;
+            let rho: f64 = x.iter().zip(&pn).map(|(a, p)| a * p).sum::<f64>() / l;
+            let rms = (x.iter().map(|v| v * v).sum::<f64>() / l).sqrt();
+            let b = if bits[unit] == 1 { 1.0 } else { -1.0 };
+            let mut a = (SS_REL_AMPLITUDE * rms).max(SS_MIN_AMPLITUDE);
+            let mut done = false;
+            for _ in 0..6 {
+                let k = if b * rho >= a { 0.0 } else { b * a - rho };
+                let y: Vec<f64> = x
+                    .iter()
+                    .zip(&pn)
+                    .map(|(v, p)| layout.quantize(v + k * p))
+                    .collect();
+                let c: f64 = y.iter().zip(&pn).map(|(v, p)| v * p).sum::<f64>() / l;
+                if b * c >= a * 0.5 && b * c > 0.0 {
+                    layout.write_lane(out, ch, start, &x, &y);
+                    done = true;
+                    break;
+                }
+                a *= 2.0;
+            }
+            if !done {
+                return Err(invalid(format!(
+                    "SpreadSpectrum: carrier cannot hold bit {unit} reliably \
+                     (clipping or insufficient headroom in channel {ch})"
+                )));
+            }
+            unit += 1;
+        }
+    }
+    Ok(())
+}
+
+fn embed_echo(layout: &SignalLayout, out: &mut [u8], bits: &[u8], seed: u64) -> Result<()> {
+    let fft = FftPair::new(ECHO_SEGMENT);
+    let (d0, d1) = layout.echo_delays();
+    let units_per_lane = layout.frames() / ECHO_SEGMENT;
+    // Read the original lanes once: the echo source is always the *original* host.
+    let mut unit = 0usize;
+    'outer: for ch in 0..layout.channels {
+        if unit >= bits.len() {
+            break;
+        }
+        let needed = (bits.len() - unit).min(units_per_lane) * ECHO_SEGMENT;
+        let host = layout.read_lane(out, ch, 0, needed);
+        for u in 0..units_per_lane {
+            if unit >= bits.len() {
+                break 'outer;
+            }
+            let start = u * ECHO_SEGMENT;
+            let x = &host[start..start + ECHO_SEGMENT];
+            let s = echo_sign(seed, unit);
+            let bit = bits[unit];
+            let d = if bit == 1 { d1 } else { d0 };
+            let mut accepted = None;
+            for &alpha in &ECHO_ALPHAS {
+                let y: Vec<f64> = (0..ECHO_SEGMENT)
+                    .map(|i| {
+                        let n = start + i;
+                        let echo = if n >= d { host[n - d] } else { 0.0 };
+                        layout.quantize(x[i] + s * alpha * echo)
+                    })
+                    .collect();
+                let m = s * cepstral_diff(&fft, &y, d0, d1);
+                let ok = if bit == 1 {
+                    m >= ECHO_MARGIN
+                } else {
+                    m <= -ECHO_MARGIN
+                };
+                if ok {
+                    accepted = Some(y);
+                    break;
+                }
+            }
+            let y = accepted.ok_or_else(|| {
+                invalid(format!(
+                    "EchoHiding: segment {unit} (channel {ch}) cannot carry a bit reliably \
+                     (too quiet, clipped, or strongly tonal); use another strategy"
+                ))
+            })?;
+            layout.write_lane(out, ch, start, x, &y);
+            unit += 1;
+        }
+    }
+    Ok(())
+}
+
+fn bits_of(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .flat_map(|&b| (0..8).map(move |i| (b >> i) & 1))
+        .collect()
+}
+
+fn bytes_of(bits: &[u8]) -> Vec<u8> {
+    bits.chunks(8)
+        .map(|c| {
+            c.iter()
+                .enumerate()
+                .fold(0u8, |acc, (i, &b)| acc | (b << i))
+        })
+        .collect()
+}
+
+impl SignalHandler {
+    /// Create a new signal handler. Encryption is configured per call through
+    /// [`EmbedParams::encryption_key`].
+    pub fn new() -> Self {
+        Self
+    }
+
+    fn select_strategy(params: &EmbedParams) -> SignalEmbedStrategy {
+        let over = params
+            .format_specific
+            .get("signal_strategy")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "timedomain" | "timedomainlsb" | "lsb" => Some(SignalEmbedStrategy::TimeDomainLSB),
+                "frequency" | "frequencydomain" => Some(SignalEmbedStrategy::FrequencyDomain),
+                "phase" | "phasemodulation" => Some(SignalEmbedStrategy::PhaseModulation),
+                "spread" | "spreadspectrum" => Some(SignalEmbedStrategy::SpreadSpectrum),
+                "echo" | "echohiding" | "echo_hiding" => Some(SignalEmbedStrategy::EchoHiding),
+                _ => None,
+            });
+        over.unwrap_or(match params.stealth_level {
+            StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
+            StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
+            StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
+            StealthLevel::Maximum => SignalEmbedStrategy::SpreadSpectrum,
         })
     }
 
-    /// Detect audio format from file headers
-    fn detect_audio_format(&self, data: &[u8]) -> Option<DataFormat> {
-        if data.len() < 12 {
-            return None;
-        }
-
-        // WAV format detection
-        if data.starts_with(b"RIFF") && data[8..12] == *b"WAVE" {
-            return Some(DataFormat::WAV);
-        }
-
-        // FLAC format
-        if data.starts_with(b"fLaC") {
-            return Some(DataFormat::BINARY); // Treat as binary for now
-        }
-
-        // MP3 format (ID3v2)
-        if data.starts_with(b"ID3") {
-            return Some(DataFormat::BINARY); // Treat as binary for now
-        }
-
-        // Raw audio data (assume if sampling rate is set)
-        None
-    }
-
-    /// Estimate capacity for different signal embedding strategies
-    fn estimate_signal_capacity(
-        &self,
-        carrier: &CarrierData,
-        strategy: &SignalEmbedStrategy,
-    ) -> Result<CapacityInfo> {
-        let sample_count = carrier.raw_data.len() / 2; // Assume 16-bit samples
-        let sampling_rate = carrier.sampling_rate.unwrap_or(44100.0) as usize;
-
-        let (capacity_bits, overhead) = match strategy {
-            SignalEmbedStrategy::TimeDomainLSB => {
-                // 1 bit per sample
-                (sample_count, 80) // 80 bits for 10-byte header (4 magic + 4 len + 1 strategy + 1 mode)
-            }
-            SignalEmbedStrategy::FrequencyDomain => {
-                // Only positive-frequency bins [chunk/4 .. chunk/2) = 256 bins per chunk.
-                // Conjugate bins are mirrored for Hermitian symmetry but carry no extra bits.
-                let chunk_size = 1024;
-                let num_chunks = (sample_count / chunk_size).max(1);
-                let usable_bins_per_chunk = chunk_size / 4; // [256..512) = 256 bins
-                (num_chunks * usable_bins_per_chunk, 256)
-            }
-            SignalEmbedStrategy::PhaseModulation => {
-                // Only positive-frequency bins [chunk/8 .. chunk/4) = 128 bins per chunk.
-                let chunk_size = 1024;
-                let num_chunks = (sample_count / chunk_size).max(1);
-                let phase_bins_per_chunk = chunk_size / 8; // [128..256) = 128 bins
-                (num_chunks * phase_bins_per_chunk, 80)
-            }
-            SignalEmbedStrategy::SpreadSpectrum => {
-                // 1 bit per chip; chip_length = sample_rate / 1000 (1ms chips at 44.1kHz = 44 samples)
-                let chip_length = (sampling_rate / 1000).max(1);
-                (sample_count / chip_length, 80) // 80 bits for 10-byte header
-            }
-            SignalEmbedStrategy::EchoHiding => {
-                // 1 bit per 100ms segment; segment_length = sample_rate / 10
-                let segment_length = (sampling_rate / 10).max(1);
-                (sample_count / segment_length, 80) // 80 bits for 10-byte header
-            }
-        };
-
-        // Remove this unused calculation
-        let _capacity_bytes = if capacity_bits > overhead {
-            (capacity_bits - overhead) / 8
-        } else {
-            0
-        };
-
-        let recommended_bits = capacity_bits.saturating_sub(overhead);
-        let mut info = CapacityInfo::new(capacity_bits, recommended_bits);
+    fn capacity_info(layout: &SignalLayout, strategy: SignalEmbedStrategy) -> CapacityInfo {
+        let total = layout.capacity_bits(strategy);
+        let mut info = CapacityInfo::new(total, total.saturating_sub(HEADER_BITS));
         info.format_specific_info.insert(
             "overhead_bytes".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(overhead / 8)),
+            serde_json::Value::from(HEADER_LEN),
         );
         info.format_specific_info.insert(
             "strategy".to_string(),
             serde_json::Value::String(format!("{strategy:?}")),
         );
-        Ok(info)
+        info.format_specific_info
+            .insert("sample_rate".to_string(), layout.sample_rate.into());
+        info.format_specific_info
+            .insert("channels".to_string(), layout.channels.into());
+        info.format_specific_info
+            .insert("frames".to_string(), layout.frames().into());
+        info
     }
 
-    /// Convert audio data to samples
-    fn bytes_to_samples(&self, data: &[u8]) -> Vec<f32> {
-        data.as_chunks::<2>()
-            .0
-            .iter()
-            .map(|chunk| {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                sample as f32 / 32767.0 // Normalize to match embedding/extraction
-            })
-            .collect()
-    }
-
-    /// Convert samples back to audio data
-    fn samples_to_bytes(&self, samples: &[f32]) -> Vec<u8> {
-        samples
-            .iter()
-            .flat_map(|&sample| {
-                let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                sample_i16.to_le_bytes()
-            })
-            .collect()
-    }
-
-    /// Embed using frequency domain techniques
-    async fn embed_frequency_domain(
+    async fn embed_with_strategy(
         &self,
         carrier: &mut CarrierData,
         payload: &[u8],
         params: &EmbedParams,
-        strategy: &SignalEmbedStrategy,
+        strategy: SignalEmbedStrategy,
     ) -> Result<EmbedResult> {
-        let embed_start = Instant::now();
+        let start = Instant::now();
+        let layout = SignalLayout::from_carrier(carrier)?;
 
-        // Prepare payload: params key + EC takes priority over self.crypto.
-        // codec_mode byte: 0 = raw, 1 = self.crypto (legacy), 2 = codec pipeline
-        use crate::codec;
-        let use_codec = !params.encryption_key.is_empty()
-            || params.error_correction_level != ECLevel::None;
-        let (final_payload, encryption_time_ms, codec_mode) = if use_codec {
-            let enc_start = Instant::now();
-            let encoded = codec::encode_payload(payload, params)?;
-            let enc_ms = enc_start.elapsed().as_nanos().max(1) as u64 / 1_000_000;
-            (encoded, enc_ms.max(1), 2u8)
-        } else if let Some(ref crypto) = self.crypto {
-            use crate::crypto::CryptoLayer;
-            let enc_start = Instant::now();
-            let secure_payload = crypto.encrypt(payload)?;
-            let enc_ns = enc_start.elapsed().as_nanos().max(1) as u64;
-            let enc_ms = enc_ns.div_ceil(1_000_000);
-            (CryptoLayer::serialize_payload(&secure_payload), enc_ms, 1u8)
+        let enc_start = Instant::now();
+        let encoded = codec::encode_payload(payload, params)?;
+        let encryption_time_ms = if params.encryption_key.is_empty() {
+            0
         } else {
-            (payload.to_vec(), 0, 0u8)
+            (enc_start.elapsed().as_millis() as u64).max(1)
         };
+        let len_u32 = u32::try_from(encoded.len())
+            .map_err(|_| invalid("payload too large for signal header"))?;
 
-        // Create header
-        let mut header = Vec::new();
-        header.extend_from_slice(b"SGSJ"); // Signal Steganography header
-        header.extend_from_slice(&(final_payload.len() as u32).to_le_bytes());
-        header.push(strategy.to_u8());
-        header.push(codec_mode); // 0=raw, 1=self.crypto, 2=codec
+        let mut stream = Vec::with_capacity(HEADER_LEN + encoded.len());
+        stream.extend_from_slice(MAGIC);
+        stream.extend_from_slice(&len_u32.to_le_bytes());
+        stream.push(strategy.to_u8());
+        stream.push(FORMAT_VERSION);
+        stream.extend_from_slice(&encoded);
 
-        let total_data = [header, final_payload].concat();
-        let payload_bits: Vec<u8> = total_data
-            .iter()
-            .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
-            .collect();
-
-        // Check capacity
-        let capacity = self.estimate_signal_capacity(carrier, strategy)?;
-        if total_data.len() * 8 > capacity.total_bits {
-            return Err(SteganoError::InsufficientCapacity {
-                needed: total_data.len(),
-                available: capacity.recommended_bits / 8,
-            });
+        let needed = stream
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| invalid("payload too large"))?;
+        let available = layout.capacity_bits(strategy);
+        if needed > available {
+            return Err(SteganoError::InsufficientCapacity { needed, available });
         }
+        let bits = bits_of(&stream);
+        let seed = pn_seed(&params.encryption_key);
 
-        // Convert audio to samples
-        let mut samples = self.bytes_to_samples(&carrier.raw_data);
-
+        let mut out = carrier.raw_data.clone();
         match strategy {
-            SignalEmbedStrategy::TimeDomainLSB => {
-                self.embed_time_domain_lsb(&mut samples, &payload_bits)?;
+            SignalEmbedStrategy::TimeDomainLSB => embed_lsb(&layout, &mut out, &bits),
+            SignalEmbedStrategy::FrequencyDomain | SignalEmbedStrategy::PhaseModulation => {
+                embed_fft(&layout, &mut out, &bits, strategy)?
             }
-            SignalEmbedStrategy::FrequencyDomain => {
-                self.embed_fft_magnitude(&mut samples, &payload_bits)?;
-            }
-            SignalEmbedStrategy::PhaseModulation => {
-                self.embed_fft_phase(&mut samples, &payload_bits)?;
-            }
-            SignalEmbedStrategy::SpreadSpectrum => {
-                self.embed_spread_spectrum(
-                    &mut samples,
-                    &payload_bits,
-                    carrier.sampling_rate.unwrap_or(44100.0) as u32,
-                )?;
-            }
-            SignalEmbedStrategy::EchoHiding => {
-                self.embed_echo_hiding(
-                    &mut samples,
-                    &payload_bits,
-                    carrier.sampling_rate.unwrap_or(44100.0) as u32,
-                )?;
-            }
+            SignalEmbedStrategy::SpreadSpectrum => embed_spread(&layout, &mut out, &bits, seed)?,
+            SignalEmbedStrategy::EchoHiding => embed_echo(&layout, &mut out, &bits, seed)?,
         }
 
-        // Convert back to bytes
-        carrier.raw_data = self.samples_to_bytes(&samples);
+        // Self-verify on the final quantised bytes.
+        let check = extract_bits(&layout, &out, strategy, bits.len(), seed);
+        if check != bits {
+            let errors = check.iter().zip(&bits).filter(|(a, b)| a != b).count();
+            return Err(invalid(format!(
+                "{strategy:?}: {errors} of {} bits would not extract from this carrier \
+                 (clipping near full scale?); try another strategy",
+                bits.len()
+            )));
+        }
 
+        carrier.raw_data = out;
         Ok(EmbedResult::success(
             payload.len(),
             PerformanceStats {
-                embedding_time_ms: embed_start.elapsed().as_millis() as u64,
+                embedding_time_ms: start.elapsed().as_millis() as u64,
                 encryption_time_ms,
                 gpu_acceleration_used: false,
-                memory_usage_bytes: samples.len() * 8,
+                memory_usage_bytes: carrier.raw_data.len() * 2,
             },
         ))
     }
 
-    /// Simple LSB embedding in time domain
-    fn embed_time_domain_lsb(&self, samples: &mut [f32], payload_bits: &[u8]) -> Result<()> {
-        for (i, &bit) in payload_bits.iter().enumerate() {
-            if i >= samples.len() {
-                break;
-            }
-
-            // Convert to 16-bit integer for LSB manipulation
-            let mut sample_int = (samples[i] * 32767.0) as i16;
-            sample_int = (sample_int & 0xFFFEu16 as i16) | (bit as i16);
-            samples[i] = sample_int as f32 / 32767.0;
-        }
-        Ok(())
-    }
-
-    /// FFT-based magnitude embedding using parity quantization.
-    ///
-    /// Encodes each bit by forcing the quantised magnitude of a frequency-domain
-    /// coefficient to an even (bit=0) or odd (bit=1) multiple of `MAG_STEP`.
-    ///
-    /// Only the positive-frequency bins `[chunk/4 .. chunk/2]` are modified.
-    /// After each modification the conjugate bin `N-k` is set to `conj(X[k])`
-    /// so the IFFT output is purely real — if we modified both halves
-    /// independently the IFFT real part would be the average of the two,
-    /// destroying the parity encoding.
-    fn embed_fft_magnitude(&self, samples: &mut [f32], payload_bits: &[u8]) -> Result<()> {
-        // MAG_STEP must satisfy: MAG_STEP/2 > i16 round-trip noise per bin.
-        // Worst-case noise ≈ 1024 * 1/(2*32767) ≈ 0.016.  MAG_STEP=0.5 gives 15× margin.
-        const MAG_STEP: f32 = 0.5;
-        let chunk_size = 1024;
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(chunk_size);
-        let ifft = planner.plan_fft_inverse(chunk_size);
-
-        let mut bit_index = 0;
-
-        for chunk in samples.chunks_mut(chunk_size) {
-            if bit_index >= payload_bits.len() {
-                break;
-            }
-
-            if chunk.len() < chunk_size {
-                continue;
-            }
-
-            let mut buffer: Vec<Complex<f32>> =
-                chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
-
-            fft.process(&mut buffer);
-
-            // Only touch positive-frequency bins [chunk/4 .. chunk/2).
-            // Conjugate bins [chunk/2+1 .. 3*chunk/4] are written separately below.
-            let start_bin = chunk_size / 4; // 256
-            let end_bin = chunk_size / 2; // 512
-
-            for bin_k in start_bin..end_bin {
-                if bit_index >= payload_bits.len() {
-                    break;
-                }
-
-                let bit = payload_bits[bit_index];
-                let phase = buffer[bin_k].arg();
-                // Use max(magnitude, MAG_STEP) so near-zero bins still carry a reliable bit.
-                let magnitude = buffer[bin_k].norm().max(MAG_STEP);
-                let units = (magnitude / MAG_STEP).round() as u64;
-                let new_units = if units % 2 == bit as u64 {
-                    units
-                } else {
-                    units + 1
-                };
-                let new_mag = new_units as f32 * MAG_STEP;
-                buffer[bin_k] = Complex::from_polar(new_mag, phase);
-                // Enforce Hermitian symmetry: X[N-k] = conj(X[k])
-                buffer[chunk_size - bin_k] = Complex::from_polar(new_mag, -phase);
-                bit_index += 1;
-            }
-
-            ifft.process(&mut buffer);
-
-            for (i, sample) in chunk.iter_mut().enumerate() {
-                *sample = buffer[i].re / chunk_size as f32;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Extract bits embedded by `embed_fft_magnitude` (parity quantisation).
-    ///
-    /// Reads only the positive-frequency bins `[chunk/4 .. chunk/2)` to match embed.
-    fn extract_fft_magnitude_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
-        const MAG_STEP: f32 = 0.5;
-        let chunk_size = 1024;
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(chunk_size);
-
-        let mut bits = Vec::with_capacity(bits_needed);
-
-        for chunk in samples.chunks(chunk_size) {
-            if bits.len() >= bits_needed || chunk.len() < chunk_size {
-                break;
-            }
-
-            let mut buffer: Vec<Complex<f32>> =
-                chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
-            fft.process(&mut buffer);
-
-            // Read the same positive-frequency bins as embed.
-            let start_bin = chunk_size / 4; // 256
-            let end_bin = chunk_size / 2; // 512
-
-            for elem in &buffer[start_bin..end_bin] {
-                if bits.len() >= bits_needed {
-                    break;
-                }
-
-                let magnitude = elem.norm().max(MAG_STEP);
-                let units = (magnitude / MAG_STEP).round() as u64;
-                bits.push((units % 2) as u8);
-            }
-        }
-
-        bits.resize(bits_needed, 0);
-        Ok(bits)
-    }
-
-    /// FFT-based phase modulation using parity quantisation.
-    ///
-    /// Encodes each bit by forcing the quantised phase (offset by π) to an even
-    /// (bit=0) or odd (bit=1) multiple of `PHASE_STEP`.  Only positive-frequency
-    /// bins `[chunk/8 .. chunk/4)` are modified; conjugate bins are set to
-    /// `conj(X[k])` so the IFFT output stays real.
-    fn embed_fft_phase(&self, samples: &mut [f32], payload_bits: &[u8]) -> Result<()> {
-        // Worst-case phase error per bin ≈ 0.016 / NORM_MIN. With NORM_MIN=0.5,
-        // error ≤ 0.032 rad << PHASE_STEP/2=0.05. Safe.
-        const PHASE_STEP: f32 = 0.1;
-        // Maximum integer index such that max_units * PHASE_STEP < 2π.
-        let max_units = (2.0 * std::f32::consts::PI / PHASE_STEP).floor() as u64 - 1;
-        const NORM_MIN: f32 = 0.5;
-        let chunk_size = 1024;
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(chunk_size);
-        let ifft = planner.plan_fft_inverse(chunk_size);
-
-        let mut bit_index = 0;
-
-        for chunk in samples.chunks_mut(chunk_size) {
-            if bit_index >= payload_bits.len() {
-                break;
-            }
-            if chunk.len() < chunk_size {
-                continue;
-            }
-
-            let mut buffer: Vec<Complex<f32>> =
-                chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
-
-            fft.process(&mut buffer);
-
-            // Only touch positive-frequency bins [chunk/8 .. chunk/4).
-            let start_bin = chunk_size / 8; // 128
-            let end_bin = chunk_size / 4; // 256
-
-            for bin_k in start_bin..end_bin {
-                if bit_index >= payload_bits.len() {
-                    break;
-                }
-
-                let bit = payload_bits[bit_index];
-                // rem_euclid maps arg() ∈ (-π, π] to [0, 2π).
-                let phase_offset = (buffer[bin_k].arg() + std::f32::consts::PI)
-                    .rem_euclid(2.0 * std::f32::consts::PI);
-                let units = (phase_offset / PHASE_STEP).round() as u64;
-                let units = units.min(max_units);
-                let new_units = if units % 2 == bit as u64 {
-                    units
-                } else if units < max_units {
-                    units + 1
-                } else {
-                    // At ceiling: step DOWN to avoid wrapping past π.
-                    units - 1
-                };
-                let new_phase = new_units as f32 * PHASE_STEP - std::f32::consts::PI;
-                let norm = buffer[bin_k].norm().max(NORM_MIN);
-                buffer[bin_k] = Complex::from_polar(norm, new_phase);
-                // Enforce Hermitian symmetry: X[N-k] = conj(X[k])
-                buffer[chunk_size - bin_k] = Complex::from_polar(norm, -new_phase);
-                bit_index += 1;
-            }
-
-            ifft.process(&mut buffer);
-
-            for (i, sample) in chunk.iter_mut().enumerate() {
-                *sample = buffer[i].re / chunk_size as f32;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Extract bits embedded by `embed_fft_phase` (parity quantisation).
-    ///
-    /// Reads only the positive-frequency bins `[chunk/8 .. chunk/4)` to match embed.
-    fn extract_fft_phase_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
-        const PHASE_STEP: f32 = 0.1;
-        let max_units = (2.0 * std::f32::consts::PI / PHASE_STEP).floor() as u64 - 1;
-        let chunk_size = 1024;
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(chunk_size);
-
-        let mut bits = Vec::with_capacity(bits_needed);
-
-        for chunk in samples.chunks(chunk_size) {
-            if bits.len() >= bits_needed || chunk.len() < chunk_size {
-                break;
-            }
-
-            let mut buffer: Vec<Complex<f32>> =
-                chunk.iter().map(|&x| Complex::new(x, 0.0)).collect();
-            fft.process(&mut buffer);
-
-            // Read the same positive-frequency bins as embed.
-            let start_bin = chunk_size / 8; // 128
-            let end_bin = chunk_size / 4; // 256
-
-            for elem in &buffer[start_bin..end_bin] {
-                if bits.len() >= bits_needed {
-                    break;
-                }
-
-                let phase_offset = (elem.arg() + std::f32::consts::PI)
-                    .rem_euclid(2.0 * std::f32::consts::PI);
-                let units = (phase_offset / PHASE_STEP).round() as u64;
-                let units = units.min(max_units);
-                bits.push((units % 2) as u8);
-            }
-        }
-
-        bits.resize(bits_needed, 0);
-        Ok(bits)
-    }
-
-    /// Spread spectrum embedding
-    fn embed_spread_spectrum(
-        &self,
-        samples: &mut [f32],
-        payload_bits: &[u8],
-        sample_rate: u32,
-    ) -> Result<()> {
-        let chip_length = sample_rate as usize / 1000; // 1ms chips
-        for (bit_index, chunk) in samples.chunks_mut(chip_length).enumerate() {
-            if bit_index >= payload_bits.len() {
-                break;
-            }
-
-            let bit = payload_bits[bit_index];
-            let amplitude = 0.001; // Very low amplitude for stealth
-
-            // Generate pseudorandom sequence for spreading
-            let mut pn_sequence = vec![1.0; chunk.len()];
-            for (i, elem) in pn_sequence.iter_mut().enumerate().skip(1) {
-                *elem = if (i * 17 + bit_index * 31) % 2 == 0 {
-                    1.0
-                } else {
-                    -1.0
-                };
-            }
-
-            // Spread and embed
-            for (i, sample) in chunk.iter_mut().enumerate() {
-                let spread_bit = if bit == 1 { 1.0 } else { -1.0 };
-                *sample += amplitude * spread_bit * pn_sequence[i];
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Echo hiding embedding
-    fn embed_echo_hiding(
-        &self,
-        samples: &mut [f32],
-        payload_bits: &[u8],
-        sample_rate: u32,
-    ) -> Result<()> {
-        let delay_0 = (sample_rate as f32 * 0.0005) as usize; // 0.5ms delay for bit 0
-        let delay_1 = (sample_rate as f32 * 0.001) as usize; // 1.0ms delay for bit 1
-        let echo_amplitude = 0.1;
-
-        let segment_length = sample_rate as usize / 10; // 100ms segments
-        for (bit_index, chunk) in samples.chunks_mut(segment_length).enumerate() {
-            if bit_index >= payload_bits.len() {
-                break;
-            }
-
-            let bit = payload_bits[bit_index];
-            let delay = if bit == 1 { delay_1 } else { delay_0 };
-
-            // Add echo with appropriate delay
-            for i in delay..chunk.len() {
-                chunk[i] += echo_amplitude * chunk[i - delay];
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Extract bits embedded by `embed_spread_spectrum` via PN correlation.
-    fn extract_spread_spectrum_bits(
-        &self,
-        samples: &[f32],
-        bits_needed: usize,
-        sample_rate: u32,
-    ) -> Result<Vec<u8>> {
-        let chip_length = sample_rate as usize / 1000;
-        let mut bits = Vec::with_capacity(bits_needed);
-
-        for (bit_index, chunk) in samples.chunks(chip_length).enumerate() {
-            if bits.len() >= bits_needed {
-                break;
-            }
-
-            // Reconstruct the same PN sequence used during embed
-            let mut pn_sequence = vec![1.0f32; chunk.len()];
-            for (i, elem) in pn_sequence.iter_mut().enumerate().skip(1) {
-                *elem = if (i * 17 + bit_index * 31) % 2 == 0 {
-                    1.0
-                } else {
-                    -1.0
-                };
-            }
-
-            // Correlate chunk with +PN and -PN
-            let corr_pos: f32 = chunk
-                .iter()
-                .zip(pn_sequence.iter())
-                .map(|(&s, &p)| s * p)
-                .sum();
-            bits.push(if corr_pos >= 0.0 { 1 } else { 0 });
-        }
-
-        bits.resize(bits_needed, 0);
-        Ok(bits)
-    }
-
-    /// Extract bits embedded by `embed_echo_hiding` via autocorrelation.
-    fn extract_echo_hiding_bits(
-        &self,
-        samples: &[f32],
-        bits_needed: usize,
-        sample_rate: u32,
-    ) -> Result<Vec<u8>> {
-        let delay_0 = (sample_rate as f32 * 0.0005) as usize;
-        let delay_1 = (sample_rate as f32 * 0.001) as usize;
-        let segment_length = sample_rate as usize / 10;
-        let mut bits = Vec::with_capacity(bits_needed);
-
-        for chunk in samples.chunks(segment_length) {
-            if bits.len() >= bits_needed {
-                break;
-            }
-
-            // Compute autocorrelation at delay_0 and delay_1
-            let len = chunk.len();
-            let autocorr = |delay: usize| -> f32 {
-                if delay >= len {
-                    return 0.0;
-                }
-                chunk[delay..].iter().zip(chunk[..len - delay].iter())
-                    .map(|(&a, &b)| a * b)
-                    .sum::<f32>()
-            };
-
-            let r0 = autocorr(delay_0).abs();
-            let r1 = autocorr(delay_1).abs();
-            bits.push(if r1 > r0 { 1 } else { 0 });
-        }
-
-        bits.resize(bits_needed, 0);
-        Ok(bits)
-    }
-
-    /// Extract data using the detected strategy
-    async fn extract_with_strategy(
-        &self,
-        carrier: &CarrierData,
-        strategy: &SignalEmbedStrategy,
+    /// Returns `None` if no header for `strategy` is present. Otherwise returns
+    /// the result of decoding the payload, which is an `Err` if the header
+    /// is valid but the payload is not.
+    fn extract_with_strategy(
+        layout: &SignalLayout,
+        data: &[u8],
+        strategy: SignalEmbedStrategy,
         params: &EmbedParams,
-    ) -> Result<Vec<u8>> {
-        let samples = self.bytes_to_samples(&carrier.raw_data);
-
-        // Extract header (10 bytes = 80 bits) using per-strategy extractor
-        let header_bits = match strategy {
-            SignalEmbedStrategy::TimeDomainLSB => {
-                self.extract_time_domain_bits(&samples, 80)?
-            }
-            SignalEmbedStrategy::FrequencyDomain => {
-                self.extract_fft_magnitude_bits(&samples, 80)?
-            }
-            SignalEmbedStrategy::PhaseModulation => {
-                self.extract_fft_phase_bits(&samples, 80)?
-            }
-            SignalEmbedStrategy::SpreadSpectrum => {
-                self.extract_spread_spectrum_bits(
-                    &samples,
-                    80,
-                    carrier.sampling_rate.unwrap_or(44100.0) as u32,
-                )?
-            }
-            SignalEmbedStrategy::EchoHiding => {
-                self.extract_echo_hiding_bits(
-                    &samples,
-                    80,
-                    carrier.sampling_rate.unwrap_or(44100.0) as u32,
-                )?
+    ) -> Option<Result<Vec<u8>>> {
+        let cap = layout.capacity_bits(strategy);
+        if cap < HEADER_BITS {
+            return None;
+        }
+        let seed = pn_seed(&params.encryption_key);
+        let header = bytes_of(&extract_bits(layout, data, strategy, HEADER_BITS, seed));
+        if &header[0..4] != MAGIC || header[8] != strategy.to_u8() {
+            return None;
+        }
+        if header[9] != FORMAT_VERSION {
+            return Some(Err(SteganoError::IntegrityError(format!(
+                "unsupported signal payload version {} (expected {FORMAT_VERSION})",
+                header[9]
+            ))));
+        }
+        let len = le_u32(&header, 4) as usize;
+        let total_bits = match len
+            .checked_add(HEADER_LEN)
+            .and_then(|t| t.checked_mul(8))
+            .filter(|&t| t <= cap)
+        {
+            Some(t) => t,
+            None => {
+                return Some(Err(SteganoError::IntegrityError(format!(
+                    "declared payload length {len} exceeds carrier capacity ({cap} bits)"
+                ))))
             }
         };
-
-        let header_bytes: Vec<u8> = header_bits
-            .chunks(8)
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .enumerate()
-                    .fold(0u8, |acc, (i, &bit)| acc | (bit << i))
-            })
-            .collect();
-
-        if header_bytes.len() < 10 || &header_bytes[0..4] != b"SGSJ" {
-            return Err(SteganoError::InvalidParameter(
-                "Invalid header magic".to_string(),
-            ));
-        }
-
-        // Validate the stored strategy tag matches what we probed with.
-        // Guards against false-positive "SGSJ" matches when the wrong
-        // strategy is tried first in the try-all loop in extract().
-        if header_bytes[8] != strategy.to_u8() {
-            return Err(SteganoError::InvalidParameter(format!(
-                "Strategy mismatch: header tag {} does not match probing strategy {}",
-                header_bytes[8],
-                strategy.to_u8()
-            )));
-        }
-
-        let payload_size = u32::from_le_bytes([
-            header_bytes[4],
-            header_bytes[5],
-            header_bytes[6],
-            header_bytes[7],
-        ]) as usize;
-
-        let codec_mode = header_bytes[9]; // 0=raw, 1=self.crypto, 2=codec
-
-        // Extract full payload using the same per-strategy extractor
-        let total_bits_needed = (10 + payload_size) * 8;
-        let all_bits = match strategy {
-            SignalEmbedStrategy::TimeDomainLSB => {
-                self.extract_time_domain_bits(&samples, total_bits_needed)?
-            }
-            SignalEmbedStrategy::FrequencyDomain => {
-                self.extract_fft_magnitude_bits(&samples, total_bits_needed)?
-            }
-            SignalEmbedStrategy::PhaseModulation => {
-                self.extract_fft_phase_bits(&samples, total_bits_needed)?
-            }
-            SignalEmbedStrategy::SpreadSpectrum => self.extract_spread_spectrum_bits(
-                &samples,
-                total_bits_needed,
-                carrier.sampling_rate.unwrap_or(44100.0) as u32,
-            )?,
-            SignalEmbedStrategy::EchoHiding => self.extract_echo_hiding_bits(
-                &samples,
-                total_bits_needed,
-                carrier.sampling_rate.unwrap_or(44100.0) as u32,
-            )?,
-        };
-
-        let all_bytes: Vec<u8> = all_bits
-            .chunks(8)
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .enumerate()
-                    .fold(0u8, |acc, (i, &bit)| acc | (bit << i))
-            })
-            .collect();
-
-        if all_bytes.len() < 10 + payload_size {
-            return Err(SteganoError::InvalidParameter(
-                "Insufficient data for payload".to_string(),
-            ));
-        }
-
-        let raw_payload = &all_bytes[10..10 + payload_size];
-
-        // Decode according to the codec_mode flag stored in the header.
-        match codec_mode {
-            0 => Ok(raw_payload.to_vec()),
-            1 => {
-                // Legacy: encrypted with self.crypto
-                if let Some(ref crypto) = self.crypto {
-                    use crate::crypto::CryptoLayer;
-                    let secure_payload = CryptoLayer::deserialize_payload(raw_payload)?;
-                    crypto.decrypt(&secure_payload)
-                } else {
-                    Err(SteganoError::EncryptionError(
-                        "No decryption key available".to_string(),
-                    ))
-                }
-            }
-            2 => {
-                // New codec pipeline (encryption + EC via params)
-                use crate::codec;
-                codec::decode_payload(raw_payload, params)
-            }
-            _ => Err(SteganoError::IntegrityError(format!(
-                "Unknown codec mode {codec_mode}"
-            ))),
-        }
-    }
-
-    /// Extract bits from time domain LSB
-    fn extract_time_domain_bits(&self, samples: &[f32], bits_needed: usize) -> Result<Vec<u8>> {
-        let mut bits = Vec::new();
-
-        for (i, &sample) in samples.iter().enumerate() {
-            if i >= bits_needed {
-                break;
-            }
-
-            let sample_int = (sample * 32767.0) as i16;
-            bits.push((sample_int & 1) as u8);
-        }
-
-        Ok(bits)
+        let all = bytes_of(&extract_bits(layout, data, strategy, total_bits, seed));
+        Some(codec::decode_payload(&all[HEADER_LEN..], params))
     }
 }
 
 #[async_trait]
 impl DataHandler for SignalHandler {
     fn detect_format(&self, data: &[u8]) -> Option<DataFormat> {
-        self.detect_audio_format(data)
+        if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WAVE" {
+            Some(DataFormat::WAV)
+        } else {
+            None
+        }
     }
 
     fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo> {
-        // Main value: Medium stealth (FrequencyDomain).
-        // Per-stealth-level breakdowns are in format_specific_info because
-        // the trait method doesn't take EmbedParams. Callers should check
-        // capacity_maximum_stealth_bits when using StealthLevel::Maximum (SpreadSpectrum),
-        // as its capacity can be 40× lower than TimeDomainLSB.
-        let mut info =
-            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::FrequencyDomain)?;
-        if let Ok(low) =
-            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::TimeDomainLSB)
-        {
-            info.format_specific_info.insert(
-                "capacity_low_stealth_bits".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(low.recommended_bits)),
-            );
-        }
-        info.format_specific_info.insert(
-            "capacity_medium_stealth_bits".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(info.recommended_bits)),
-        );
-        if let Ok(high) =
-            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::PhaseModulation)
-        {
-            info.format_specific_info.insert(
-                "capacity_high_stealth_bits".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(high.recommended_bits)),
-            );
-        }
-        if let Ok(max) =
-            self.estimate_signal_capacity(carrier, &SignalEmbedStrategy::SpreadSpectrum)
-        {
-            info.format_specific_info.insert(
-                "capacity_maximum_stealth_bits".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(max.recommended_bits)),
-            );
+        // The main value is for FrequencyDomain (Medium stealth). Breakdowns for
+        // the other stealth levels are in format_specific_info.
+        let layout = SignalLayout::from_carrier(carrier)?;
+        let mut info = Self::capacity_info(&layout, SignalEmbedStrategy::FrequencyDomain);
+        let per = [
+            (
+                "capacity_low_stealth_bits",
+                SignalEmbedStrategy::TimeDomainLSB,
+            ),
+            (
+                "capacity_medium_stealth_bits",
+                SignalEmbedStrategy::FrequencyDomain,
+            ),
+            (
+                "capacity_high_stealth_bits",
+                SignalEmbedStrategy::PhaseModulation,
+            ),
+            (
+                "capacity_maximum_stealth_bits",
+                SignalEmbedStrategy::SpreadSpectrum,
+            ),
+            ("capacity_echo_bits", SignalEmbedStrategy::EchoHiding),
+        ];
+        for (key, s) in per {
+            let bits = layout.capacity_bits(s).saturating_sub(HEADER_BITS);
+            info.format_specific_info
+                .insert(key.to_string(), serde_json::Value::from(bits));
         }
         Ok(info)
     }
@@ -860,82 +1192,48 @@ impl DataHandler for SignalHandler {
         payload: &[u8],
         params: &EmbedParams,
     ) -> Result<EmbedResult> {
-        // Check for format-specific override from --strategy flag.
-        let strategy_override = params
-            .format_specific
-            .get("signal_strategy")
-            .and_then(|v| v.as_str())
-            .and_then(|s| match s.to_lowercase().as_str() {
-                "timedomain" | "timedomainlsb" | "lsb" => {
-                    Some(SignalEmbedStrategy::TimeDomainLSB)
-                }
-                "frequency" | "frequencydomain" => Some(SignalEmbedStrategy::FrequencyDomain),
-                "phase" | "phasemodulation" => Some(SignalEmbedStrategy::PhaseModulation),
-                "spread" | "spreadspectrum" => Some(SignalEmbedStrategy::SpreadSpectrum),
-                "echo" | "echohiding" | "echo_hiding" => Some(SignalEmbedStrategy::EchoHiding),
-                _ => None,
-            });
-
-        let strategy = strategy_override.unwrap_or(match params.stealth_level {
-            StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
-            StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
-            StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
-            StealthLevel::Maximum => SignalEmbedStrategy::SpreadSpectrum,
-        });
-
-        self.embed_frequency_domain(carrier, payload, params, &strategy)
+        let strategy = Self::select_strategy(params);
+        self.embed_with_strategy(carrier, payload, params, strategy)
             .await
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        // Try all strategies in order. The stored strategy byte in the header
-        // (header[8]) is validated inside extract_with_strategy(), so only the
-        // strategy that was actually used to embed will succeed.
-        // This makes extraction self-describing regardless of which stealth_level
-        // the caller specifies.
-        let strategies = [
-            SignalEmbedStrategy::TimeDomainLSB,
-            SignalEmbedStrategy::FrequencyDomain,
-            SignalEmbedStrategy::PhaseModulation,
-            SignalEmbedStrategy::SpreadSpectrum,
-            SignalEmbedStrategy::EchoHiding,
-        ];
-
-        for strategy in &strategies {
-            if let Ok(result) = self.extract_with_strategy(carrier, strategy, params).await {
-                return Ok(result);
+        // The extraction is self-describing. Each strategy's header is probed
+        // in turn, which is cheap: a strategy matches only if both the magic and
+        // the strategy tag agree. The first match is decoded exactly once, and
+        // its result is returned, including codec errors such as
+        // EncryptionError for a wrong or missing password.
+        //
+        // SpreadSpectrum and EchoHiding headers can only be found with the key
+        // that was used to embed, because the PN sequence depends on it.
+        let layout = SignalLayout::from_carrier(carrier)?;
+        for s in SignalEmbedStrategy::ALL {
+            if let Some(result) = Self::extract_with_strategy(&layout, &carrier.raw_data, s, params)
+            {
+                return result;
             }
         }
-
-        Err(SteganoError::InvalidParameter(
-            "No valid extraction strategy found".to_string(),
-        ))
+        Err(invalid("No valid extraction strategy found"))
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {
-        if carrier.raw_data.len() < 160 {
-            // Minimum for header (80 bits * 2 bytes per sample)
+        // Without a key, only unkeyed (or default-seeded) headers can be found.
+        let Ok(layout) = SignalLayout::from_carrier(carrier) else {
             return Ok(false);
-        }
-
-        let samples = self.bytes_to_samples(&carrier.raw_data);
-
-        // Try to extract header
-        if let Ok(header_bits) = self.extract_time_domain_bits(&samples, 32) {
-            let header_bytes: Vec<u8> = header_bits
-                .chunks(8)
-                .map(|chunk| {
-                    chunk
-                        .iter()
-                        .enumerate()
-                        .fold(0u8, |acc, (i, &bit)| acc | (bit << i))
-                })
-                .collect();
-
-            Ok(header_bytes.len() >= 4 && &header_bytes[0..4] == b"SGSJ")
-        } else {
-            Ok(false)
-        }
+        };
+        let seed = pn_seed(&[]);
+        Ok(SignalEmbedStrategy::ALL.into_iter().any(|s| {
+            layout.capacity_bits(s) >= HEADER_BITS && {
+                let h = bytes_of(&extract_bits(
+                    &layout,
+                    &carrier.raw_data,
+                    s,
+                    HEADER_BITS,
+                    seed,
+                ));
+                &h[0..4] == MAGIC && h[8] == s.to_u8()
+            }
+        }))
     }
 }
 
@@ -949,473 +1247,393 @@ impl Default for SignalHandler {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::io::Cursor;
 
-    #[test]
-    fn test_signal_handler_creation() {
-        let handler = SignalHandler::new();
-        assert!(handler.crypto.is_none());
+    // ---- carrier generation ------------------------------------------------
+
+    /// Multi-tone plus white noise, about −10 dBFS peak. Returns values in [−1, 1).
+    fn synth(frames: usize, channels: usize, rate: u32, seed: u32) -> Vec<f64> {
+        let mut st = seed.max(1);
+        let mut noise = move || {
+            st ^= st << 13;
+            st ^= st >> 17;
+            st ^= st << 5;
+            (st as f64 / u32::MAX as f64) * 2.0 - 1.0
+        };
+        let tones = [
+            (220.0, 0.10),
+            (445.0, 0.08),
+            (1003.0, 0.05),
+            (3301.0, 0.03),
+            (7019.0, 0.02),
+        ];
+        let mut out = Vec::with_capacity(frames * channels);
+        for f in 0..frames {
+            let t = f as f64 / rate as f64;
+            for c in 0..channels {
+                let mut v = 0.0;
+                for (i, &(hz, a)) in tones.iter().enumerate() {
+                    let ph = (i + c) as f64 * 0.7;
+                    v += a * (2.0 * std::f64::consts::PI * hz * t + ph).sin();
+                }
+                v += 0.03 * noise();
+                out.push(v);
+            }
+        }
+        out
     }
 
-    #[test]
-    fn test_signal_handler_with_encryption() {
-        let handler = SignalHandler::with_encryption("test_password").unwrap();
-        assert!(handler.crypto.is_some());
+    fn make_wav(bits: u16, channels: u16, rate: u32, secs: f64, float: bool) -> Vec<u8> {
+        let frames = (secs * rate as f64) as usize;
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate: rate,
+            bits_per_sample: bits,
+            sample_format: if float {
+                hound::SampleFormat::Float
+            } else {
+                hound::SampleFormat::Int
+            },
+        };
+        let mut cur = Cursor::new(Vec::new());
+        {
+            let mut w = hound::WavWriter::new(&mut cur, spec).unwrap();
+            let full = (1i64 << (bits - 1)) as f64;
+            for v in synth(frames, channels as usize, rate, 12345 + bits as u32) {
+                if float {
+                    w.write_sample(v as f32).unwrap();
+                } else {
+                    w.write_sample((v * full).round() as i32).unwrap();
+                }
+            }
+            w.finalize().unwrap();
+        }
+        cur.into_inner()
+    }
+
+    fn read_spec_and_ints(bytes: &[u8]) -> (hound::WavSpec, Vec<i32>) {
+        let mut r = hound::WavReader::new(Cursor::new(bytes)).unwrap();
+        let spec = r.spec();
+        let s = r.samples::<i32>().map(|s| s.unwrap()).collect();
+        (spec, s)
+    }
+
+    fn carrier(format: DataFormat, raw: Vec<u8>) -> CarrierData {
+        CarrierData {
+            format,
+            raw_data: raw,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        }
+    }
+
+    fn params(strategy: &str, password: Option<&str>) -> EmbedParams {
+        let mut p = EmbedParams::with_error_correction(
+            password.map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+            ECLevel::None,
+        );
+        p.format_specific
+            .insert("signal_strategy".into(), serde_json::Value::from(strategy));
+        p
+    }
+
+    /// Seconds of audio for each strategy, enough for a short encrypted payload.
+    fn secs_for(strategy: &str) -> f64 {
+        match strategy {
+            "timedomain" => 0.5,
+            "frequency" | "phase" => 1.5,
+            "spread" => 9.5,
+            _ => 18.5,
+        }
+    }
+
+    const STRATS: [&str; 5] = ["timedomain", "frequency", "phase", "spread", "echo"];
+
+    async fn roundtrip_case(strategy: &str, bits: u16, channels: u16, password: Option<&str>) {
+        let handler = SignalHandler::new();
+        let wav = make_wav(bits, channels, 44100, secs_for(strategy), false);
+        let (spec0, s0) = read_spec_and_ints(&wav);
+        let mut c = carrier(DataFormat::WAV, wav.clone());
+        let p = params(strategy, password);
+        let payload = b"signals #43 roundtrip";
+        handler
+            .embed(&mut c, payload, &p)
+            .await
+            .unwrap_or_else(|e| panic!("{strategy} {bits}b {channels}ch embed: {e}"));
+
+        assert_eq!(
+            &c.raw_data[0..4],
+            b"RIFF",
+            "{strategy}: RIFF header destroyed"
+        );
+        assert_eq!(c.raw_data.len(), wav.len());
+        let (spec1, s1) = read_spec_and_ints(&c.raw_data);
+        assert_eq!(spec0, spec1, "{strategy}: spec changed");
+        assert_eq!(s0.len(), s1.len(), "{strategy}: sample count changed");
+        if strategy == "timedomain" {
+            assert!(s0.iter().zip(&s1).all(|(a, b)| (a - b).abs() <= 1));
+        }
+        assert_ne!(s0, s1, "{strategy}: nothing was embedded");
+        let sig: f64 = s0.iter().map(|&a| (a as f64).powi(2)).sum();
+        let err: f64 = s0
+            .iter()
+            .zip(&s1)
+            .map(|(&a, &b)| ((a - b) as f64).powi(2))
+            .sum();
+        // Whole-file SNR. On this test signal it measures about 88 dB (LSB),
+        // 65 dB (frequency), 49 dB (phase), 29 dB (spread) and 15 dB (echo) when
+        // the payload fills the carrier. The echo figure counts the audible echo
+        // itself as "noise".
+        let snr = 10.0 * (sig / err).log10();
+        assert!(snr > 12.0, "{strategy}: SNR {snr:.1} dB");
+
+        let out = handler.extract(&c, &p).await.unwrap();
+        assert_eq!(out, payload, "{strategy} {bits}b {channels}ch");
+
+        if password.is_some() {
+            let wrong = params(strategy, Some("wrong password"));
+            assert!(handler.extract(&c, &wrong).await.is_err());
+            // Unkeyed strategies still find the header without a password, so
+            // the codec's EncryptionError comes through. (Keyed SS/echo cannot
+            // find their header at all without the key.)
+            if matches!(strategy, "timedomain" | "frequency" | "phase") {
+                let none = params(strategy, None);
+                let r = handler.extract(&c, &none).await;
+                assert!(
+                    matches!(r, Err(SteganoError::EncryptionError(_))),
+                    "{strategy}: {r:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_all_strategies_16bit_mono() {
+        for s in STRATS {
+            roundtrip_case(s, 16, 1, None).await;
+            roundtrip_case(s, 16, 1, Some("pw")).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_all_strategies_16bit_stereo() {
+        for s in STRATS {
+            roundtrip_case(s, 16, 2, None).await;
+            roundtrip_case(s, 16, 2, Some("pw")).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_all_strategies_24bit_mono() {
+        for s in STRATS {
+            roundtrip_case(s, 24, 1, None).await;
+            roundtrip_case(s, 24, 1, Some("pw")).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lsb_8bit_32bit_and_float() {
+        let handler = SignalHandler::new();
+        for (bits, float) in [(8u16, false), (32, false), (32, true)] {
+            let wav = make_wav(bits, 2, 22050, 0.5, float);
+            let mut c = carrier(DataFormat::WAV, wav.clone());
+            let p = params("timedomain", Some("pw"));
+            handler.embed(&mut c, b"depth", &p).await.unwrap();
+            let r0 = hound::WavReader::new(Cursor::new(&wav)).unwrap();
+            let r1 = hound::WavReader::new(Cursor::new(&c.raw_data)).unwrap();
+            assert_eq!(r0.spec(), r1.spec());
+            assert_eq!(r0.len(), r1.len());
+            assert_eq!(handler.extract(&c, &p).await.unwrap(), b"depth");
+        }
+        // Float carriers also work with the FFT strategies.
+        let wav = make_wav(32, 1, 44100, 1.0, true);
+        let mut c = carrier(DataFormat::WAV, wav);
+        let p = params("frequency", None);
+        handler.embed(&mut c, b"float fft", &p).await.unwrap();
+        assert_eq!(handler.extract(&c, &p).await.unwrap(), b"float fft");
+    }
+
+    #[tokio::test]
+    async fn test_extra_chunks_preserved() {
+        let wav = make_wav(16, 1, 44100, 0.5, false);
+        // Insert an odd-sized LIST chunk (padded) between fmt and data.
+        let fmt_end = 12 + 8 + le_u32(&wav, 16) as usize;
+        let mut list = b"LIST".to_vec();
+        list.extend_from_slice(&5u32.to_le_bytes());
+        list.extend_from_slice(b"INFOx\0");
+        let mut riff = wav[..fmt_end].to_vec();
+        riff.extend_from_slice(&list);
+        riff.extend_from_slice(&wav[fmt_end..]);
+        riff.extend_from_slice(b"junk"); // trailing bytes
+        let size = (riff.len() - 8) as u32;
+        riff[4..8].copy_from_slice(&size.to_le_bytes());
+
+        let handler = SignalHandler::new();
+        let mut c = carrier(DataFormat::WAV, riff.clone());
+        let p = params("timedomain", None);
+        handler.embed(&mut c, b"chunks", &p).await.unwrap();
+        let data_body = fmt_end + list.len() + 8;
+        assert_eq!(&c.raw_data[..data_body], &riff[..data_body]);
+        assert_eq!(&c.raw_data[c.raw_data.len() - 4..], b"junk");
+        assert_eq!(handler.extract(&c, &p).await.unwrap(), b"chunks");
+    }
+
+    /// A tiny RIFF with an arbitrary sample rate and a data chunk of `n` 16-bit samples.
+    fn crafted_wav(rate: u32, samples: &[i16]) -> Vec<u8> {
+        let mut d = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        d.extend_from_slice(&16u32.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&rate.to_le_bytes());
+        d.extend_from_slice(&(rate.wrapping_mul(2)).to_le_bytes());
+        d.extend_from_slice(&2u16.to_le_bytes());
+        d.extend_from_slice(&16u16.to_le_bytes());
+        d.extend_from_slice(b"data");
+        d.extend_from_slice(&((samples.len() * 2) as u32).to_le_bytes());
+        for s in samples {
+            d.extend_from_slice(&s.to_le_bytes());
+        }
+        let size = (d.len() - 8) as u32;
+        d[4..8].copy_from_slice(&size.to_le_bytes());
+        d
+    }
+
+    #[tokio::test]
+    async fn test_crafted_low_rate_huge_length_is_error() {
+        // Header bits: "SGSJ", len = 0xFFFF_FFF0, strategy 0, version 2, in the LSBs.
+        let mut hdr = MAGIC.to_vec();
+        hdr.extend_from_slice(&0xFFFF_FFF0u32.to_le_bytes());
+        hdr.extend_from_slice(&[0, FORMAT_VERSION]);
+        let mut samples = vec![0i16; 4096];
+        for (i, b) in bits_of(&hdr).into_iter().enumerate() {
+            samples[i] = b as i16;
+        }
+        for rate in [8u32, 1, 999] {
+            let c = carrier(DataFormat::WAV, crafted_wav(rate, &samples));
+            let handler = SignalHandler::new();
+            let r = handler.extract(&c, &EmbedParams::default()).await;
+            assert!(r.is_err(), "rate {rate}: expected Err, got {r:?}");
+            // Embedding with every strategy at this rate must not panic either.
+            for s in STRATS {
+                let mut c2 = carrier(DataFormat::WAV, crafted_wav(rate, &samples));
+                let _ = handler.embed(&mut c2, b"x", &params(s, None)).await;
+            }
+            assert!(handler.estimate_capacity(&c).is_ok());
+            let _ = handler.verify_integrity(&c).unwrap();
+        }
+        // Sample rate 0 is rejected outright.
+        let c = carrier(DataFormat::WAV, crafted_wav(0, &samples));
+        assert!(SignalHandler::new()
+            .extract(&c, &EmbedParams::default())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_malformed_wavs_do_not_panic() {
+        let handler = SignalHandler::new();
+        let good = make_wav(16, 1, 8000, 0.1, false);
+        let mut cases: Vec<Vec<u8>> = vec![
+            b"RIFF\0\0\0\0WAVE".to_vec(),
+            b"RIFF\0\0\0\0WAVEfmt \xff\xff\xff\xff".to_vec(),
+            b"not a wav at all".to_vec(),
+        ];
+        for cut in [13, 20, 36, 44, 45] {
+            cases.push(good[..cut.min(good.len())].to_vec());
+        }
+        let mut bad_align = good.clone();
+        bad_align[32] = 7; // block_align
+        cases.push(bad_align);
+        for raw in cases {
+            let c = carrier(DataFormat::WAV, raw.clone());
+            let _ = handler.extract(&c, &EmbedParams::default()).await;
+            let _ = handler.estimate_capacity(&c);
+            let _ = handler.verify_integrity(&c);
+            let mut c2 = carrier(DataFormat::WAV, raw);
+            let _ = handler.embed(&mut c2, b"x", &params("echo", None)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_silent_carrier_echo_errors_at_embed() {
+        let handler = SignalHandler::new();
+        let mut c = carrier(DataFormat::WAV, crafted_wav(44100, &vec![0i16; 44100 * 4]));
+        let r = handler.embed(&mut c, b"x", &params("echo", None)).await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_raw_binary_signal_odd_length_keeps_last_byte() {
+        let handler = SignalHandler::new();
+        let mut raw: Vec<u8> = (0..20001u32).map(|i| (i * 7 % 251) as u8).collect();
+        raw[20000] = 0xAB;
+        let mut c = carrier(DataFormat::BinarySignal, raw.clone());
+        let p = params("timedomain", Some("pw"));
+        handler.embed(&mut c, b"raw odd", &p).await.unwrap();
+        assert_eq!(c.raw_data.len(), raw.len());
+        assert_eq!(c.raw_data[20000], 0xAB);
+        assert_eq!(handler.extract(&c, &p).await.unwrap(), b"raw odd");
     }
 
     #[test]
     fn test_audio_format_detection() {
         let handler = SignalHandler::new();
-
-        // WAV format
-        let wav_data = b"RIFF\x24\x08\x00\x00WAVEfmt ";
-        assert_eq!(handler.detect_format(wav_data), Some(DataFormat::WAV));
-
-        // FLAC format
-        let flac_data = b"fLaCxxxxxxxx";
-        assert_eq!(handler.detect_format(flac_data), Some(DataFormat::BINARY));
-
-        // Unknown format
-        let unknown_data = b"unknown_fmt";
-        assert_eq!(handler.detect_format(unknown_data), None);
+        assert_eq!(
+            handler.detect_format(b"RIFF\x24\x08\x00\x00WAVEfmt "),
+            Some(DataFormat::WAV)
+        );
+        assert_eq!(handler.detect_format(b"fLaCxxxxxxxx"), None);
+        assert_eq!(handler.detect_format(b"unknown_fmt"), None);
     }
 
     #[test]
-    fn test_sample_conversion() {
+    fn test_capacity_estimation_ordering() {
         let handler = SignalHandler::new();
-        let audio_data = vec![0x00, 0x80, 0xFF, 0x7F]; // -32768, 32767 in little endian
+        let c = carrier(DataFormat::WAV, make_wav(16, 2, 44100, 1.0, false));
+        let cap = handler.estimate_capacity(&c).unwrap();
+        let get = |k: &str| cap.format_specific_info[k].as_u64().unwrap();
+        assert_eq!(cap.format_specific_info["sample_rate"], 44100);
+        assert_eq!(cap.format_specific_info["channels"], 2);
+        assert!(get("capacity_low_stealth_bits") >= get("capacity_medium_stealth_bits"));
+        assert!(get("capacity_medium_stealth_bits") >= get("capacity_high_stealth_bits"));
+        assert!(get("capacity_high_stealth_bits") >= get("capacity_maximum_stealth_bits"));
+        assert!(get("capacity_maximum_stealth_bits") > 0);
+    }
 
-        let samples = handler.bytes_to_samples(&audio_data);
-        assert_eq!(samples.len(), 2);
-        assert!((samples[0] - (-1.0)).abs() < 0.001);
-        assert!((samples[1] - 0.999969).abs() < 0.001);
+    #[tokio::test]
+    async fn test_insufficient_capacity() {
+        let handler = SignalHandler::new();
+        let mut c = carrier(DataFormat::WAV, make_wav(16, 1, 44100, 0.01, false));
+        let r = handler
+            .embed(&mut c, &[0u8; 5000], &params("timedomain", None))
+            .await;
+        assert!(matches!(r, Err(SteganoError::InsufficientCapacity { .. })));
+    }
 
-        let converted_back = handler.samples_to_bytes(&samples);
-        assert_eq!(audio_data.len(), converted_back.len());
+    #[tokio::test]
+    async fn test_verify_integrity() {
+        let handler = SignalHandler::new();
+        let wav = make_wav(16, 1, 44100, 0.5, false);
+        let mut c = carrier(DataFormat::WAV, wav.clone());
+        assert!(!handler.verify_integrity(&c).unwrap());
+        handler
+            .embed(&mut c, b"hi", &params("timedomain", None))
+            .await
+            .unwrap();
+        assert!(handler.verify_integrity(&c).unwrap());
     }
 
     #[test]
     fn test_bit_ordering() {
-        let _handler = SignalHandler::new();
-
-        // Test bit conversion - embed and extract "SGSJ"
-        let header = b"SGSJ";
-        let header_bits: Vec<u8> = header
-            .iter()
-            .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
-            .collect();
-
-        // Convert back to bytes
-        let recovered_bytes: Vec<u8> = header_bits
-            .chunks(8)
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .enumerate()
-                    .fold(0u8, |acc, (i, &bit)| acc | (bit << i))
-            })
-            .collect();
-
-        assert_eq!(recovered_bytes, header);
-        println!("Bit ordering test passed: {header:?} -> {recovered_bytes:?}");
+        assert_eq!(bytes_of(&bits_of(b"SGSJ")), b"SGSJ");
     }
 
     #[test]
-    fn test_capacity_estimation() {
-        let handler = SignalHandler::new();
-        let carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: vec![0u8; 8800], // ~0.1 second at 44.1kHz, 16-bit
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        let capacity = handler.estimate_capacity(&carrier).unwrap();
-        assert!(capacity.total_bits > 0);
-        assert!(capacity.recommended_bits > 0);
-        assert!(capacity.steganographic_ratio > 0.0);
-
-        // Per-stealth estimates must be present and ordered: low ≥ medium ≥ high ≥ maximum
-        let low = capacity.format_specific_info["capacity_low_stealth_bits"]
-            .as_u64().unwrap() as usize;
-        let med = capacity.format_specific_info["capacity_medium_stealth_bits"]
-            .as_u64().unwrap() as usize;
-        let high = capacity.format_specific_info["capacity_high_stealth_bits"]
-            .as_u64().unwrap() as usize;
-        let max = capacity.format_specific_info["capacity_maximum_stealth_bits"]
-            .as_u64().unwrap() as usize;
-        assert!(low >= med, "TimeDomainLSB should have >= capacity than FrequencyDomain");
-        assert!(med >= high, "FrequencyDomain should have >= capacity than PhaseModulation");
-        assert!(high >= max, "PhaseModulation should have >= capacity than SpreadSpectrum");
-        assert!(max > 0, "SpreadSpectrum capacity should be positive");
-    }
-
-    #[tokio::test]
-    async fn test_time_domain_embedding_roundtrip() {
-        let handler = SignalHandler::new();
-        let payload = b"Audio steganography test payload";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: [0x80, 0x00].repeat(20000), // Enough samples for payload
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        let mut params = EmbedParams::new(b"test_key".to_vec());
-        params.stealth_level = StealthLevel::Low; // Use time domain LSB
-
-        // Embed
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert_eq!(result.bytes_embedded, payload.len());
-        assert!(result.success);
-
-        // Extract
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-    }
-
-    #[tokio::test]
-    async fn test_encrypted_signal_embedding() {
-        let handler = SignalHandler::with_encryption("signal_password_123").unwrap();
-        let payload = b"Secret audio message";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: [0x80, 0x00].repeat(20000), // Same as working test
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        let mut params = EmbedParams::new(b"key".to_vec());
-        params.stealth_level = StealthLevel::Low; // Use time domain LSB like working test
-
-        // Embed
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert_eq!(result.bytes_embedded, payload.len());
-        assert!(result.success);
-        assert!(result.performance_stats.encryption_time_ms > 0);
-
-        // Extract
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-    }
-
-    #[test]
-    fn test_integrity_verification() {
-        let handler = SignalHandler::new();
-
-        // Create carrier with valid header in time domain
-        let mut audio_data = vec![0u8; 2000];
-        let header_bits = b"SGSJ"
-            .iter()
-            .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1))
-            .collect::<Vec<u8>>();
-
-        // Embed header bits in LSBs of 16-bit samples
-        for (i, &bit) in header_bits.iter().enumerate() {
-            let sample_idx = i * 2;
-            if sample_idx + 1 < audio_data.len() {
-                let mut sample =
-                    i16::from_le_bytes([audio_data[sample_idx], audio_data[sample_idx + 1]]);
-                sample = (sample & 0xFFFEu16 as i16) | (bit as i16);
-                let bytes = sample.to_le_bytes();
-                audio_data[sample_idx] = bytes[0];
-                audio_data[sample_idx + 1] = bytes[1];
-            }
+    fn test_strategy_tag_roundtrip() {
+        for s in SignalEmbedStrategy::ALL {
+            assert_eq!(SignalEmbedStrategy::from_u8(s.to_u8()), Some(s));
         }
-
-        let carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: audio_data,
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        assert!(handler.verify_integrity(&carrier).unwrap());
-
-        // Test with invalid header
-        let invalid_carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: vec![0xFFu8; 2000],
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        assert!(!handler.verify_integrity(&invalid_carrier).unwrap());
-    }
-
-    #[test]
-    fn test_different_strategies_capacity() {
-        let handler = SignalHandler::new();
-
-        let carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: vec![0u8; 88200], // 1 second at 44.1kHz
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        let time_capacity = handler
-            .estimate_signal_capacity(&carrier, &SignalEmbedStrategy::TimeDomainLSB)
-            .unwrap();
-        let freq_capacity = handler
-            .estimate_signal_capacity(&carrier, &SignalEmbedStrategy::FrequencyDomain)
-            .unwrap();
-        let phase_capacity = handler
-            .estimate_signal_capacity(&carrier, &SignalEmbedStrategy::PhaseModulation)
-            .unwrap();
-
-        // Time domain should have highest capacity
-        assert!(time_capacity.recommended_bits >= freq_capacity.recommended_bits);
-        assert!(freq_capacity.recommended_bits >= phase_capacity.recommended_bits);
-    }
-
-    #[test]
-    fn test_insufficient_capacity() {
-        let handler = SignalHandler::new();
-        let large_payload = vec![0u8; 5000]; // Too large
-
-        let mut small_carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: vec![0u8; 200], // Too small
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        let params = EmbedParams::new(b"key".to_vec());
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
-        let result = rt.block_on(handler.embed(&mut small_carrier, &large_payload, &params));
-        assert!(matches!(
-            result,
-            Err(SteganoError::InsufficientCapacity { .. })
-        ));
-    }
-
-    #[test]
-    fn test_extract_time_domain_bits() {
-        let handler = SignalHandler::new();
-        let test_samples = vec![0.5, -0.5, 0.25, -0.25]; // These will have specific LSBs
-
-        let bits = handler.extract_time_domain_bits(&test_samples, 4).unwrap();
-        assert_eq!(bits.len(), 4);
-        // Each bit is the LSB of the 16-bit integer representation
-    }
-
-    /// Generate a pseudo-random carrier with frequency content across the spectrum.
-    /// Using a simple linear congruential sequence to produce varied byte values.
-    fn make_varied_carrier(len: usize) -> Vec<u8> {
-        (0..len)
-            .map(|i| ((i as u32).wrapping_mul(1664525).wrapping_add(1013904223) >> 8) as u8)
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn test_frequency_domain_embedding_roundtrip() {
-        let handler = SignalHandler::new();
-        let payload = b"frequency domain test";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: make_varied_carrier(40960), // 20 full 1024-sample chunks
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        // ECLevel::None: no RS overhead, verifies the raw FFT magnitude round-trip.
-        let params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Medium, // FrequencyDomain
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: std::collections::HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert!(result.success);
-        assert_eq!(result.bytes_embedded, payload.len());
-
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-    }
-
-    #[tokio::test]
-    async fn test_phase_modulation_embedding_roundtrip() {
-        let handler = SignalHandler::new();
-        let payload = b"phase modulation test";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: make_varied_carrier(40960), // 20 full 1024-sample chunks
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        // ECLevel::None: no RS overhead, verifies the raw FFT phase round-trip.
-        let params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::High, // PhaseModulation
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: std::collections::HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert!(result.success);
-        assert_eq!(result.bytes_embedded, payload.len());
-
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-    }
-
-    #[tokio::test]
-    async fn test_spread_spectrum_embedding_roundtrip() {
-        let handler = SignalHandler::new();
-        let payload = b"ss";
-
-        // Silent (all-zero) carrier: ensures the PN-correlation SNR is sufficient
-        // for reliable 1-bit-per-chip extraction (amplitude=0.001, chip_length=44 at
-        // 44.1 kHz → correlation magnitude ≈ 0.044, well above zero noise floor).
-        let sample_rate = 44100u32;
-        let chip_length = sample_rate as usize / 1000; // 44 samples per bit
-        let total_bits = (10 + payload.len()) * 8; // header + payload bits
-        let carrier_samples = (total_bits + 10) * chip_length; // generous headroom
-        let carrier_bytes = carrier_samples * 2; // 16-bit samples
-
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: vec![0u8; carrier_bytes],
-            metadata: std::collections::HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(sample_rate as f64),
-        };
-
-        let params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low, // will be overridden by direct strategy call
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: std::collections::HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-
-        handler
-            .embed_frequency_domain(&mut carrier, payload, &params, &SignalEmbedStrategy::SpreadSpectrum)
-            .await
-            .unwrap();
-
-        let extracted = handler
-            .extract_with_strategy(&carrier, &SignalEmbedStrategy::SpreadSpectrum, &params)
-            .await
-            .unwrap();
-        assert_eq!(extracted, payload);
-    }
-
-    /// Generate white-noise-like i16 samples using a Xorshift32 PRNG (iterative state
-    /// update, not index-based).  Adjacent samples are nearly uncorrelated, giving
-    /// echo hiding the low-baseline-autocorrelation carrier it needs.
-    fn make_echo_carrier(len: usize) -> Vec<u8> {
-        let mut state: u32 = 2463534242; // Xorshift seed
-        (0..len)
-            .map(|_| {
-                state ^= state << 13;
-                state ^= state >> 17;
-                state ^= state << 5;
-                (state >> 24) as u8
-            })
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn test_echo_hiding_embedding_roundtrip() {
-        let handler = SignalHandler::new();
-        let payload = b"echo";
-
-        // Echo hiding encodes 1 bit per 100ms segment (segment_length = 4410 samples at
-        // 44.1 kHz).  Total bits = (10 + 4) * 8 = 112.  Need ≥ 112 * 4410 * 2 ≈ 988 KB.
-        // Use 1.1 MB of white-noise-like i16 samples (Xorshift32) so the echo at
-        // delay_0 / delay_1 is detectable against a near-zero autocorrelation baseline.
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: make_echo_carrier(1_100_000),
-            metadata: std::collections::HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        let params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: std::collections::HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-
-        handler
-            .embed_frequency_domain(&mut carrier, payload, &params, &SignalEmbedStrategy::EchoHiding)
-            .await
-            .unwrap();
-
-        let extracted = handler
-            .extract_with_strategy(&carrier, &SignalEmbedStrategy::EchoHiding, &params)
-            .await
-            .unwrap();
-        assert_eq!(extracted, payload);
-    }
-
-    #[tokio::test]
-    async fn test_echo_hiding_via_format_specific_override() {
-        // Verify EchoHiding is reachable through the public embed() API
-        // via format_specific["signal_strategy"] = "echo".
-        // Echo hiding needs ~1.1 MB of noise-like carrier (same as the direct roundtrip test).
-        let handler = SignalHandler::new();
-
-        let mut carrier = CarrierData {
-            format: DataFormat::WAV,
-            raw_data: make_echo_carrier(1_100_000),
-            metadata: std::collections::HashMap::new(),
-            dimensions: None,
-            sampling_rate: Some(44100.0),
-        };
-
-        // Echo hiding capacity is ~15 bytes per 1.1MB carrier — keep payload short.
-        let payload = b"echo";
-        let mut params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low, // would normally → TimeDomainLSB
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: std::collections::HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-        // Override to EchoHiding
-        params.format_specific.insert(
-            "signal_strategy".to_string(),
-            serde_json::Value::String("echo".to_string()),
-        );
-
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert!(result.success);
-
-        // extract() tries all strategies including EchoHiding, so no override needed
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
+        assert_eq!(SignalEmbedStrategy::from_u8(9), None);
     }
 }

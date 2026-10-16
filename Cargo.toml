@@ -108,6 +108,7 @@ core-graphics-types = { version = "0.1", optional = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.2"
 tempfile = "3.6"
+hound = "3.5"  # WAV writer/reader used by signals handler tests
 rand = "0.8"
 
 # Additional testing utilities

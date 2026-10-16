@@ -309,8 +309,20 @@ fn test_cli_different_file_formats() {
     let temp_dir = TempDir::new().unwrap();
 
     // Test with different file extensions to ensure format detection
+    // The WAV case must be a real RIFF/WAVE header (fmt + data chunk), because the
+    // signal handler parses chunks: 16-bit mono 44.1 kHz with 5000 data bytes.
+    let mut wav_header = b"RIFF".to_vec();
+    wav_header.extend_from_slice(&(36u32 + 5000).to_le_bytes());
+    wav_header.extend_from_slice(b"WAVEfmt ");
+    wav_header.extend_from_slice(&16u32.to_le_bytes());
+    wav_header.extend_from_slice(&[1, 0, 1, 0]); // PCM, 1 channel
+    wav_header.extend_from_slice(&44100u32.to_le_bytes());
+    wav_header.extend_from_slice(&88200u32.to_le_bytes());
+    wav_header.extend_from_slice(&[2, 0, 16, 0]); // block_align 2, 16 bits
+    wav_header.extend_from_slice(b"data");
+    wav_header.extend_from_slice(&5000u32.to_le_bytes());
     let test_cases = vec![
-        ("test.wav", vec![0x52, 0x49, 0x46, 0x46]),
+        ("test.wav", wav_header),
         ("test.bin", vec![0xDEu8; 8]),
         ("test.txt", vec![0x48, 0x65, 0x6C, 0x6C, 0x6F]), // "Hello"
     ];
