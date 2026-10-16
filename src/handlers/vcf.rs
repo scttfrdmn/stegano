@@ -1,7 +1,49 @@
-//! VCF (Variant Call Format) handler for genomics variant data steganography
+//! VCF (Variant Call Format) handler for genomics variant data steganography.
 //!
-//! Implements steganography techniques specifically designed for VCF files,
-//! which contain genomic variant information including SNPs, indels, and structural variants.
+//! # Design
+//!
+//! The carrier is treated as raw text.  Only the records (and the single
+//! column of each record) that a strategy writes to are rewritten; every other
+//! line — meta lines, comments, records that fail to parse, records past the
+//! end of the payload — is copied byte-for-byte, including its line ending
+//! (`\r\n` is preserved), its original QUAL text and its INFO key order.
+//!
+//! The payload is always passed through [`crate::codec::encode_payload`]
+//! (wire format v2, self-framing with its own length).  The embedded *stream*
+//! is `[STREAM_MAGIC, strategy code] ‖ encoded payload`, so extraction can
+//! identify the strategy without trying every one and decodes the codec
+//! payload once.
+//!
+//! # Strategies (`format_specific["vcf_strategy"]`)
+//!
+//! | name | aliases | channel |
+//! |------|---------|---------|
+//! | `info` (default) | `info_fields` | INFO key `STEG=<index>_<hex>`, 32 bytes per record |
+//! | `format` | `sample`, `format_fields` | FORMAT key `STEG`, value `<index>_<hex>`, 16 bytes per sample cell |
+//! | `id` | — | extra ID item `STEG<index>_<hex>` (`;`-separated, original ID kept), 16 bytes per record |
+//! | `quality` | `quality_precision` | 8 bytes per record appended as extra QUAL digits (see below) |
+//! | `multi` | — | the same stream in every one of `info`/`format`/`id` that has room |
+//!
+//! Chunk indices are plain decimal numbers with no width limit, so payloads of
+//! any number of chunks are recovered; missing or duplicated chunks are an
+//! error rather than silent truncation.
+//!
+//! When an INFO or FORMAT key is added, a matching `##INFO=<ID=STEG,...>` /
+//! `##FORMAT=<ID=STEG,...>` line is inserted before `#CHROM` (unless already
+//! declared), so the output stays valid for `bcftools`/htslib.
+//!
+//! ## Quality strategy
+//!
+//! Only QUAL values written as plain decimals (`29`, `29.47`) are used; `.`
+//! (missing) and any other notation are left untouched.  The original QUAL
+//! text is kept as a prefix and a guard digit `0` plus 24 payload digits are
+//! appended (`29.47` → `29.470…`, `29` → `29.0…`).  The numeric value therefore
+//! grows by strictly less than 0.1 units of the last printed digit, and
+//! rounding to the originally printed precision gives back the original text.
+//! It is, however, plainly visible as an unusually long QUAL.
+//!
+//! The format/sample strategy needs sample columns: on a sites-only VCF it is
+//! an error.
 
 use super::DataHandler;
 use crate::core::*;
@@ -12,92 +54,345 @@ use std::time::Instant;
 
 /// Handler for VCF (Variant Call Format) genomics carrier files.
 ///
-/// Embeds payload data in the INFO and FORMAT fields of variant records,
-/// preserving the VCF schema so the file remains valid for variant analysis tools.
+/// See the module documentation for the embedding layout.
 pub struct VcfHandler;
-
-/// VCF file structure for parsing
-#[derive(Debug, Clone)]
-pub struct VcfFile {
-    /// Header lines starting with ##
-    pub header_lines: Vec<String>,
-
-    /// Column header line starting with #CHROM
-    pub column_header: String,
-
-    /// Variant records
-    pub variants: Vec<VcfVariant>,
-}
-
-/// Individual variant record
-#[derive(Debug, Clone)]
-pub struct VcfVariant {
-    /// Chromosome
-    pub chrom: String,
-
-    /// Position (1-based)
-    pub pos: u64,
-
-    /// Variant ID
-    pub id: String,
-
-    /// Reference allele
-    pub ref_allele: String,
-
-    /// Alternative allele(s)
-    pub alt_alleles: Vec<String>,
-
-    /// Quality score
-    pub qual: Option<f32>,
-
-    /// Filter status
-    pub filter: String,
-
-    /// INFO field data
-    pub info: HashMap<String, String>,
-
-    /// FORMAT field
-    pub format: Option<String>,
-
-    /// Sample data
-    pub samples: Vec<HashMap<String, String>>,
-}
 
 /// VCF embedding strategies
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VcfEmbedStrategy {
-    /// Embed in INFO field custom annotations
+    /// INFO key `STEG` on consecutive records.
     InfoFieldSteganography,
 
-    /// Embed in quality score precision
+    /// Extra trailing digits on plain-decimal QUAL values (value change is
+    /// below the last printed digit; `.` is never touched).
     QualityScoreSteganography,
 
-    /// Embed in sample-specific FORMAT fields
+    /// FORMAT key `STEG` in sample columns (requires at least one sample).
     SampleFormatSteganography,
 
-    /// Embed in variant ID custom suffixes
+    /// Extra `;`-separated item in the ID column.
     VariantIdSteganography,
 
-    /// Embed across multiple strategies for redundancy
+    /// The same stream in every INFO / FORMAT / ID channel with room for it.
     MultiStrategy,
 }
 
-/// VCF embedding result
-#[derive(Debug, Clone)]
-pub struct VcfEmbedResult {
-    pub success: bool,
-    pub bytes_embedded: usize,
-    pub strategy_used: VcfEmbedStrategy,
-    pub variants_modified: usize,
-    pub info_fields_added: usize,
-    pub biological_integrity_preserved: bool,
+impl VcfEmbedStrategy {
+    /// Parse a `vcf_strategy` name (case-insensitive).
+    ///
+    /// Accepted: `info` (`info_fields`), `quality` (`quality_precision`),
+    /// `format` (`sample`, `format_fields`), `id`, `multi`.
+    pub fn from_name(name: &str) -> Result<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "info" | "info_fields" => Ok(Self::InfoFieldSteganography),
+            "quality" | "quality_precision" => Ok(Self::QualityScoreSteganography),
+            "format" | "sample" | "format_fields" => Ok(Self::SampleFormatSteganography),
+            "id" => Ok(Self::VariantIdSteganography),
+            "multi" => Ok(Self::MultiStrategy),
+            other => Err(SteganoError::InvalidParameter(format!(
+                "unknown vcf_strategy '{other}'; expected one of: info, quality, \
+                 format (alias: sample), id, multi"
+            ))),
+        }
+    }
+
+    /// Canonical strategy name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::InfoFieldSteganography => "info",
+            Self::QualityScoreSteganography => "quality",
+            Self::SampleFormatSteganography => "format",
+            Self::VariantIdSteganography => "id",
+            Self::MultiStrategy => "multi",
+        }
+    }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::InfoFieldSteganography => 0,
+            Self::QualityScoreSteganography => 1,
+            Self::SampleFormatSteganography => 2,
+            Self::VariantIdSteganography => 3,
+            Self::MultiStrategy => 4,
+        }
+    }
+
+    fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::InfoFieldSteganography),
+            1 => Some(Self::QualityScoreSteganography),
+            2 => Some(Self::SampleFormatSteganography),
+            3 => Some(Self::VariantIdSteganography),
+            4 => Some(Self::MultiStrategy),
+            _ => None,
+        }
+    }
 }
 
-/// Constants for VCF steganography
 const VCF_MAGIC_HEADER: &str = "##fileformat=VCF";
-const STEGANO_INFO_PREFIX: &str = "STEG";
-#[allow(dead_code)]
-const MAX_QUAL_PRECISION: u32 = 3; // Maximum decimal places for quality scores
+/// First byte of every embedded stream.
+const STREAM_MAGIC: u8 = b'V';
+/// INFO / FORMAT key and ID item prefix.
+const STEG_KEY: &str = "STEG";
+const INFO_META: &str =
+    "##INFO=<ID=STEG,Number=1,Type=String,Description=\"Opaque annotation chunk\">";
+const FORMAT_META: &str =
+    "##FORMAT=<ID=STEG,Number=1,Type=String,Description=\"Opaque annotation chunk\">";
+const INFO_CHUNK_BYTES: usize = 32;
+const FORMAT_CHUNK_BYTES: usize = 16;
+const ID_CHUNK_BYTES: usize = 16;
+const QUAL_CHUNK_BYTES: usize = 8;
+/// Guard digit `0` + three decimal digits per byte.
+const QUAL_SUFFIX_LEN: usize = 1 + 3 * QUAL_CHUNK_BYTES;
+/// Stream prefix (magic + strategy) plus the unencrypted, un-EC codec header.
+const MIN_STREAM_OVERHEAD: usize = 2 + 36;
+
+/// Indexed (INFO / FORMAT / ID) channels, in extraction preference order.
+const INDEXED_CHANNELS: [VcfEmbedStrategy; 3] = [
+    VcfEmbedStrategy::InfoFieldSteganography,
+    VcfEmbedStrategy::SampleFormatSteganography,
+    VcfEmbedStrategy::VariantIdSteganography,
+];
+
+/// One physical line: body without its terminator, and the terminator.
+struct Line<'a> {
+    body: &'a [u8],
+    eol: &'a [u8],
+}
+
+/// A VCF file as raw lines.
+struct VcfDoc<'a> {
+    lines: Vec<Line<'a>>,
+    /// Index of the `#CHROM` line.
+    chrom_idx: usize,
+    /// Number of sample columns declared by `#CHROM`.
+    n_samples: usize,
+}
+
+/// Pending modifications: replaced record fields and new meta lines.
+#[derive(Default)]
+struct Edits {
+    records: HashMap<usize, Vec<String>>,
+    meta: Vec<&'static str>,
+}
+
+impl Edits {
+    fn fields_mut(&mut self, line: usize, orig: &[&str]) -> &mut Vec<String> {
+        self.records
+            .entry(line)
+            .or_insert_with(|| orig.iter().map(|s| s.to_string()).collect())
+    }
+
+    fn declare(&mut self, doc: &VcfDoc, kind: &str, meta: &'static str) {
+        if !doc.has_meta(kind, STEG_KEY) && !self.meta.contains(&meta) {
+            self.meta.push(meta);
+        }
+    }
+}
+
+fn split_lines(data: &[u8]) -> Vec<Line<'_>> {
+    data.split_inclusive(|&b| b == b'\n')
+        .map(|seg| {
+            let body_len = if seg.ends_with(b"\r\n") {
+                seg.len() - 2
+            } else if seg.ends_with(b"\n") {
+                seg.len() - 1
+            } else {
+                seg.len()
+            };
+            let (body, eol) = seg.split_at(body_len);
+            Line { body, eol }
+        })
+        .collect()
+}
+
+impl<'a> VcfDoc<'a> {
+    fn parse(data: &'a [u8]) -> Result<Self> {
+        if !data.starts_with(VCF_MAGIC_HEADER.as_bytes()) {
+            return Err(SteganoError::IntegrityError(
+                "Invalid VCF format - missing ##fileformat=VCF header".to_string(),
+            ));
+        }
+        let lines = split_lines(data);
+        let chrom_idx = lines
+            .iter()
+            .position(|l| l.body.starts_with(b"#CHROM"))
+            .ok_or_else(|| {
+                SteganoError::IntegrityError("Invalid VCF format - missing #CHROM line".into())
+            })?;
+        let n_samples = std::str::from_utf8(lines[chrom_idx].body)
+            .map(|s| s.split('\t').count().saturating_sub(9))
+            .unwrap_or(0);
+        Ok(Self {
+            lines,
+            chrom_idx,
+            n_samples,
+        })
+    }
+
+    /// Data lines after `#CHROM` (non-empty, not starting with `#`).
+    fn data_lines(&self) -> impl Iterator<Item = (usize, &'a [u8])> + '_ {
+        self.lines
+            .iter()
+            .enumerate()
+            .skip(self.chrom_idx + 1)
+            .filter(|(_, l)| !l.body.is_empty() && l.body[0] != b'#')
+            .map(|(i, l)| (i, l.body))
+    }
+
+    /// Records usable as carriers: valid UTF-8 with at least 8 columns.
+    fn records(&self) -> impl Iterator<Item = (usize, Vec<&'a str>)> + '_ {
+        self.data_lines().filter_map(|(i, body)| {
+            let s = std::str::from_utf8(body).ok()?;
+            let fields: Vec<&str> = s.split('\t').collect();
+            (fields.len() >= 8).then_some((i, fields))
+        })
+    }
+
+    /// Whether a `##<kind>=<ID=<id>,...>` meta line exists.
+    fn has_meta(&self, kind: &str, id: &str) -> bool {
+        self.lines[..self.chrom_idx].iter().any(|l| {
+            std::str::from_utf8(l.body)
+                .ok()
+                .and_then(|s| s.strip_prefix("##"))
+                .and_then(|s| s.strip_prefix(kind))
+                .and_then(|s| s.strip_prefix("=<ID="))
+                .and_then(|s| s.strip_prefix(id))
+                .is_some_and(|rest| rest.starts_with(',') || rest.starts_with('>'))
+        })
+    }
+
+    fn render(&self, edits: &Edits) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            if i == self.chrom_idx {
+                let eol: &[u8] = if line.eol.is_empty() { b"\n" } else { line.eol };
+                for meta in &edits.meta {
+                    out.extend_from_slice(meta.as_bytes());
+                    out.extend_from_slice(eol);
+                }
+            }
+            match edits.records.get(&i) {
+                Some(fields) => out.extend_from_slice(fields.join("\t").as_bytes()),
+                None => out.extend_from_slice(line.body),
+            }
+            out.extend_from_slice(line.eol);
+        }
+        out
+    }
+
+    /// Records with a FORMAT column and at least one sample whose sample
+    /// columns are not longer than FORMAT (so an appended key lines up).
+    fn format_records(&self) -> impl Iterator<Item = (usize, Vec<&'a str>)> + '_ {
+        self.records().filter(|(_, f)| {
+            if f.len() < 10 || f[8].is_empty() || f[8] == "." {
+                return false;
+            }
+            let nkeys = f[8].split(':').count();
+            f[9..].iter().all(|s| s.split(':').count() <= nkeys)
+        })
+    }
+
+    /// Raw byte capacity of a channel.
+    fn channel_capacity(&self, strategy: VcfEmbedStrategy) -> usize {
+        match strategy {
+            VcfEmbedStrategy::InfoFieldSteganography => self.records().count() * INFO_CHUNK_BYTES,
+            VcfEmbedStrategy::VariantIdSteganography => self.records().count() * ID_CHUNK_BYTES,
+            VcfEmbedStrategy::SampleFormatSteganography => {
+                self.format_records()
+                    .map(|(_, f)| f.len() - 9)
+                    .sum::<usize>()
+                    * FORMAT_CHUNK_BYTES
+            }
+            VcfEmbedStrategy::QualityScoreSteganography => {
+                self.records()
+                    .filter(|(_, f)| is_plain_decimal(f[5]))
+                    .count()
+                    * QUAL_CHUNK_BYTES
+            }
+            VcfEmbedStrategy::MultiStrategy => INDEXED_CHANNELS
+                .iter()
+                .map(|&s| self.channel_capacity(s))
+                .filter(|&c| c > 0)
+                .min()
+                .unwrap_or(0),
+        }
+    }
+}
+
+fn is_plain_decimal(q: &str) -> bool {
+    let (int, frac) = match q.split_once('.') {
+        Some((a, b)) => (a, Some(b)),
+        None => (q, None),
+    };
+    !int.is_empty()
+        && int.bytes().all(|b| b.is_ascii_digit())
+        && frac.is_none_or(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn chunk_value(index: usize, chunk: &[u8]) -> String {
+    format!("{index}_{}", hex::encode(chunk))
+}
+
+/// Parse `<decimal index>_<hex>`; `None` if `s` is not in that form.
+fn parse_chunk(s: &str) -> Option<(usize, Vec<u8>)> {
+    let (index, hex_part) = s.split_once('_')?;
+    if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) || hex_part.is_empty() {
+        return None;
+    }
+    Some((index.parse().ok()?, hex::decode(hex_part).ok()?))
+}
+
+/// Order chunks by index, requiring exactly 0..n.
+fn assemble(mut chunks: Vec<(usize, Vec<u8>)>, channel: &str) -> Result<Option<Vec<u8>>> {
+    if chunks.is_empty() {
+        return Ok(None);
+    }
+    chunks.sort_by_key(|(i, _)| *i);
+    let mut out = Vec::new();
+    for (expected, (index, data)) in chunks.into_iter().enumerate() {
+        if index != expected {
+            return Err(SteganoError::IntegrityError(format!(
+                "VCF {channel} data is incomplete: chunk {expected} missing or duplicated"
+            )));
+        }
+        out.extend_from_slice(&data);
+    }
+    Ok(Some(out))
+}
+
+fn capacity_error(needed_bytes: usize, available_bytes: usize) -> SteganoError {
+    SteganoError::InsufficientCapacity {
+        needed: needed_bytes * 8,
+        available: available_bytes * 8,
+    }
+}
+
+fn sites_only_error() -> SteganoError {
+    SteganoError::InvalidParameter(
+        "VCF has no usable sample columns (sites-only VCF); the 'format'/'sample' strategy \
+         needs at least one sample column - use 'info' or 'id' instead"
+            .to_string(),
+    )
+}
+
+fn already_embedded_error(channel: &str) -> SteganoError {
+    SteganoError::InvalidParameter(format!(
+        "VCF carrier already contains stegano data in the {channel} channel"
+    ))
+}
+
+fn strategy_from_params(params: &EmbedParams) -> Result<Option<VcfEmbedStrategy>> {
+    match params.format_specific.get("vcf_strategy") {
+        None => Ok(None),
+        Some(v) => {
+            let name = v.as_str().ok_or_else(|| {
+                SteganoError::InvalidParameter("vcf_strategy must be a string".to_string())
+            })?;
+            VcfEmbedStrategy::from_name(name).map(Some)
+        }
+    }
+}
 
 impl Default for VcfHandler {
     fn default() -> Self {
@@ -110,809 +405,332 @@ impl VcfHandler {
         Self
     }
 
-    /// Parse VCF file content
-    fn parse_vcf(&self, data: &[u8]) -> Result<VcfFile> {
-        let content = String::from_utf8_lossy(data);
-        let lines: Vec<&str> = content.lines().collect();
+    // ----- embedding ---------------------------------------------------------
 
-        if lines.is_empty() {
-            return Err(SteganoError::IntegrityError("Empty VCF file".to_string()));
+    fn embed_channel(
+        &self,
+        doc: &VcfDoc,
+        strategy: VcfEmbedStrategy,
+        stream: &[u8],
+        edits: &mut Edits,
+    ) -> Result<()> {
+        let available = doc.channel_capacity(strategy);
+        if stream.len() > available {
+            return Err(capacity_error(stream.len(), available));
         }
-
-        // Verify VCF format
-        if !lines[0].starts_with(VCF_MAGIC_HEADER) {
-            return Err(SteganoError::IntegrityError(
-                "Invalid VCF format - missing header".to_string(),
-            ));
-        }
-
-        let mut header_lines = Vec::new();
-        let mut column_header = String::new();
-        let mut variants = Vec::new();
-        let mut in_data_section = false;
-
-        for line in lines {
-            if line.starts_with("##") {
-                header_lines.push(line.to_string());
-            } else if line.starts_with("#CHROM") {
-                column_header = line.to_string();
-                in_data_section = true;
-            } else if in_data_section && !line.trim().is_empty() {
-                match self.parse_variant_line(line, &column_header) {
-                    Ok(variant) => variants.push(variant),
-                    Err(e) => {
-                        log::warn!("Failed to parse variant line '{line}': {e}");
+        match strategy {
+            VcfEmbedStrategy::InfoFieldSteganography => {
+                let chunks = stream.chunks(INFO_CHUNK_BYTES).enumerate();
+                for ((index, chunk), (line, orig)) in chunks.zip(doc.records()) {
+                    let fields = edits.fields_mut(line, &orig);
+                    let item = format!("{STEG_KEY}={}", chunk_value(index, chunk));
+                    if fields[7].is_empty() || fields[7] == "." {
+                        fields[7] = item;
+                    } else {
+                        fields[7].push(';');
+                        fields[7].push_str(&item);
+                    }
+                }
+                edits.declare(doc, "INFO", INFO_META);
+            }
+            VcfEmbedStrategy::VariantIdSteganography => {
+                let chunks = stream.chunks(ID_CHUNK_BYTES).enumerate();
+                for ((index, chunk), (line, orig)) in chunks.zip(doc.records()) {
+                    let fields = edits.fields_mut(line, &orig);
+                    let item = format!("{STEG_KEY}{}", chunk_value(index, chunk));
+                    if fields[2].is_empty() || fields[2] == "." {
+                        fields[2] = item;
+                    } else {
+                        fields[2].push(';');
+                        fields[2].push_str(&item);
                     }
                 }
             }
-        }
-
-        Ok(VcfFile {
-            header_lines,
-            column_header,
-            variants,
-        })
-    }
-
-    /// Parse individual variant line
-    fn parse_variant_line(&self, line: &str, column_header: &str) -> Result<VcfVariant> {
-        let fields: Vec<&str> = line.split('\t').collect();
-        let header_fields: Vec<&str> = column_header.split('\t').collect();
-
-        if fields.len() < 8 {
-            return Err(SteganoError::IntegrityError(
-                "Invalid variant line - insufficient fields".to_string(),
-            ));
-        }
-
-        // Parse basic fields
-        let chrom = fields[0].to_string();
-        let pos = fields[1]
-            .parse::<u64>()
-            .map_err(|_| SteganoError::IntegrityError("Invalid position field".to_string()))?;
-        let id = fields[2].to_string();
-        let ref_allele = fields[3].to_string();
-        let alt_alleles: Vec<String> = fields[4].split(',').map(|s| s.to_string()).collect();
-
-        let qual = if fields[5] == "." {
-            None
-        } else {
-            fields[5].parse::<f32>().ok()
-        };
-
-        let filter = fields[6].to_string();
-
-        // Parse INFO field
-        let info = self.parse_info_field(fields[7])?;
-
-        // Parse FORMAT and sample data if present
-        let (format, samples) = if fields.len() > 9 && !fields[8].is_empty() {
-            let format_str = fields[8].to_string();
-            let mut samples = Vec::new();
-
-            // Parse sample columns
-            for (sample_field, header_field) in
-                fields[9..].iter().zip(header_fields[9..].iter())
-            {
-                let sample_data = self.parse_sample_data(&format_str, sample_field)?;
-                let _ = header_field; // zip ensures we stay within header bounds
-                samples.push(sample_data);
-            }
-
-            (Some(format_str), samples)
-        } else {
-            (None, Vec::new())
-        };
-
-        Ok(VcfVariant {
-            chrom,
-            pos,
-            id,
-            ref_allele,
-            alt_alleles,
-            qual,
-            filter,
-            info,
-            format,
-            samples,
-        })
-    }
-
-    /// Parse INFO field into key-value pairs
-    fn parse_info_field(&self, info_str: &str) -> Result<HashMap<String, String>> {
-        let mut info = HashMap::new();
-
-        if info_str == "." {
-            return Ok(info);
-        }
-
-        for pair in info_str.split(';') {
-            if let Some(eq_pos) = pair.find('=') {
-                let key = pair[..eq_pos].to_string();
-                let value = pair[eq_pos + 1..].to_string();
-                info.insert(key, value);
-            } else {
-                // Flag field (no value)
-                info.insert(pair.to_string(), "".to_string());
-            }
-        }
-
-        Ok(info)
-    }
-
-    /// Parse sample data based on FORMAT field
-    fn parse_sample_data(
-        &self,
-        format_str: &str,
-        sample_str: &str,
-    ) -> Result<HashMap<String, String>> {
-        let mut sample_data = HashMap::new();
-        let format_fields: Vec<&str> = format_str.split(':').collect();
-        let sample_values: Vec<&str> = sample_str.split(':').collect();
-
-        for (i, &field) in format_fields.iter().enumerate() {
-            let value = sample_values.get(i).unwrap_or(&".").to_string();
-            sample_data.insert(field.to_string(), value);
-        }
-
-        Ok(sample_data)
-    }
-
-    /// Embed payload using INFO field steganography
-    fn embed_info_field_strategy(
-        &self,
-        vcf: &mut VcfFile,
-        payload: &[u8],
-    ) -> Result<VcfEmbedResult> {
-        // Create a payload with length header
-        let mut full_payload = Vec::new();
-        let payload_len = payload.len() as u32;
-        full_payload.extend_from_slice(&payload_len.to_le_bytes());
-        full_payload.extend_from_slice(payload);
-
-        // Convert to hex for embedding in INFO fields
-        let hex_payload = hex::encode(full_payload);
-
-        // Calculate chunks to distribute across variants
-        let chunk_size = 32; // 32 hex characters per variant
-        let chunks: Vec<&str> = hex_payload
-            .as_bytes()
-            .chunks(chunk_size)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
-            .collect();
-
-        if chunks.len() > vcf.variants.len() {
-            return Err(SteganoError::InsufficientCapacity {
-                needed: chunks.len(),
-                available: vcf.variants.len(),
-            });
-        }
-
-        let mut variants_modified = 0;
-        let mut info_fields_added = 0;
-
-        // Embed chunks in INFO fields
-        for (i, chunk) in chunks.iter().enumerate() {
-            if i < vcf.variants.len() && !chunk.is_empty() {
-                let info_key = format!("{STEGANO_INFO_PREFIX}_{i:04}");
-                vcf.variants[i].info.insert(info_key, chunk.to_string());
-                variants_modified += 1;
-                info_fields_added += 1;
-            }
-        }
-
-        Ok(VcfEmbedResult {
-            success: true,
-            bytes_embedded: payload.len(),
-            strategy_used: VcfEmbedStrategy::InfoFieldSteganography,
-            variants_modified,
-            info_fields_added,
-            biological_integrity_preserved: true, // INFO fields don't affect biology
-        })
-    }
-
-    /// Extract payload from INFO field steganography
-    fn extract_info_field_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        let mut hex_chunks = Vec::new();
-
-        // Collect steganographic INFO fields in order by filtering keys directly
-        let prefix_with_sep = format!("{STEGANO_INFO_PREFIX}_");
-        for variant in &vcf.variants {
-            for (key, chunk) in &variant.info {
-                if let Some(suffix) = key.strip_prefix(&prefix_with_sep) {
-                    if let Ok(index) = suffix.parse::<usize>() {
-                        hex_chunks.push((index, chunk.clone()));
+            VcfEmbedStrategy::SampleFormatSteganography => {
+                let mut chunks = stream.chunks(FORMAT_CHUNK_BYTES).enumerate().peekable();
+                for (line, orig) in doc.format_records() {
+                    if chunks.peek().is_none() {
+                        break;
+                    }
+                    let fields = edits.fields_mut(line, &orig);
+                    let nkeys = fields[8].split(':').count();
+                    fields[8].push(':');
+                    fields[8].push_str(STEG_KEY);
+                    for sample in fields.iter_mut().skip(9) {
+                        let Some((index, chunk)) = chunks.next() else {
+                            break;
+                        };
+                        // Fill dropped trailing sub-fields so STEG lines up with FORMAT.
+                        for _ in sample.split(':').count()..nkeys {
+                            sample.push_str(":.");
+                        }
+                        sample.push(':');
+                        sample.push_str(&chunk_value(index, chunk));
                     }
                 }
+                edits.declare(doc, "FORMAT", FORMAT_META);
             }
-        }
-
-        if hex_chunks.is_empty() {
-            return Err(SteganoError::IntegrityError(
-                "No steganographic data found in INFO fields".to_string(),
-            ));
-        }
-
-        // Sort by index to reconstruct original order
-        hex_chunks.sort_by_key(|(index, _)| *index);
-
-        // Concatenate hex chunks
-        let hex_payload: String = hex_chunks.into_iter().map(|(_, chunk)| chunk).collect();
-
-        // Decode hex to bytes
-        let full_payload = hex::decode(hex_payload).map_err(|_| {
-            SteganoError::IntegrityError("Invalid hex data in INFO fields".to_string())
-        })?;
-
-        // Extract payload length from first 4 bytes
-        if full_payload.len() < 4 {
-            return Err(SteganoError::IntegrityError(
-                "Insufficient data to extract payload length".to_string(),
-            ));
-        }
-
-        let payload_len = u32::from_le_bytes([
-            full_payload[0],
-            full_payload[1],
-            full_payload[2],
-            full_payload[3],
-        ]) as usize;
-
-        // Validate payload length
-        if payload_len + 4 > full_payload.len() {
-            return Err(SteganoError::IntegrityError(
-                "Invalid payload length in extracted data".to_string(),
-            ));
-        }
-
-        // Extract the actual payload
-        let payload = full_payload[4..4 + payload_len].to_vec();
-
-        Ok(payload)
-    }
-
-    /// Embed payload using quality score steganography (self-framing: 4-byte length header)
-    fn embed_quality_strategy(&self, vcf: &mut VcfFile, payload: &[u8]) -> Result<VcfEmbedResult> {
-        // Prepend 4-byte LE length header so extraction is self-framing
-        let len_bytes = (payload.len() as u32).to_le_bytes();
-        let framed: Vec<u8> = len_bytes.iter().chain(payload.iter()).copied().collect();
-
-        // Convert framed payload to bits (LSB-first per byte)
-        let mut payload_bits = Vec::new();
-        for byte in &framed {
-            for i in 0..8 {
-                payload_bits.push((byte >> i) & 1);
-            }
-        }
-
-        // Find variants with quality scores
-        let available_variants: Vec<usize> = vcf
-            .variants
-            .iter()
-            .enumerate()
-            .filter_map(|(i, var)| if var.qual.is_some() { Some(i) } else { None })
-            .collect();
-
-        if available_variants.len() * 3 < payload_bits.len() {
-            return Err(SteganoError::InsufficientCapacity {
-                needed: payload_bits.len(),
-                available: available_variants.len() * 3,
-            });
-        }
-
-        let mut bit_index = 0;
-        let mut variants_modified = 0;
-
-        // Embed 3 bits per variant by storing them in the low 3 bits of the integer quality score.
-        // This avoids floating-point decimal-precision issues: qual is stored as floor(qual/8)*8 + 3-bit_value.
-        for &var_idx in &available_variants {
-            if bit_index >= payload_bits.len() {
-                break;
-            }
-
-            if let Some(qual) = vcf.variants[var_idx].qual {
-                let integer_qual = qual.round() as u32;
-                // Pack up to 3 bits into the low 3 bits
-                let b0 = if bit_index < payload_bits.len() { let b = payload_bits[bit_index]; bit_index += 1; b } else { 0 };
-                let b1 = if bit_index < payload_bits.len() { let b = payload_bits[bit_index]; bit_index += 1; b } else { 0 };
-                let b2 = if bit_index < payload_bits.len() { let b = payload_bits[bit_index]; bit_index += 1; b } else { 0 };
-                let triplet = b0 as u32 | ((b1 as u32) << 1) | ((b2 as u32) << 2);
-                // Store: clear low 3 bits, set to triplet
-                let new_qual = (integer_qual & !7) | (triplet & 7);
-                vcf.variants[var_idx].qual = Some(new_qual as f32);
-                variants_modified += 1;
-            }
-        }
-
-        Ok(VcfEmbedResult {
-            success: bit_index >= payload_bits.len(),
-            bytes_embedded: payload.len(),
-            strategy_used: VcfEmbedStrategy::QualityScoreSteganography,
-            variants_modified,
-            info_fields_added: 0,
-            biological_integrity_preserved: true, // Quality score precision doesn't affect biology
-        })
-    }
-
-    /// Extract payload from quality score steganography (self-framing: reads 4-byte length header)
-    fn extract_quality_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        // Collect all bits from low 3 bits of integer quality scores
-        let all_bits: Vec<u8> = vcf
-            .variants
-            .iter()
-            .filter_map(|v| v.qual)
-            .flat_map(|qual| {
-                let t = qual.round() as u32 & 7;
-                [(t & 1) as u8, ((t >> 1) & 1) as u8, ((t >> 2) & 1) as u8]
-            })
-            .collect();
-
-        // Need at least 32 bits for the 4-byte length header
-        if all_bits.len() < 32 {
-            return Err(SteganoError::IntegrityError(
-                "Insufficient quality data for length header".to_string(),
-            ));
-        }
-
-        // Decode 4-byte LE length from first 32 bits
-        let mut len_bytes = [0u8; 4];
-        for (byte_idx, chunk) in all_bits[..32].chunks(8).enumerate() {
-            let mut byte = 0u8;
-            for (i, &bit) in chunk.iter().enumerate() {
-                byte |= bit << i;
-            }
-            len_bytes[byte_idx] = byte;
-        }
-        let payload_length = u32::from_le_bytes(len_bytes) as usize;
-
-        let required_bits = 32 + payload_length * 8;
-        if all_bits.len() < required_bits {
-            return Err(SteganoError::IntegrityError(
-                "Insufficient quality variants for payload extraction".to_string(),
-            ));
-        }
-
-        // Convert payload bits (skip first 32 header bits) back to bytes
-        let mut payload = Vec::with_capacity(payload_length);
-        for chunk in all_bits[32..required_bits].chunks(8) {
-            if chunk.len() == 8 {
-                let mut byte = 0u8;
-                for (i, &bit) in chunk.iter().enumerate() {
-                    byte |= bit << i;
-                }
-                payload.push(byte);
-            }
-        }
-
-        if payload.is_empty() && payload_length > 0 {
-            return Err(SteganoError::IntegrityError(
-                "No steganographic data found in quality scores".to_string(),
-            ));
-        }
-
-        Ok(payload)
-    }
-
-    /// Embed payload using sample FORMAT field steganography
-    fn embed_sample_format_strategy(
-        &self,
-        vcf: &mut VcfFile,
-        payload: &[u8],
-    ) -> Result<VcfEmbedResult> {
-        let hex_payload = hex::encode(payload);
-        let mut variants_modified = 0;
-        let mut info_fields_added = 0;
-
-        let chunk_size = 16; // 16 hex characters per variant
-
-        let chunks: Vec<&str> = hex_payload
-            .as_bytes()
-            .chunks(chunk_size)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
-            .collect();
-
-        if chunks.len() > vcf.variants.len() {
-            return Err(SteganoError::InsufficientCapacity {
-                needed: chunks.len(),
-                available: vcf.variants.len(),
-            });
-        }
-
-        // Each chunk gets its own indexed FORMAT tag (S00, S01, …) so extraction can
-        // reconstruct order even if variants are reordered between embed and extract.
-        for (i, chunk) in chunks.iter().enumerate() {
-            if i < vcf.variants.len() && !chunk.is_empty() {
-                let variant = &mut vcf.variants[i];
-                let field_tag = format!("S{i:02}"); // S00 … S99
-
-                // Update FORMAT field
-                if let Some(ref mut format) = variant.format {
-                    if !format.contains(&field_tag) {
-                        format.push_str(&format!(":{field_tag}"));
+            VcfEmbedStrategy::QualityScoreSteganography => {
+                let carriers = doc.records().filter(|(_, f)| is_plain_decimal(f[5]));
+                for (chunk, (line, orig)) in stream.chunks(QUAL_CHUNK_BYTES).zip(carriers) {
+                    let fields = edits.fields_mut(line, &orig);
+                    let mut digits = String::with_capacity(QUAL_SUFFIX_LEN);
+                    digits.push('0'); // guard digit: keeps the change below the last printed digit
+                    for i in 0..QUAL_CHUNK_BYTES {
+                        digits.push_str(&format!("{:03}", chunk.get(i).copied().unwrap_or(0)));
                     }
-                } else {
-                    variant.format = Some(format!("GT:{field_tag}"));
+                    if !fields[5].contains('.') {
+                        fields[5].push('.');
+                    }
+                    fields[5].push_str(&digits);
                 }
-
-                // Add steganographic data to each sample
-                for sample in &mut variant.samples {
-                    sample.insert(field_tag.clone(), chunk.to_string());
-                }
-
-                variants_modified += 1;
-                info_fields_added += variant.samples.len();
             }
+            VcfEmbedStrategy::MultiStrategy => unreachable!("multi is expanded by the caller"),
         }
-
-        Ok(VcfEmbedResult {
-            success: true,
-            bytes_embedded: payload.len(),
-            strategy_used: VcfEmbedStrategy::SampleFormatSteganography,
-            variants_modified,
-            info_fields_added,
-            biological_integrity_preserved: true, // Custom FORMAT fields don't affect biology
-        })
+        Ok(())
     }
 
-    /// Extract payload from sample FORMAT field steganography
-    fn extract_sample_format_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        // Collect (index, hex_chunk) pairs from indexed tags S00, S01, …
-        let mut indexed_chunks: Vec<(usize, String)> = Vec::new();
+    // ----- extraction --------------------------------------------------------
 
-        for variant in &vcf.variants {
-            if let Some(ref format) = variant.format {
-                for field_name in format.split(':') {
-                    // Match S\d\d pattern (e.g. S00, S01, … S99)
-                    if field_name.len() == 3
-                        && field_name.starts_with('S')
-                        && field_name[1..].chars().all(|c| c.is_ascii_digit())
-                    {
-                        if let Ok(idx) = field_name[1..].parse::<usize>() {
-                            if let Some(sample) = variant.samples.first() {
-                                if let Some(chunk) = sample.get(field_name) {
-                                    if !chunk.is_empty() && chunk != "." {
-                                        indexed_chunks.push((idx, chunk.clone()));
-                                    }
+    /// Read the raw stream of one channel (`Ok(None)` if the channel is empty).
+    fn read_channel(&self, doc: &VcfDoc, strategy: VcfEmbedStrategy) -> Result<Option<Vec<u8>>> {
+        let mut chunks = Vec::new();
+        match strategy {
+            VcfEmbedStrategy::InfoFieldSteganography => {
+                let prefix = format!("{STEG_KEY}=");
+                for (_, f) in doc.records() {
+                    for item in f[7].split(';') {
+                        if let Some(value) = item.strip_prefix(prefix.as_str()) {
+                            let chunk = parse_chunk(value).ok_or_else(|| {
+                                SteganoError::IntegrityError("Malformed VCF INFO chunk".into())
+                            })?;
+                            chunks.push(chunk);
+                        }
+                    }
+                }
+                assemble(chunks, "INFO")
+            }
+            VcfEmbedStrategy::VariantIdSteganography => {
+                for (_, f) in doc.records() {
+                    for item in f[2].split(';') {
+                        // Items that merely start with "STEG" but are not chunks are ignored.
+                        if let Some(chunk) = item.strip_prefix(STEG_KEY).and_then(parse_chunk) {
+                            chunks.push(chunk);
+                        }
+                    }
+                }
+                assemble(chunks, "ID")
+            }
+            VcfEmbedStrategy::SampleFormatSteganography => {
+                for (_, f) in doc.records() {
+                    if f.len() < 10 {
+                        continue;
+                    }
+                    let Some(pos) = f[8].split(':').position(|k| k == STEG_KEY) else {
+                        continue;
+                    };
+                    for sample in &f[9..] {
+                        match sample.split(':').nth(pos) {
+                            None | Some(".") | Some("") => {}
+                            Some(value) => chunks.push(parse_chunk(value).ok_or_else(|| {
+                                SteganoError::IntegrityError("Malformed VCF FORMAT chunk".into())
+                            })?),
+                        }
+                    }
+                }
+                assemble(chunks, "FORMAT")
+            }
+            VcfEmbedStrategy::QualityScoreSteganography => {
+                let mut out = Vec::new();
+                'records: for (_, f) in doc.records().filter(|(_, f)| is_plain_decimal(f[5])) {
+                    let frac = f[5].split_once('.').map(|(_, frac)| frac).unwrap_or("");
+                    let Some(suffix) = frac
+                        .len()
+                        .checked_sub(QUAL_SUFFIX_LEN)
+                        .and_then(|start| frac.get(start..))
+                    else {
+                        break;
+                    };
+                    let Some(digits) = suffix.strip_prefix('0') else {
+                        break;
+                    };
+                    let mut bytes = Vec::with_capacity(QUAL_CHUNK_BYTES);
+                    for i in 0..QUAL_CHUNK_BYTES {
+                        match digits
+                            .get(3 * i..3 * i + 3)
+                            .and_then(|t| t.parse::<u8>().ok())
+                        {
+                            Some(b) => bytes.push(b),
+                            None => break 'records,
+                        }
+                    }
+                    out.extend_from_slice(&bytes);
+                }
+                Ok((!out.is_empty()).then_some(out))
+            }
+            VcfEmbedStrategy::MultiStrategy => unreachable!("multi is expanded by the caller"),
+        }
+    }
+
+    /// Validate the stream prefix; return the strategy and codec payload.
+    fn split_stream(stream: &[u8]) -> Option<(VcfEmbedStrategy, &[u8])> {
+        match stream {
+            [STREAM_MAGIC, code, rest @ ..] => Some((VcfEmbedStrategy::from_code(*code)?, rest)),
+            _ => None,
+        }
+    }
+
+    /// Candidate codec payloads, in preference order.
+    fn candidate_payloads(
+        &self,
+        doc: &VcfDoc,
+        requested: Option<VcfEmbedStrategy>,
+    ) -> Result<Vec<Vec<u8>>> {
+        match requested {
+            Some(strategy) if strategy != VcfEmbedStrategy::MultiStrategy => {
+                let stream = self.read_channel(doc, strategy)?.ok_or_else(|| {
+                    SteganoError::IntegrityError(format!(
+                        "No stegano data found in the VCF {} channel",
+                        strategy.name()
+                    ))
+                })?;
+                let (found, payload) = Self::split_stream(&stream).ok_or_else(|| {
+                    SteganoError::IntegrityError("Unrecognised VCF stegano stream".into())
+                })?;
+                let multi_ok = found == VcfEmbedStrategy::MultiStrategy
+                    && strategy != VcfEmbedStrategy::QualityScoreSteganography;
+                if found != strategy && !multi_ok {
+                    return Err(SteganoError::InvalidParameter(format!(
+                        "VCF data was embedded with strategy '{}', not '{}'",
+                        found.name(),
+                        strategy.name()
+                    )));
+                }
+                Ok(vec![payload.to_vec()])
+            }
+            _ => {
+                let mut channels = INDEXED_CHANNELS.to_vec();
+                if requested.is_none() {
+                    channels.push(VcfEmbedStrategy::QualityScoreSteganography);
+                }
+                let mut candidates: Vec<Vec<u8>> = Vec::new();
+                let mut last_err = None;
+                for channel in channels {
+                    match self.read_channel(doc, channel) {
+                        Ok(Some(stream)) => {
+                            if let Some((found, payload)) = Self::split_stream(&stream) {
+                                let plausible = found == channel
+                                    || (found == VcfEmbedStrategy::MultiStrategy
+                                        && channel != VcfEmbedStrategy::QualityScoreSteganography);
+                                if plausible && !candidates.iter().any(|c| c == payload) {
+                                    candidates.push(payload.to_vec());
                                 }
                             }
                         }
+                        Ok(None) => {}
+                        Err(e) => last_err = Some(e),
                     }
                 }
-            }
-        }
-
-        if indexed_chunks.is_empty() {
-            return Err(SteganoError::IntegrityError(
-                "No steganographic data found in FORMAT fields".to_string(),
-            ));
-        }
-
-        // Sort by index to restore original chunk order
-        indexed_chunks.sort_by_key(|(idx, _)| *idx);
-        let hex_payload: String = indexed_chunks.into_iter().map(|(_, c)| c).collect();
-
-        hex::decode(hex_payload).map_err(|_| {
-            SteganoError::IntegrityError("Invalid hex data in FORMAT fields".to_string())
-        })
-    }
-
-    /// Embed payload using variant ID steganography
-    fn embed_variant_id_strategy(
-        &self,
-        vcf: &mut VcfFile,
-        payload: &[u8],
-    ) -> Result<VcfEmbedResult> {
-        let hex_payload = hex::encode(payload);
-        let chunk_size = 8; // 8 hex characters per variant ID suffix
-
-        let chunks: Vec<&str> = hex_payload
-            .as_bytes()
-            .chunks(chunk_size)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
-            .collect();
-
-        if chunks.len() > vcf.variants.len() {
-            return Err(SteganoError::InsufficientCapacity {
-                needed: chunks.len(),
-                available: vcf.variants.len(),
-            });
-        }
-
-        let mut variants_modified = 0;
-
-        // Embed chunks in variant IDs — always include a 4-digit index so extraction
-        // can sort chunks back into the correct order regardless of variant reordering.
-        for (i, chunk) in chunks.iter().enumerate() {
-            if i < vcf.variants.len() && !chunk.is_empty() {
-                let variant = &mut vcf.variants[i];
-
-                // Format: STEG{i:04}_{hex_chunk} appended after the existing ID
-                let steg_suffix = format!("STEG{i:04}_{chunk}");
-                let new_id = if variant.id == "." {
-                    steg_suffix
-                } else {
-                    format!("{}_{}",  variant.id, steg_suffix)
-                };
-
-                variant.id = new_id;
-                variants_modified += 1;
-            }
-        }
-
-        Ok(VcfEmbedResult {
-            success: true,
-            bytes_embedded: payload.len(),
-            strategy_used: VcfEmbedStrategy::VariantIdSteganography,
-            variants_modified,
-            info_fields_added: 0,
-            biological_integrity_preserved: true, // Variant IDs are primarily for reference
-        })
-    }
-
-    /// Extract payload from variant ID steganography
-    fn extract_variant_id_strategy(&self, vcf: &VcfFile) -> Result<Vec<u8>> {
-        // Collect (index, hex_chunk) pairs by finding "STEG{4digits}_{hex}" pattern
-        let marker = "STEG";
-        let mut indexed_chunks: Vec<(usize, String)> = Vec::new();
-
-        for variant in &vcf.variants {
-            if let Some(steg_pos) = variant.id.find(marker) {
-                let after = &variant.id[steg_pos + marker.len()..];
-                // after should start with 4 decimal digits, then '_', then hex chunk
-                if after.len() >= 6
-                    && after[..4].chars().all(|c| c.is_ascii_digit())
-                    && after.as_bytes().get(4) == Some(&b'_')
-                {
-                    if let Ok(idx) = after[..4].parse::<usize>() {
-                        let rest = &after[5..];
-                        let hex_end = rest
-                            .find(|c: char| !c.is_ascii_hexdigit())
-                            .unwrap_or(rest.len());
-                        let hex_chunk = &rest[..hex_end];
-                        if !hex_chunk.is_empty() {
-                            indexed_chunks.push((idx, hex_chunk.to_string()));
-                        }
-                    }
+                if candidates.is_empty() {
+                    return Err(last_err.unwrap_or_else(|| {
+                        SteganoError::IntegrityError("No stegano data found in VCF".to_string())
+                    }));
                 }
+                Ok(candidates)
             }
         }
-
-        if indexed_chunks.is_empty() {
-            return Err(SteganoError::IntegrityError(
-                "No steganographic data found in variant IDs".to_string(),
-            ));
-        }
-
-        // Sort by index to restore original chunk order
-        indexed_chunks.sort_by_key(|(idx, _)| *idx);
-        let hex_payload: String = indexed_chunks.into_iter().map(|(_, c)| c).collect();
-
-        hex::decode(hex_payload).map_err(|_| {
-            SteganoError::IntegrityError("Invalid hex data in variant IDs".to_string())
-        })
     }
 
-    /// Estimate capacity for VCF file
-    fn estimate_vcf_capacity(
-        &self,
-        data: &[u8],
-        strategy: VcfEmbedStrategy,
-    ) -> Result<CapacityInfo> {
-        let vcf = self.parse_vcf(data)?;
-        let variant_count = vcf.variants.len();
+    // ----- capacity / integrity ----------------------------------------------
 
-        let estimated_bytes = match strategy {
-            VcfEmbedStrategy::InfoFieldSteganography => {
-                // 32 hex chars (16 bytes) per variant
-                variant_count * 16
-            }
-            VcfEmbedStrategy::QualityScoreSteganography => {
-                // 3 bits per variant with quality score
-                let quality_variants = vcf.variants.iter().filter(|v| v.qual.is_some()).count();
-                quality_variants * 3 / 8 // Convert bits to bytes
-            }
-            VcfEmbedStrategy::SampleFormatSteganography => {
-                // 16 hex chars (8 bytes) per variant
-                variant_count * 8
-            }
-            VcfEmbedStrategy::VariantIdSteganography => {
-                // 8 hex chars (4 bytes) per variant
-                variant_count * 4
-            }
-            VcfEmbedStrategy::MultiStrategy => {
-                // Combined capacity of all strategies
-                let info_capacity = variant_count * 16;
-                let quality_variants = vcf.variants.iter().filter(|v| v.qual.is_some()).count();
-                let quality_capacity = quality_variants * 3 / 8;
-                let format_capacity = variant_count * 8;
-                let id_capacity = variant_count * 4;
-
-                info_capacity + quality_capacity + format_capacity + id_capacity
-            }
-        };
+    fn estimate_vcf_capacity(&self, data: &[u8]) -> Result<CapacityInfo> {
+        let doc = VcfDoc::parse(data)?;
+        let default = VcfEmbedStrategy::InfoFieldSteganography;
+        let usable = doc
+            .channel_capacity(default)
+            .saturating_sub(MIN_STREAM_OVERHEAD);
 
         let total_bits = data.len() * 8;
-        let recommended_bits = estimated_bytes * 8;
+        let recommended_bits = (usable * 8).min(total_bits);
 
-        let mut format_info = HashMap::new();
-        format_info.insert(
-            "method".to_string(),
-            serde_json::Value::String(format!("{strategy:?}")),
-        );
-        format_info.insert(
-            "variants".to_string(),
-            serde_json::Value::Number(variant_count.into()),
-        );
-        format_info.insert(
-            "estimated_capacity_bytes".to_string(),
-            serde_json::Value::Number(estimated_bytes.into()),
-        );
-        format_info.insert(
-            "samples".to_string(),
-            serde_json::Value::Number(
-                vcf.variants
-                    .first()
-                    .map(|v| v.samples.len())
-                    .unwrap_or(0)
-                    .into(),
-            ),
+        let mut strategies = serde_json::Map::new();
+        for s in [
+            VcfEmbedStrategy::InfoFieldSteganography,
+            VcfEmbedStrategy::SampleFormatSteganography,
+            VcfEmbedStrategy::VariantIdSteganography,
+            VcfEmbedStrategy::QualityScoreSteganography,
+            VcfEmbedStrategy::MultiStrategy,
+        ] {
+            let bits = doc.channel_capacity(s).saturating_sub(MIN_STREAM_OVERHEAD) * 8;
+            strategies.insert(s.name().to_string(), bits.into());
+        }
+
+        let mut info = HashMap::new();
+        info.insert("method".to_string(), default.name().into());
+        info.insert("variants".to_string(), doc.records().count().into());
+        info.insert("samples".to_string(), doc.n_samples.into());
+        info.insert("estimated_capacity_bytes".to_string(), usable.into());
+        info.insert(
+            "strategies".to_string(),
+            serde_json::Value::Object(strategies),
         );
 
         Ok(CapacityInfo {
             total_bits,
             recommended_bits,
-            steganographic_ratio: recommended_bits as f64 / total_bits as f64,
-            format_specific_info: format_info,
+            steganographic_ratio: if total_bits == 0 {
+                0.0
+            } else {
+                recommended_bits as f64 / total_bits as f64
+            },
+            format_specific_info: info,
         })
     }
 
-    /// Serialize VCF file back to string format
-    fn serialize_vcf(&self, vcf: &VcfFile) -> String {
-        let mut result = String::new();
-
-        // Add header lines
-        for header in &vcf.header_lines {
-            result.push_str(header);
-            result.push('\n');
-        }
-
-        // Add column header
-        result.push_str(&vcf.column_header);
-        result.push('\n');
-
-        // Add variant lines
-        for variant in &vcf.variants {
-            result.push_str(&self.serialize_variant(variant));
-            result.push('\n');
-        }
-
-        result
-    }
-
-    /// Serialize individual variant to string
-    fn serialize_variant(&self, variant: &VcfVariant) -> String {
-        let mut fields = vec![
-            variant.chrom.clone(),
-            variant.pos.to_string(),
-            variant.id.clone(),
-            variant.ref_allele.clone(),
-            variant.alt_alleles.join(","),
-        ];
-
-        // Quality field — use integer formatting since we embed in integer bits
-        if let Some(qual) = variant.qual {
-            fields.push(format!("{}", qual.round() as u32));
-        } else {
-            fields.push(".".to_string());
-        }
-
-        // Filter field
-        fields.push(variant.filter.clone());
-
-        // INFO field
-        let info_str = if variant.info.is_empty() {
-            ".".to_string()
-        } else {
-            variant
-                .info
-                .iter()
-                .map(|(k, v)| {
-                    if v.is_empty() {
-                        k.clone()
-                    } else {
-                        format!("{k}={v}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(";")
-        };
-        fields.push(info_str);
-
-        // FORMAT and sample fields
-        if let Some(ref format) = variant.format {
-            fields.push(format.clone());
-
-            // Sample data
-            for sample in &variant.samples {
-                let format_fields: Vec<&str> = format.split(':').collect();
-                let sample_values: Vec<String> = format_fields
-                    .iter()
-                    .map(|field| {
-                        sample
-                            .get(*field)
-                            .cloned()
-                            .unwrap_or_else(|| ".".to_string())
-                    })
-                    .collect();
-                fields.push(sample_values.join(":"));
-            }
-        }
-
-        fields.join("\t")
-    }
-
-    /// Verify VCF biological integrity
     fn verify_vcf_integrity(&self, data: &[u8]) -> Result<bool> {
-        match self.parse_vcf(data) {
-            Ok(vcf) => {
-                // Check that all variants have valid chromosomes and positions
-                for variant in &vcf.variants {
-                    if variant.chrom.is_empty() || variant.pos == 0 {
-                        return Ok(false);
-                    }
-
-                    // Check that reference and alternative alleles are valid
-                    if variant.ref_allele.is_empty() || variant.alt_alleles.is_empty() {
-                        return Ok(false);
-                    }
-
-                    // Validate nucleotide sequences
-                    for allele in std::iter::once(&variant.ref_allele).chain(&variant.alt_alleles) {
-                        if !allele
-                            .chars()
-                            .all(|c| "ATCGN.-".contains(c.to_ascii_uppercase()))
-                        {
-                            return Ok(false);
-                        }
-                    }
-                }
-
-                Ok(true)
+        let Ok(doc) = VcfDoc::parse(data) else {
+            return Ok(false);
+        };
+        for (_, body) in doc.data_lines() {
+            let Ok(line) = std::str::from_utf8(body) else {
+                return Ok(false);
+            };
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 8 || f[0].is_empty() || f[1].parse::<u64>().map_or(true, |p| p == 0) {
+                return Ok(false);
             }
-            Err(_) => Ok(false),
+            let is_bases = |a: &str| {
+                !a.is_empty()
+                    && a.chars()
+                        .all(|c| "ATCGN.-".contains(c.to_ascii_uppercase()))
+            };
+            if !is_bases(f[3]) {
+                return Ok(false);
+            }
+            for alt in f[4].split(',') {
+                let symbolic = alt == "*"
+                    || (alt.starts_with('<') && alt.ends_with('>'))
+                    || alt.contains('[')
+                    || alt.contains(']');
+                if !symbolic && !is_bases(alt) {
+                    return Ok(false);
+                }
+            }
         }
-    }
-
-    /// Check if data is VCF format
-    fn is_vcf(&self, data: &[u8]) -> bool {
-        if data.is_empty() {
-            return false;
-        }
-
-        let text = String::from_utf8_lossy(data);
-        text.starts_with(VCF_MAGIC_HEADER)
+        Ok(true)
     }
 }
 
 #[async_trait]
 impl DataHandler for VcfHandler {
     fn detect_format(&self, data: &[u8]) -> Option<DataFormat> {
-        if self.is_vcf(data) {
-            Some(DataFormat::VCF)
-        } else {
-            None
-        }
+        data.starts_with(VCF_MAGIC_HEADER.as_bytes())
+            .then_some(DataFormat::VCF)
     }
 
     fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo> {
         match carrier.format {
-            DataFormat::VCF => {
-                // Use INFO field steganography as default for capacity estimation
-                self.estimate_vcf_capacity(
-                    &carrier.raw_data,
-                    VcfEmbedStrategy::InfoFieldSteganography,
-                )
-            }
+            DataFormat::VCF => self.estimate_vcf_capacity(&carrier.raw_data),
             _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
         }
     }
@@ -923,137 +741,85 @@ impl DataHandler for VcfHandler {
         payload: &[u8],
         params: &EmbedParams,
     ) -> Result<EmbedResult> {
-        let start_time = Instant::now();
-
-        // Apply codec (encryption / error correction) when requested
-        let use_codec = !params.encryption_key.is_empty()
-            || params.error_correction_level != crate::core::ECLevel::None;
-        let final_payload: Vec<u8> = if use_codec {
-            crate::codec::encode_payload(payload, params)?
-        } else {
-            payload.to_vec()
-        };
-
-        match carrier.format {
-            DataFormat::VCF => {
-                let mut vcf = self.parse_vcf(&carrier.raw_data)?;
-
-                // Determine strategy from parameters or use default
-                let strategy = params
-                    .format_specific
-                    .get("vcf_strategy")
-                    .and_then(|v| v.as_str())
-                    .map(|s| match s {
-                        "info" => VcfEmbedStrategy::InfoFieldSteganography,
-                        "quality" => VcfEmbedStrategy::QualityScoreSteganography,
-                        "format" => VcfEmbedStrategy::SampleFormatSteganography,
-                        "id" => VcfEmbedStrategy::VariantIdSteganography,
-                        "multi" => VcfEmbedStrategy::MultiStrategy,
-                        _ => VcfEmbedStrategy::InfoFieldSteganography,
-                    })
-                    .unwrap_or(VcfEmbedStrategy::InfoFieldSteganography);
-
-                let embed_result = match strategy {
-                    VcfEmbedStrategy::InfoFieldSteganography => {
-                        self.embed_info_field_strategy(&mut vcf, &final_payload)?
-                    }
-                    VcfEmbedStrategy::QualityScoreSteganography => {
-                        self.embed_quality_strategy(&mut vcf, &final_payload)?
-                    }
-                    VcfEmbedStrategy::SampleFormatSteganography => {
-                        self.embed_sample_format_strategy(&mut vcf, &final_payload)?
-                    }
-                    VcfEmbedStrategy::VariantIdSteganography => {
-                        self.embed_variant_id_strategy(&mut vcf, &final_payload)?
-                    }
-                    VcfEmbedStrategy::MultiStrategy => {
-                        // Try multiple strategies in order of preference
-                        self.embed_info_field_strategy(&mut vcf, &final_payload)
-                            .or_else(|_| {
-                                self.embed_sample_format_strategy(&mut vcf, &final_payload)
-                            })
-                            .or_else(|_| {
-                                self.embed_variant_id_strategy(&mut vcf, &final_payload)
-                            })?
-                    }
-                };
-
-                // Serialize modified VCF back to data
-                let serialized_vcf = self.serialize_vcf(&vcf);
-                carrier.raw_data = serialized_vcf.into_bytes();
-
-                let embedding_time = start_time.elapsed().as_millis() as u64;
-
-                Ok(EmbedResult {
-                    success: embed_result.success,
-                    bytes_embedded: embed_result.bytes_embedded,
-                    carrier_modified: true,
-                    performance_stats: PerformanceStats {
-                        embedding_time_ms: embedding_time,
-                        encryption_time_ms: 0,
-                        gpu_acceleration_used: false,
-                        memory_usage_bytes: carrier.raw_data.len() + payload.len(),
-                    },
-                    validation_report: None,
-                })
-            }
-            _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
+        if carrier.format != DataFormat::VCF {
+            return Err(SteganoError::UnsupportedFormat(carrier.format.clone()));
         }
+        let start_time = Instant::now();
+        let strategy =
+            strategy_from_params(params)?.unwrap_or(VcfEmbedStrategy::InfoFieldSteganography);
+
+        let output = {
+            let doc = VcfDoc::parse(&carrier.raw_data)?;
+
+            // Channels to write; validated before the (expensive) codec runs.
+            let channels: Vec<VcfEmbedStrategy> = match strategy {
+                VcfEmbedStrategy::MultiStrategy => INDEXED_CHANNELS
+                    .into_iter()
+                    .filter(|&c| doc.channel_capacity(c) > 0)
+                    .collect(),
+                VcfEmbedStrategy::SampleFormatSteganography
+                    if doc.channel_capacity(strategy) == 0 =>
+                {
+                    return Err(sites_only_error())
+                }
+                s => vec![s],
+            };
+            for &c in &channels {
+                if c != VcfEmbedStrategy::QualityScoreSteganography
+                    && self.read_channel(&doc, c).ok().flatten().is_some()
+                {
+                    return Err(already_embedded_error(c.name()));
+                }
+            }
+
+            let mut stream = vec![STREAM_MAGIC, strategy.code()];
+            stream.extend_from_slice(&crate::codec::encode_payload(payload, params)?);
+
+            let mut edits = Edits::default();
+            let mut written = 0;
+            let mut last_err = None;
+            for &c in &channels {
+                match self.embed_channel(&doc, c, &stream, &mut edits) {
+                    Ok(()) => written += 1,
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            if written == 0 {
+                return Err(last_err.unwrap_or_else(|| capacity_error(stream.len(), 0)));
+            }
+            doc.render(&edits)
+        };
+        carrier.raw_data = output;
+
+        Ok(EmbedResult {
+            success: true,
+            bytes_embedded: payload.len(),
+            carrier_modified: true,
+            performance_stats: PerformanceStats {
+                embedding_time_ms: start_time.elapsed().as_millis() as u64,
+                encryption_time_ms: 0,
+                gpu_acceleration_used: false,
+                memory_usage_bytes: carrier.raw_data.len() + payload.len(),
+            },
+            validation_report: None,
+        })
     }
 
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
-        match carrier.format {
-            DataFormat::VCF => {
-                let vcf = self.parse_vcf(&carrier.raw_data)?;
-
-                // Determine strategy from parameters or try all
-                let strategy = params
-                    .format_specific
-                    .get("vcf_strategy")
-                    .and_then(|v| v.as_str())
-                    .map(|s| match s {
-                        "info" => VcfEmbedStrategy::InfoFieldSteganography,
-                        "quality" => VcfEmbedStrategy::QualityScoreSteganography,
-                        "format" => VcfEmbedStrategy::SampleFormatSteganography,
-                        "id" => VcfEmbedStrategy::VariantIdSteganography,
-                        "multi" => VcfEmbedStrategy::MultiStrategy,
-                        _ => VcfEmbedStrategy::InfoFieldSteganography,
-                    })
-                    .unwrap_or(VcfEmbedStrategy::InfoFieldSteganography);
-
-                let raw = match strategy {
-                    VcfEmbedStrategy::InfoFieldSteganography => {
-                        self.extract_info_field_strategy(&vcf)
-                    }
-                    VcfEmbedStrategy::QualityScoreSteganography => {
-                        self.extract_quality_strategy(&vcf)
-                    }
-                    VcfEmbedStrategy::SampleFormatSteganography => {
-                        self.extract_sample_format_strategy(&vcf)
-                    }
-                    VcfEmbedStrategy::VariantIdSteganography => {
-                        self.extract_variant_id_strategy(&vcf)
-                    }
-                    VcfEmbedStrategy::MultiStrategy => {
-                        // Try strategies in order until one succeeds
-                        self.extract_info_field_strategy(&vcf)
-                            .or_else(|_| self.extract_sample_format_strategy(&vcf))
-                            .or_else(|_| self.extract_variant_id_strategy(&vcf))
-                            .or_else(|_| self.extract_quality_strategy(&vcf))
-                    }
-                }?;
-
-                // Decode codec (encryption / error correction) when it was applied
-                let use_codec = !params.encryption_key.is_empty()
-                    || params.error_correction_level != crate::core::ECLevel::None;
-                if use_codec {
-                    crate::codec::decode_payload(&raw, params)
-                } else {
-                    Ok(raw)
-                }
-            }
-            _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
+        if carrier.format != DataFormat::VCF {
+            return Err(SteganoError::UnsupportedFormat(carrier.format.clone()));
         }
+        let requested = strategy_from_params(params)?;
+        let doc = VcfDoc::parse(&carrier.raw_data)?;
+        let mut last_err = None;
+        for payload in self.candidate_payloads(&doc, requested)? {
+            match crate::codec::decode_payload(&payload, params) {
+                Ok(data) => return Ok(data),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| SteganoError::IntegrityError("No stegano data found in VCF".into())))
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {
@@ -1067,311 +833,427 @@ impl DataHandler for VcfHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+
+    const HEADER: &str = "##fileformat=VCFv4.2\n##source=test\n";
+    const COLS: &str = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO";
+    const COLS_SAMPLES: &str = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2";
+
+    /// `n` records; with samples when `samples` is true.
+    fn make_vcf(n: usize, samples: bool, eol: &str) -> Vec<u8> {
+        let mut s = String::new();
+        for l in HEADER.lines() {
+            s.push_str(l);
+            s.push_str(eol);
+        }
+        s.push_str(if samples { COLS_SAMPLES } else { COLS });
+        s.push_str(eol);
+        for i in 0..n {
+            let qual = match i % 4 {
+                0 => "29.47".to_string(),
+                1 => format!("{}", 30 + i % 50),
+                2 => ".".to_string(),
+                _ => "1e3".to_string(),
+            };
+            let id = if i % 3 == 0 {
+                ".".to_string()
+            } else {
+                format!("rs{i}")
+            };
+            s.push_str(&format!(
+                "chr1\t{}\t{id}\tA\tT\t{qual}\tPASS\tZZ=1;DP={};AA=0.5",
+                100 + i,
+                i
+            ));
+            if samples {
+                s.push_str("\tGT:DP\t0/1:12\t1|1");
+            }
+            s.push_str(eol);
+        }
+        s.into_bytes()
+    }
+
+    fn params(strategy: &str, password: &str) -> EmbedParams {
+        let mut p = EmbedParams {
+            encryption_key: password.as_bytes().to_vec(),
+            error_correction_level: ECLevel::None,
+            ..Default::default()
+        };
+        p.format_specific.insert(
+            "vcf_strategy".to_string(),
+            serde_json::Value::String(strategy.to_string()),
+        );
+        p
+    }
+
+    fn carrier(data: Vec<u8>) -> CarrierData {
+        CarrierData::new(DataFormat::VCF, data)
+    }
+
+    async fn roundtrip(data: Vec<u8>, payload: &[u8], p: &EmbedParams) -> CarrierData {
+        let handler = VcfHandler::new();
+        let mut c = carrier(data);
+        let r = handler.embed(&mut c, payload, p).await.unwrap();
+        assert!(r.success);
+        assert_eq!(r.bytes_embedded, payload.len());
+        assert_eq!(handler.extract(&c, p).await.unwrap(), payload);
+        // Strategy is self-describing: extraction without a strategy works too.
+        let mut auto = p.clone();
+        auto.format_specific.remove("vcf_strategy");
+        assert_eq!(handler.extract(&c, &auto).await.unwrap(), payload);
+        assert!(handler.verify_integrity(&c).unwrap());
+        c
+    }
+
+    fn lines_of(data: &[u8]) -> Vec<&[u8]> {
+        data.split_inclusive(|&b| b == b'\n').collect()
+    }
 
     #[test]
     fn test_vcf_detection() {
         let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n##source=test\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\t.\n";
-        assert_eq!(handler.detect_format(vcf_data), Some(DataFormat::VCF));
-    }
-
-    #[test]
-    fn test_vcf_parsing() {
-        let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n##source=test\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\trs123\tA\tT\t30.5\tPASS\tDP=50;AF=0.5\n";
-
-        let vcf = handler.parse_vcf(vcf_data).unwrap();
-        assert_eq!(vcf.variants.len(), 1);
-
-        let variant = &vcf.variants[0];
-        assert_eq!(variant.chrom, "chr1");
-        assert_eq!(variant.pos, 100);
-        assert_eq!(variant.id, "rs123");
-        assert_eq!(variant.ref_allele, "A");
-        assert_eq!(variant.alt_alleles, vec!["T"]);
-        assert_eq!(variant.qual, Some(30.5));
-        assert_eq!(variant.filter, "PASS");
-        assert_eq!(variant.info.get("DP"), Some(&"50".to_string()));
-        assert_eq!(variant.info.get("AF"), Some(&"0.5".to_string()));
+        assert_eq!(
+            handler.detect_format(&make_vcf(1, false, "\n")),
+            Some(DataFormat::VCF)
+        );
+        assert_eq!(handler.detect_format(b"@HD\tVN:1.6"), None);
     }
 
     #[test]
     fn test_vcf_capacity_estimation() {
         let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\t.\nchr1\t200\t.\tG\tC\t45.0\tPASS\t.\n";
-
-        let carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let capacity = handler.estimate_capacity(&carrier).unwrap();
+        let capacity = handler
+            .estimate_capacity(&carrier(make_vcf(20, true, "\n")))
+            .unwrap();
         assert!(capacity.recommended_bits > 0);
-        assert!(capacity.steganographic_ratio > 0.0);
-    }
-
-    #[tokio::test]
-    async fn test_vcf_info_field_embedding_roundtrip() {
-        let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\tDP=50\nchr1\t200\t.\tG\tC\t45.0\tPASS\tAF=0.5\nchr1\t300\t.\tC\tA\t60.0\tPASS\t.\n";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let payload = b"secret genomics variant data";
-        let mut params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            format_specific: HashMap::new(),
-            enable_validation: false,
-            cipher_kind: Default::default(),
-        };
-        params.format_specific.insert(
-            "vcf_strategy".to_string(),
-            serde_json::Value::String("info".to_string()),
-        );
-
-        // Embed
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert!(result.success);
-        assert_eq!(result.bytes_embedded, payload.len());
-
-        // Extract
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-
-        // Verify integrity
-        assert!(handler.verify_integrity(&carrier).unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_vcf_quality_score_embedding_roundtrip() {
-        let handler = VcfHandler::new();
-        // Need ≥14 variants: 4-byte length header + 1-byte payload = 40 bits at 3 bits/variant
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30\tPASS\t.\nchr1\t200\t.\tG\tC\t45\tPASS\t.\nchr1\t300\t.\tC\tA\t60\tPASS\t.\nchr1\t400\t.\tT\tG\t75\tPASS\t.\nchr1\t500\t.\tA\tC\t90\tPASS\t.\nchr1\t600\t.\tG\tT\t50\tPASS\t.\nchr1\t700\t.\tC\tG\t35\tPASS\t.\nchr1\t800\t.\tT\tA\t80\tPASS\t.\nchr1\t900\t.\tA\tG\t40\tPASS\t.\nchr1\t1000\t.\tG\tA\t55\tPASS\t.\nchr1\t1100\t.\tC\tT\t70\tPASS\t.\nchr1\t1200\t.\tT\tC\t85\tPASS\t.\nchr1\t1300\t.\tA\tT\t25\tPASS\t.\nchr1\t1400\t.\tG\tC\t95\tPASS\t.\n";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let payload = b"x"; // 1 byte payload for quality score strategy
-        let mut params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            format_specific: HashMap::new(),
-            enable_validation: false,
-            cipher_kind: Default::default(),
-        };
-        params.format_specific.insert(
-            "vcf_strategy".to_string(),
-            serde_json::Value::String("quality".to_string()),
-        );
-
-        // Embed
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert!(result.success);
-
-        // Extract
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-
-        // Verify integrity
-        assert!(handler.verify_integrity(&carrier).unwrap());
+        assert!(capacity.recommended_bits <= capacity.total_bits);
+        assert!(capacity.format_specific_info.contains_key("strategies"));
     }
 
     #[test]
-    fn test_vcf_serialization() {
+    fn test_strategy_names() {
+        use VcfEmbedStrategy::*;
+        assert_eq!(
+            VcfEmbedStrategy::from_name("sample").unwrap(),
+            SampleFormatSteganography
+        );
+        assert_eq!(
+            VcfEmbedStrategy::from_name("FORMAT").unwrap(),
+            SampleFormatSteganography
+        );
+        assert_eq!(
+            VcfEmbedStrategy::from_name("info").unwrap(),
+            InfoFieldSteganography
+        );
+        assert!(VcfEmbedStrategy::from_name("bogus").is_err());
+        for s in [
+            InfoFieldSteganography,
+            QualityScoreSteganography,
+            SampleFormatSteganography,
+            VariantIdSteganography,
+            MultiStrategy,
+        ] {
+            assert_eq!(VcfEmbedStrategy::from_code(s.code()), Some(s));
+            assert_eq!(VcfEmbedStrategy::from_name(s.name()).unwrap(), s);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_every_strategy_roundtrip_with_and_without_password() {
+        for strategy in ["info", "quality", "format", "sample", "id", "multi"] {
+            for password in ["", "correct horse"] {
+                let p = params(strategy, password);
+                roundtrip(
+                    make_vcf(40, true, "\n"),
+                    b"secret genomics variant data",
+                    &p,
+                )
+                .await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_wrong_password_and_missing_password_fail() {
         let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n##source=test\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\trs123\tA\tT\t30.5\tPASS\tDP=50;AF=0.5\n";
+        let p = params("info", "right");
+        let c = roundtrip(make_vcf(10, false, "\n"), b"enc", &p).await;
+        assert!(handler.extract(&c, &params("info", "wrong")).await.is_err());
+        assert!(handler.extract(&c, &params("info", "")).await.is_err());
+    }
 
-        let vcf = handler.parse_vcf(vcf_data).unwrap();
-        let serialized = handler.serialize_vcf(&vcf);
+    #[tokio::test]
+    async fn test_error_correction_roundtrip() {
+        let mut p = params("info", "pw");
+        p.error_correction_level = ECLevel::High;
+        roundtrip(make_vcf(40, false, "\n"), b"ec payload", &p).await;
+    }
 
-        // Should be able to parse the serialized version
-        let reparsed = handler.parse_vcf(serialized.as_bytes()).unwrap();
-        assert_eq!(reparsed.variants.len(), vcf.variants.len());
-        assert_eq!(reparsed.variants[0].chrom, vcf.variants[0].chrom);
-        assert_eq!(reparsed.variants[0].pos, vcf.variants[0].pos);
+    #[tokio::test]
+    async fn test_unchanged_lines_byte_identical_crlf() {
+        // CRLF input with float QUALs, a comment line and an unparseable line.
+        let mut data = make_vcf(12, false, "\r\n");
+        data.extend_from_slice(b"#a comment line\r\n");
+        data.extend_from_slice(b"garbage line without tabs\r\n");
+        data.extend_from_slice(b"chr2\t5\t.\tG\tC\t29.47\tPASS\tB=2;A=1\r\n");
+        let p = params("info", "");
+        let handler = VcfHandler::new();
+        let mut c = carrier(data.clone());
+        handler.embed(&mut c, b"x", &p).await.unwrap();
+
+        let before = lines_of(&data);
+        let after: Vec<&[u8]> = lines_of(&c.raw_data)
+            .into_iter()
+            .filter(|l| !l.starts_with(b"##INFO=<ID=STEG"))
+            .collect();
+        assert_eq!(before.len(), after.len());
+        let mut changed = 0;
+        for (b, a) in before.iter().zip(&after) {
+            assert!(a.ends_with(b"\r\n"), "CRLF must be preserved");
+            if b != a {
+                changed += 1;
+                // Only the INFO column was extended; original text kept as prefix.
+                let b = std::str::from_utf8(b).unwrap().trim_end();
+                let a = std::str::from_utf8(a).unwrap().trim_end();
+                assert!(
+                    a.starts_with(b) && a[b.len()..].starts_with(";STEG="),
+                    "{a}"
+                );
+            }
+        }
+        // 1-byte payload + 38-byte overhead = 2 INFO chunks.
+        assert_eq!(changed, 2);
+        let text = String::from_utf8(c.raw_data.clone()).unwrap();
+        assert!(text.contains("\t29.47\tPASS\tZZ=1;DP=0;AA=0.5;STEG=0_"));
+        assert!(text.contains("garbage line without tabs\r\n"));
+        assert!(text.contains("chr2\t5\t.\tG\tC\t29.47\tPASS\tB=2;A=1\r\n"));
+        assert!(text.contains("##INFO=<ID=STEG,Number=1,Type=String,Description=\"Opaque annotation chunk\">\r\n#CHROM"));
+    }
+
+    #[tokio::test]
+    async fn test_header_declares_every_new_key() {
+        let handler = VcfHandler::new();
+        for strategy in ["info", "format", "multi", "id"] {
+            let mut c = carrier(make_vcf(30, true, "\n"));
+            handler
+                .embed(&mut c, b"declare me", &params(strategy, ""))
+                .await
+                .unwrap();
+            let doc = VcfDoc::parse(&c.raw_data).unwrap();
+            let mut info_keys = std::collections::HashSet::new();
+            let mut format_keys = std::collections::HashSet::new();
+            for (_, f) in doc.records() {
+                for item in f[7].split(';') {
+                    info_keys.insert(item.split('=').next().unwrap().to_string());
+                }
+                for k in f[8].split(':') {
+                    format_keys.insert(k.to_string());
+                }
+            }
+            for k in ["ZZ", "DP", "AA"] {
+                info_keys.remove(k); // pre-existing (undeclared in the input fixture)
+            }
+            format_keys.remove("GT");
+            format_keys.remove("DP");
+            for k in &info_keys {
+                assert!(doc.has_meta("INFO", k), "{strategy}: INFO {k} undeclared");
+            }
+            for k in &format_keys {
+                assert!(
+                    doc.has_meta("FORMAT", k),
+                    "{strategy}: FORMAT {k} undeclared"
+                );
+            }
+            // Declared only once, and only if used.
+            let text = String::from_utf8(c.raw_data.clone()).unwrap();
+            assert!(text.matches("##INFO=<ID=STEG").count() <= 1);
+            assert_eq!(text.contains("##INFO=<ID=STEG"), info_keys.contains("STEG"));
+            assert_eq!(
+                text.contains("##FORMAT=<ID=STEG"),
+                format_keys.contains("STEG")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_existing_declaration_not_duplicated() {
+        let mut data = b"##fileformat=VCFv4.2\n".to_vec();
+        data.extend_from_slice(INFO_META.as_bytes());
+        data.extend_from_slice(b"\n");
+        data.extend_from_slice(&make_vcf(5, false, "\n")[21..]);
+        let c = roundtrip(data, b"x", &params("info", "")).await;
+        let text = String::from_utf8(c.raw_data).unwrap();
+        assert_eq!(text.matches("##INFO=<ID=STEG").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_more_than_100_chunks() {
+        let payload: Vec<u8> = (0..3500u32).map(|i| (i * 7 % 251) as u8).collect();
+        for strategy in ["info", "id", "format", "quality", "multi"] {
+            let c = roundtrip(make_vcf(1000, true, "\n"), &payload, &params(strategy, "")).await;
+            if strategy == "id" {
+                let text = String::from_utf8(c.raw_data).unwrap();
+                assert!(text.contains(";STEG150_") || text.contains("\tSTEG150_"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_missing_chunk_is_an_error() {
+        let handler = VcfHandler::new();
+        let payload = vec![0xAB; 200];
+        let p = params("info", "");
+        let mut c = carrier(make_vcf(20, false, "\n"));
+        handler.embed(&mut c, &payload, &p).await.unwrap();
+        // Drop the record carrying chunk 1.
+        let text = String::from_utf8(c.raw_data).unwrap();
+        let cut: String = text
+            .split_inclusive('\n')
+            .filter(|l| !l.contains(";STEG=1_"))
+            .collect();
+        let err = handler
+            .extract(&carrier(cut.into_bytes()), &p)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("chunk 1"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_unicode_ids_do_not_panic() {
+        let mut data = make_vcf(0, false, "\n");
+        for (i, id) in [
+            "rsé",
+            "STEGé_ab",
+            "STEG٣_00",
+            "STEG1_zz",
+            "STEGOSAURUS",
+            "ü;STEG",
+        ]
+        .iter()
+        .enumerate()
+        {
+            data.extend_from_slice(
+                format!("chr1\t{}\t{id}\tA\tT\t30\tPASS\tK=ü\n", i + 1).as_bytes(),
+            );
+        }
+        let handler = VcfHandler::new();
+        // Nothing embedded yet: clean errors, no panic.
+        assert!(handler
+            .extract(&carrier(data.clone()), &params("id", ""))
+            .await
+            .is_err());
+        assert!(handler
+            .extract(&carrier(data.clone()), &EmbedParams::default())
+            .await
+            .is_err());
+        // Embedding into unicode IDs keeps the original ID and round-trips.
+        let c = roundtrip(data, b"u", &params("id", "")).await;
+        let text = String::from_utf8(c.raw_data).unwrap();
+        assert!(text.contains("\trsé;STEG"));
+    }
+
+    #[tokio::test]
+    async fn test_sites_only_format_strategy_errors() {
+        let handler = VcfHandler::new();
+        for name in ["format", "sample"] {
+            let mut c = carrier(make_vcf(10, false, "\n"));
+            let err = handler
+                .embed(&mut c, b"x", &params(name, ""))
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("sites-only"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unknown_strategy_and_mismatch_errors() {
+        let handler = VcfHandler::new();
+        let mut c = carrier(make_vcf(10, false, "\n"));
+        assert!(handler
+            .embed(&mut c, b"x", &params("bogus", ""))
+            .await
+            .is_err());
+        handler
+            .embed(&mut c, b"x", &params("info", ""))
+            .await
+            .unwrap();
+        assert!(handler.extract(&c, &params("id", "")).await.is_err());
+        // Re-embedding into the same channel is refused rather than corrupting it.
+        assert!(handler
+            .embed(&mut c, b"y", &params("info", ""))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_insufficient_capacity() {
+        let handler = VcfHandler::new();
+        let mut c = carrier(make_vcf(2, false, "\n"));
+        let err = handler
+            .embed(&mut c, &[0u8; 500], &params("info", ""))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SteganoError::InsufficientCapacity { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_quality_strategy_is_sub_digit_and_keeps_missing() {
+        let data = make_vcf(40, false, "\n");
+        let c = roundtrip(data.clone(), b"q", &params("quality", "")).await;
+        let before = VcfDoc::parse(&data).unwrap();
+        let after = VcfDoc::parse(&c.raw_data).unwrap();
+        let mut modified = 0;
+        for ((_, b), (_, a)) in before.records().zip(after.records()) {
+            let (bq, aq) = (b[5], a[5]);
+            if bq == aq {
+                continue;
+            }
+            modified += 1;
+            assert!(
+                is_plain_decimal(bq),
+                "only plain decimals are touched: {bq}"
+            );
+            // Original text is a prefix (plus ".") and the next digit is the 0 guard.
+            let base = if bq.contains('.') {
+                bq.to_string()
+            } else {
+                format!("{bq}.")
+            };
+            assert!(
+                aq.starts_with(&base) && aq[base.len()..].starts_with('0'),
+                "{bq} -> {aq}"
+            );
+            let places = base.len() - base.find('.').unwrap() - 1;
+            let unit = 10f64.powi(-(places as i32));
+            let delta = aq.parse::<f64>().unwrap() - bq.parse::<f64>().unwrap();
+            assert!((0.0..0.1 * unit).contains(&delta), "{bq} -> {aq}");
+            // Rounding to the printed precision gives back the original text.
+            assert_eq!(format!("{:.*}", places, aq.parse::<f64>().unwrap()), bq);
+        }
+        assert!(modified > 0);
+        // '.' and non-plain QUALs untouched.
+        for ((_, b), (_, a)) in before.records().zip(after.records()) {
+            if !is_plain_decimal(b[5]) {
+                assert_eq!(b[5], a[5]);
+            }
+        }
     }
 
     #[test]
     fn test_vcf_biological_integrity() {
         let handler = VcfHandler::new();
-
-        // Valid VCF
-        let valid_vcf = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\t.\n";
-        assert!(handler.verify_vcf_integrity(valid_vcf).unwrap());
-
-        // Invalid VCF with bad nucleotides
-        let invalid_vcf = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tX\tY\t30.0\tPASS\t.\n";
-        assert!(!handler.verify_vcf_integrity(invalid_vcf).unwrap());
+        assert!(handler
+            .verify_vcf_integrity(&make_vcf(3, true, "\n"))
+            .unwrap());
+        let invalid = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tX\tY\t30.0\tPASS\t.\n";
+        assert!(!handler.verify_vcf_integrity(invalid).unwrap());
+        let symbolic = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\t<DEL>,*\t30.0\tPASS\t.\n";
+        assert!(handler.verify_vcf_integrity(symbolic).unwrap());
     }
 
-    #[tokio::test]
-    async fn test_vcf_sample_format_embedding_roundtrip() {
-        let handler = VcfHandler::new();
-        // VCF with FORMAT and sample columns so SampleFormat strategy can embed.
-        // payload "Hello!" = 6 bytes = 12 hex chars (fits in a single 16-char chunk, 1 variant needed).
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE1\nchr1\t100\t.\tA\tT\t30\tPASS\t.\tGT\t0/1\nchr1\t200\t.\tG\tC\t45\tPASS\t.\tGT\t0/0\n";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let payload = b"Hello!";
-        let mut params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-        params.format_specific.insert(
-            "vcf_strategy".to_string(),
-            serde_json::Value::String("format".to_string()),
-        );
-
-        handler.embed(&mut carrier, payload, &params).await.unwrap();
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(&extracted, payload);
+    #[test]
+    fn test_no_trailing_newline_preserved() {
+        let data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t1\t.\tA\tT\t3\tPASS\t.";
+        let doc = VcfDoc::parse(data).unwrap();
+        assert_eq!(doc.render(&Edits::default()), data.to_vec());
     }
-
-    #[tokio::test]
-    async fn test_vcf_variant_id_embedding_roundtrip() {
-        let handler = VcfHandler::new();
-        // payload "vid" = 3 bytes = 6 hex chars; fits in 1 variant (chunk_size=8).
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30\tPASS\t.\n";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let payload = b"vid";
-        let mut params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-        params.format_specific.insert(
-            "vcf_strategy".to_string(),
-            serde_json::Value::String("id".to_string()),
-        );
-
-        handler.embed(&mut carrier, payload, &params).await.unwrap();
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(&extracted, payload);
-    }
-
-    #[tokio::test]
-    async fn test_vcf_info_embedding_with_encryption_roundtrip() {
-        // Verifies that encryption_key and error_correction_level are correctly applied
-        // to VCF embed/extract (previously they were silently ignored).
-        let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30\tPASS\t.\nchr1\t200\t.\tG\tC\t45\tPASS\t.\nchr1\t300\t.\tC\tT\t50\tPASS\t.\nchr1\t400\t.\tT\tA\t60\tPASS\t.\nchr1\t500\t.\tA\tG\t70\tPASS\t.\n";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let payload = b"enc";
-        let mut params = EmbedParams {
-            encryption_key: b"test key for vcf encryption!!!!".to_vec(), // 32 bytes
-            error_correction_level: ECLevel::None, // ECLevel::Low would require ~17 variants (RS block = 255 bytes)
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
-        };
-        params.format_specific.insert(
-            "vcf_strategy".to_string(),
-            serde_json::Value::String("info".to_string()),
-        );
-
-        handler.embed(&mut carrier, payload, &params).await.unwrap();
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(&extracted, payload);
-
-        // Extracting with a wrong key should fail
-        let mut wrong_params = params.clone();
-        wrong_params.encryption_key = b"wrong key for vcf encryption!!!!".to_vec();
-        let wrong_result = handler.extract(&carrier, &wrong_params).await;
-        assert!(wrong_result.is_err(), "Wrong key should fail to extract");
-    }
-
-    #[tokio::test]
-    async fn test_vcf_multistrategy_roundtrip() {
-        // MultiStrategy embed tries info → sample_format → variant_id in order.
-        // With INFO fields present the first strategy succeeds.
-        let handler = VcfHandler::new();
-        let vcf_data = b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\nchr1\t100\t.\tA\tT\t30.0\tPASS\tDP=50\nchr1\t200\t.\tG\tC\t45.0\tPASS\tAF=0.5\nchr1\t300\t.\tC\tA\t60.0\tPASS\t.\n";
-
-        let mut carrier = CarrierData {
-            format: DataFormat::VCF,
-            raw_data: vcf_data.to_vec(),
-            metadata: HashMap::new(),
-            dimensions: None,
-            sampling_rate: None,
-        };
-
-        let payload = b"multi strategy test";
-        let mut params = EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: StealthLevel::Low,
-            use_gpu: false,
-            format_specific: HashMap::new(),
-            enable_validation: false,
-            cipher_kind: Default::default(),
-        };
-        params.format_specific.insert(
-            "vcf_strategy".to_string(),
-            serde_json::Value::String("multi".to_string()),
-        );
-
-        // Embed with MultiStrategy
-        let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
-        assert!(result.success);
-        assert_eq!(result.bytes_embedded, payload.len());
-
-        // Extract with MultiStrategy — should recover the same payload
-        let extracted = handler.extract(&carrier, &params).await.unwrap();
-        assert_eq!(extracted, payload);
-    }
-
 }
