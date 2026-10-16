@@ -1,711 +1,174 @@
-# Stegano - Scientific Data Steganography System
+# Stegano
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](#)
-[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/scttfrdmn/stegano)
-[![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-428%2B%20passing-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Production-ready, high-performance steganography library for protecting scientific data including genomics, imagery, and signal data.**
+Stegano is a Rust library and CLI for embedding encrypted payloads in scientific
+data files (genomics, imaging, signals, astronomy). Payloads are encrypted with
+AES-256-GCM or ChaCha20-Poly1305 and can optionally be protected with
+Reed-Solomon error correction before being embedded by a format-specific handler.
 
-## 🎯 Version 0.5.1 - Latest Production Release
+## Status
 
-Stegano v0.5.1 adds WebAssembly bindings and ships all previously completed strategies:
-- ✅ **428 Tests Passing** — all strategies fully implemented and covered
-- ✅ **WebAssembly (WASM) bindings** — `wasm-bindgen` async API for browser/Node.js via `--features wasm`. Resolves [#25](https://github.com/scttfrdmn/stegano/issues/25).
-- ✅ **SAM/BAM `AuxiliaryData` strategy** — hex-encoded payload in `Xs:Z:` optional fields. Resolves [#22](https://github.com/scttfrdmn/stegano/issues/22).
-- ✅ **DICOM `UnusedMetadata` strategy** — embeds up to 120 bytes in the 128-byte DICOM preamble. Resolves [#20](https://github.com/scttfrdmn/stegano/issues/20).
-- ✅ **DICOM `SequencePadding` strategy** — uses `(FFFC,FFFC)` Data Set Trailing Padding element. Resolves [#21](https://github.com/scttfrdmn/stegano/issues/21).
-- ✅ **EchoHiding via `format_specific`** — `signal_strategy = "echo"` selects echo hiding. Resolves [#23](https://github.com/scttfrdmn/stegano/issues/23).
-- ✅ **Validation performance & domain analysis** — ROC/AUC, 5-fold CV, and format-aware domain checks (genomics/medical/audio). Resolves [#24](https://github.com/scttfrdmn/stegano/issues/24).
-- ✅ **Criterion benchmark suite** — `embedding_performance`, `statistical_validation_benchmarks`, `ml_optimization_benchmarks`. Resolves [#27](https://github.com/scttfrdmn/stegano/issues/27).
-- ✅ **Zero clippy warnings** — all `-D warnings` lints resolved. Resolves [#28](https://github.com/scttfrdmn/stegano/issues/28).
+Stegano is pre-1.0 and under active development. Please read this before relying on it:
 
-### 🆕 New in v0.3.3
-- **Real Statistical Analysis** (`ml/analysis.rs`): KS goodness-of-fit tests for distribution fitting; IQR, Z-score, and MAD-based outlier detection; Sample Pairs (SP) and Total Variation Distance histogram steganalysis
-- **Real Process Telemetry** (`monitoring/telemetry.rs`): Memory and CPU sampling via `libc::getrusage(RUSAGE_SELF)` — no more random-number fakes; delta CPU% computed from 50ms snapshots
-- **Real Neural Network Inference** (`ml/cuda_models.rs`): CPU fallback `forward_gpu()` now runs a real dense+sigmoid forward pass instead of returning constant 0.5
-- **Correct Statistical Tests** (`validation.rs`): Chi-square p-value fixed to one-tailed Fisher approximation; O(n²) DFT replaced with `rustfft` O(n log n); k-fold CV now computes Mann-Whitney AUC
+- **Format handlers are being corrected for real-file validity in v0.6.0**
+  ([#42](https://github.com/scttfrdmn/stegano/issues/42)–[#48](https://github.com/scttfrdmn/stegano/issues/48)).
+  Several 0.5.x handlers (for example PNG/TIFF, WAV, DICOM, FITS, SAM/BAM, VCF and
+  FASTQ) can produce output that standard tools for that format reject. Do not
+  use them on data you cannot regenerate.
+- **The payload wire format will change incompatibly in v0.6.0**
+  ([#38](https://github.com/scttfrdmn/stegano/issues/38)). Data embedded with
+  0.5.x will not be extractable with 0.6.x.
+- **The GPU, ML and monitoring modules are experimental** and are not used by
+  the embedding path ([#40](https://github.com/scttfrdmn/stegano/issues/40)).
+  The `--gpu` flag and `use_gpu` parameter do not currently speed up embedding.
 
-## Overview
+## Supported formats
 
-Stegano is a proprietary, high-performance steganography system designed for enterprise and government data protection. Built specifically for scientific and high-value data formats, it delivers military-grade security with unprecedented performance through GPU acceleration and format-specific optimization.
+| Domain    | Formats                     | CLI extensions                    |
+|-----------|-----------------------------|-----------------------------------|
+| Genomics  | FASTA, FASTQ, VCF, SAM, BAM | `.fa .fasta .fq .fastq .vcf .sam .bam` |
+| Imaging   | PNG, TIFF, DICOM            | `.png .tif .tiff .dcm .dicom`     |
+| Astronomy | FITS                        | `.fits .fit .fts`                 |
+| Signals   | WAV, CSV time series        | `.wav .csv`                       |
+| Generic   | Binary, text                | `.txt`                            |
 
-**Market Opportunity**: Capturing the $2.8B steganography market with enterprise-grade solutions that outperform existing tools by 10-100x while providing professional support, compliance certifications, and seamless integration with scientific workflows.
+The CLI picks the format from the file extension first and falls back to magic
+bytes. See [docs/SCIENTIFIC_FORMATS_GUIDE.md](docs/SCIENTIFIC_FORMATS_GUIDE.md)
+for per-format strategies.
 
-### Key Features
-
-- 🤖 **ML-Powered Optimization**: 5 advanced algorithms for intelligent parameter optimization
-- 🧬 **Scientific Format Support**: VCF, DICOM, SAM/BAM with domain-specific integrity preservation
-- 🎯 **Multi-Objective Optimization**: NSGA-II Pareto front analysis for optimal trade-offs
-- 🔐 **Advanced Encryption**: AES-256-GCM with Blake3 key derivation and quantum-ready security
-- ⚡ **GPU Acceleration**: Metal/WGPU compute acceleration for 10-50x performance improvement
-- 🛡️ **Integrity Protection**: Multi-layer cryptographic verification and error correction
-- 📊 **Intelligent Analysis**: Advanced capacity estimation and steganographic optimization
-- 🔧 **Extensible Architecture**: Plugin system with reinforcement learning strategy selection
-
-## Strategic Documentation
-
-📋 **[Executive Summary](EXECUTIVE_SUMMARY.md)** - Complete project overview and strategic vision  
-🗺️ **[Development Roadmap](ROADMAP.md)** - 5-phase technical and business roadmap (2025-2027)  
-⚡ **[Development Plan](DEVELOPMENT_PLAN.md)** - 90-day immediate execution plan  
-💼 **[Business Strategy](BUSINESS_STRATEGY.md)** - Market analysis and commercial strategy  
-🤖 **[ML Optimization Guide](docs/ML_OPTIMIZATION_GUIDE.md)** - Comprehensive guide to all 5 optimization algorithms
-🧬 **[Scientific Formats Guide](docs/SCIENTIFIC_FORMATS_GUIDE.md)** - VCF, DICOM, SAM/BAM format documentation
-📚 **[API Reference Updates](docs/API_REFERENCE_UPDATES.md)** - Complete v0.2.0 API documentation  
-
-## Current Status & Roadmap
-
-### ✅ **Completed (Q4 2024 - Q1 2025)**
-- Advanced multi-format steganography with 5 strategies per format
-- Metal GPU acceleration optimized for Apple Silicon (M4 Pro)
-- Military-grade AES-256-GCM encryption with BLAKE3 integrity
-- Comprehensive test coverage (85%+) with professional quality gates
-- Proprietary licensing and intellectual property protection
-
-### ✅ **v0.2.0 Released (Q1 2025)**
-- ✅ **Advanced ML Optimization** - 5 algorithms: Genetic Algorithm, Particle Swarm, Bayesian, Reinforcement Learning, Multi-Objective
-- ✅ **Scientific Format Support** - VCF genomics, DICOM medical imaging, SAM/BAM bioinformatics with integrity preservation
-- ✅ **Multi-Objective Optimization** - NSGA-II Pareto front analysis for trade-off optimization
-- ✅ **Gaussian Process Models** - Bayesian optimization with RBF, Matern, and Rational Quadratic kernels
-- ✅ **Comprehensive Testing** - 250+ tests with 95% coverage and scientific data integrity validation
-- ✅ **Complete Documentation** - ML Optimization Guide, Scientific Formats Guide, and API Reference
-
-### 🎯 **v0.3.0 (Q3 2025)**
-- Complete CUDA GPU acceleration (targeting 10-50x performance boost)
-- Enterprise security certifications (FIPS 140-2, Common Criteria)
-- Python and C/C++ bindings for scientific software integration
-- Advanced anti-detection with AI-driven optimization
-
-### 🎯 **v1.0.0 (Q4 2025)**
-- Post-quantum cryptography integration (NIST algorithms)
-- Distributed embedding across multiple carriers
-- Real-time streaming data embedding
-- Cross-platform optimization for Windows, Linux, ARM64
-
-**Target Markets**: Government/Defense ($50-500K deals), Pharmaceutical Research ($25-200K deals), Financial Services ($100-300K deals), Healthcare Systems ($50-150K deals)
-
-**Revenue Projections**: $500K (Year 1) → $2.5M (Year 2) → $12M (Year 3) → $85M (Year 5)
-
-## 📚 Documentation
-
-- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Installation and basic usage
-- **[Release Notes](RELEASE_NOTES_0_1_0.md)** - Complete v0.1.0 changelog and features  
-- **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation
-- **[Executive Summary](EXECUTIVE_SUMMARY.md)** - Project overview and strategic vision
-- **[Development Roadmap](ROADMAP.md)** - Technical and business roadmap
-
-## 🚀 Quick Start
-
-### CLI Installation
+## Building
 
 ```bash
-# Build the CLI tool
 git clone https://github.com/scttfrdmn/stegano.git
 cd stegano
-cargo build --release
-
-# The binary is now available at target/release/stegano
+cargo build --release        # binary at target/release/stegano
+cargo test --lib
 ```
 
-### Library Installation
-
-Add to your `Cargo.toml`:
+This crate is not on crates.io. The `stegano` crate there is an unrelated
+project. To use this library, add a git dependency:
 
 ```toml
 [dependencies]
-stegano = "0.2.0"
+stegano = { git = "https://github.com/scttfrdmn/stegano" }
 ```
 
-### Basic CLI Usage
+Optional Cargo features: `gpu` (default; wgpu), `metal`, `cuda`, `python`,
+`wasm`, `benchmarks`.
+
+## CLI usage
 
 ```bash
-# Embed secret data into a file
-./stegano embed --input photo.png --payload secret.txt --output hidden.png
+# Embed a payload
+stegano embed -i carrier.png -p secret.txt -o out.png --password 'passphrase'
 
-# Extract hidden data
-./stegano extract --input hidden.png --output recovered.txt
+# Extract it
+stegano extract -i out.png -o recovered.txt --password 'passphrase'
 
-# Analyze capacity and detect hidden data
-./stegano analyze --input photo.png
+# Estimate capacity
+stegano analyze -i carrier.png
+
+# Check whether a file contains an embedded payload (exit 0 = found, 1 = not found)
+stegano detect -i out.png
 ```
 
-### Basic Usage
+Useful `embed` options:
 
-```rust
-use stegano::*;
-use std::collections::HashMap;
+- `--stealth <maximum|high|medium|low>` (default `high`)
+- `--ec-level <none|low|medium|high|maximum>` (default `none`)
+- `--cipher <aes256gcm|chacha20>` (default `aes256gcm`; detected automatically on extract)
+- `--strategy <name>` for a format-specific strategy:
+  - VCF: `info|quality|sample|id|multi`
+  - SAM/BAM: `optional|comment|quality|auxiliary|multi`
+  - DICOM: `private|metadata|sequence|pixel_lsb|multi`
+  - PNG/TIFF: `lsb|adaptive|edge|dct`
+  - WAV: `timedomain|frequency|phase|spread|echo`
+- `--validate` runs the statistical validation suite on the result.
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Create carrier data
-    let carrier_data = std::fs::read("data.bin")?;
-    let mut carrier = CarrierData {
-        format: DataFormat::BINARY,
-        raw_data: carrier_data,
-        metadata: HashMap::new(),
-        dimensions: None,
-        sampling_rate: None,
-    };
+`extract` accepts the same `--strategy` values. If you passed a strategy to
+`embed`, you must pass the same one to `extract`. Run `stegano <command> --help`
+for the full list of options.
 
-    // Setup encryption
-    let crypto = crypto::CryptoLayer::new_from_password("secure_password")?;
-    let secret_data = b"Confidential research data";
-    let encrypted_payload = crypto.encrypt(secret_data)?;
-    let payload = crypto::CryptoLayer::serialize_payload(&encrypted_payload);
+## Library quick start
 
-    // Configure embedding parameters
-    let params = EmbedParams {
-        encryption_key: b"secure_password".to_vec(),
-        error_correction_level: ECLevel::High,
-        stealth_level: StealthLevel::High,
-        use_gpu: false,
-        enable_validation: false,
-        format_specific: HashMap::new(),
-    };
-
-    // Get handler and embed data
-    let registry = handlers::HandlerRegistry::new();
-    let handler = registry.get_handler(&DataFormat::BINARY).unwrap();
-    
-    // Check capacity
-    let capacity = handler.estimate_capacity(&carrier)?;
-    println!("Available capacity: {} bits", capacity.recommended_bits);
-
-    // Embed secret data
-    let result = handler.embed(&mut carrier, &payload, &params).await?;
-    println!("Embedded {} bytes", result.bytes_embedded);
-
-    // Extract and verify
-    let extracted = handler.extract(&carrier, &params).await?;
-    let decrypted_payload = crypto::CryptoLayer::deserialize_payload(&extracted)?;
-    let decrypted_data = crypto.decrypt(&decrypted_payload)?;
-    
-    assert_eq!(decrypted_data, secret_data);
-    println!("Round-trip successful!");
-
-    Ok(())
-}
-```
-
-## Examples
-
-### Run the Basic Demo
-```bash
-cargo run --example basic_demo
-```
-
-### Run ML Optimization Examples
-```bash
-# Genetic algorithm optimization
-cargo run --example ml_driven_embedding
-
-# VCF genomics steganography
-cargo run --example vcf_genomics_example
-
-# DICOM medical imaging steganography  
-cargo run --example dicom_medical_example
-
-# SAM/BAM bioinformatics steganography
-cargo run --example sam_bam_bioinformatics_example
-```
-
-### FASTQ Quality Score Steganography Example
-```bash
-# Run the advanced FASTQ quality score embedding demo
-cargo run --example fastq_quality_scores
-```
-
-### Advanced Usage Examples
-
-#### ML-Powered Optimization
-```rust
-use stegano::core::*;
-use stegano::ml::optimization::*;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Configure multi-objective optimization
-    let config = OptimizationConfig {
-        algorithm: OptimizationAlgorithm::BayesianOptimization {
-            acquisition_function: AcquisitionFunction::ExpectedImprovement,
-        },
-        multi_objective: MultiObjectiveConfig {
-            enabled: true,
-            pareto_method: ParetoMethod::NSGA2,
-            max_pareto_solutions: 50,
-        },
-        max_iterations: 100,
-        population_size: 30,
-        // ... other config
-    };
-    
-    let mut optimizer = OptimizationEngine::new(config);
-    
-    // Add objectives
-    optimizer.add_objective(Box::new(StealthObjective { weight: 1.0 }));
-    optimizer.add_objective(Box::new(QualityObjective { weight: 0.8 }));
-    optimizer.add_objective(Box::new(CapacityObjective { weight: 0.6 }));
-    
-    let carrier = CarrierData::from_file("data.vcf")?;
-    let payload = b"optimized secret data";
-    
-    // Find Pareto-optimal solutions
-    let result = optimizer.multi_objective_optimization(&carrier, payload).await?;
-    
-    println!("Found {} Pareto-optimal solutions", result.pareto_front.len());
-    for (i, (params, objectives)) in result.pareto_front.iter().take(3).enumerate() {
-        println!("Solution {}: Stealth={:.3}, Quality={:.3}, Capacity={:.3}",
-            i + 1,
-            objectives.scores.get("stealth").unwrap_or(&0.0),
-            objectives.scores.get("quality").unwrap_or(&0.0),
-            objectives.scores.get("capacity").unwrap_or(&0.0)
-        );
-    }
-    
-    Ok(())
-}
-```
-
-#### VCF Genomics Steganography
-```rust
-use stegano::handlers::vcf::*;
-use stegano::core::*;
-
-#[tokio::main] 
-async fn main() -> Result<()> {
-    let vcf_data = std::fs::read("variants.vcf")?;
-    let carrier = CarrierData::new(vcf_data, DataFormat::VCF);
-    
-    let params = EmbedParams {
-        format_specific: {
-            let mut map = HashMap::new();
-            map.insert("vcf_strategy".to_string(), 
-                      serde_json::Value::String("info_fields".to_string()));
-            map.insert("preserve_critical_annotations".to_string(),
-                      serde_json::Value::Bool(true));
-            map
-        },
-        stealth_level: StealthLevel::High,
-        error_correction_level: ECLevel::Medium,
-        encryption_key: b"genomics_key".to_vec(),
-        use_gpu: false,
-        enable_validation: false,
-    };
-    
-    let handler = VcfHandler::new();
-    let secret_data = b"genomics research metadata";
-    
-    let mut carrier_mut = carrier;
-    let result = handler.embed(&mut carrier_mut, secret_data, &params).await?;
-    
-    println!("Embedded {} bytes preserving biological integrity", result.bytes_embedded);
-    
-    // Verify genomics integrity
-    let integrity_ok = handler.verify_integrity(&carrier_mut)?;
-    println!("Genomics integrity preserved: {}", integrity_ok);
-    
-    Ok(())
-}
-```
-
-#### FASTQ Quality Score Embedding
-```rust
-use stegano::handlers::genomics::{GenomicsHandler, QualityEmbedStrategy};
+```rust,no_run
 use stegano::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let handler = GenomicsHandler::new();
-    
-    // Load FASTQ data
-    let fastq_data = std::fs::read("sample.fastq")?;
-    let mut carrier = CarrierData::new(DataFormat::FASTQ, fastq_data);
-    
-    // Configure for balanced embedding strategy
-    let payload = b"Secret genomics research data";
-    let params = EmbedParams::new(b"genomics_key".to_vec());
-    
-    // Embed using quality score steganography
-    let result = handler.embed_fastq_qualities(
-        &mut carrier.raw_data, 
-        payload, 
-        QualityEmbedStrategy::Balanced
-    )?;
-    
-    println!("Embedded {} bytes with biological integrity: {}", 
-             result.bytes_embedded, 
-             result.biological_integrity_preserved);
-    
-    // Extract the payload
-    let extracted = handler.extract_fastq_qualities(
-        &carrier.raw_data, 
-        QualityEmbedStrategy::Balanced
-    )?;
-    
-    assert_eq!(extracted, payload);
+    let mut carrier = CarrierData::new(DataFormat::PNG, std::fs::read("carrier.png")?);
+
+    let params = EmbedParams::new(b"passphrase".to_vec())
+        .with_stealth_level(StealthLevel::High)
+        .with_ec_level(ECLevel::Medium);
+
+    let embedder = SteganoEmbedder::new();
+    println!("capacity: {} bits", embedder.estimate_capacity(&carrier)?.recommended_bits);
+
+    embedder.embed(&mut carrier, b"secret research data", &params).await?;
+    std::fs::write("out.png", &carrier.raw_data)?;
+
+    let recovered = embedder.extract(&carrier, &params).await?;
+    assert_eq!(recovered, b"secret research data");
     Ok(())
 }
 ```
 
-### Run Tests
-```bash
-cargo test
-```
+More examples are in [`examples/`](examples/). Some of them do not compile
+against the current API yet ([#36](https://github.com/scttfrdmn/stegano/issues/36)).
 
-## Architecture
+## Bindings
 
-### Core Components
+**C / C++.** `cargo build --release` produces a `cdylib` (`libstegano.so`,
+`libstegano.dylib` or `stegano.dll`) in `target/release/`. The exported
+functions are `stegano_init`, `stegano_detect_format`, `stegano_estimate_capacity`,
+`stegano_embed`, `stegano_extract`, `stegano_embed_v2`, `stegano_extract_v2`,
+`stegano_verify_integrity`, `stegano_free` and `stegano_version`. See
+[`src/ffi.rs`](src/ffi.rs) for signatures.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    API Layer (Rust)                        │
-├─────────────────────────────────────────────────────────────┤
-│  Data Type Detection & Validation | Format Registry        │
-├─────────────────────────────────────────────────────────────┤
-│     Capacity Estimation Engine    |  Embedding Planner     │
-├─────────────────────────────────────────────────────────────┤
-│  Cryptographic Layer (AES-GCM/ChaCha20/Post-Quantum)      │
-├─────────────────────────────────────────────────────────────┤
-│              Embedding Engine Core                         │
-│  ┌─────────────┬─────────────┬─────────────┬─────────────┐  │
-│  │   Genomics  │   Imagery   │   Signals   │   Generic   │  │
-│  │   Handler   │   Handler   │   Handler   │   Handler   │  │
-│  └─────────────┴─────────────┴─────────────┴─────────────┘  │
-├─────────────────────────────────────────────────────────────┤
-│              Error Correction & Integrity                  │
-├─────────────────────────────────────────────────────────────┤
-│         SIMD/GPU Acceleration Layer                         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Format-Specific Strategies
-
-#### Genomics Data (FASTA/FASTQ)
-- **FASTQ Quality Score Steganography**: Advanced embedding in Phred quality scores with biological integrity preservation
-  - Conservative Strategy: 1 bit per quality character (minimal detection risk)
-  - Balanced Strategy: 2 bits per quality character (moderate capacity)
-  - Aggressive Strategy: 3+ bits per quality character (maximum capacity)
-- **Header/Comment Field Utilization**: Embed in metadata without affecting biological function
-- **Synonymous Codon Substitution**: Leverage genetic code redundancy (planned)
-- **Non-coding Region Insertion**: Strategic placement in intergenic regions (planned)
-
-#### Scientific Imagery (TIFF/Microscopy)
-- **Simple LSB**: Direct least-significant-bit substitution (StealthLevel::Low)
-- **Adaptive LSB**: Content-aware embedding at high-variation pixels (StealthLevel::Medium)
-- **Edge-Based**: Embedding at detected edge regions for high stealth (StealthLevel::High/Maximum)
-- **Scientific Metadata Fields**: Embed in TIFF tags and microscopy parameters
-
-#### Signal Data (WAV/Binary Signals)
-- **Time Domain LSB**: Direct sample LSB substitution (StealthLevel::Low)
-- **FFT-based Embedding**: Frequency domain manipulation (StealthLevel::Medium)
-- **Phase Modulation**: Preserve amplitude characteristics (StealthLevel::High)
-- **Spread Spectrum**: Chip-based spreading for maximum stealth (StealthLevel::Maximum)
-- **Echo Hiding**: Temporal domain embedding (internal strategy, not mapped to StealthLevel)
-
-## Security Features
-
-### Multi-Layer Cryptographic Protection
-
-**Layer 1 - Encryption:**
-- Primary: AES-GCM or ChaCha20-Poly1305
-- Key Derivation: Blake3 with configurable parameters
-- Post-Quantum: Preparation for quantum-resistant algorithms
-
-**Layer 2 - Integrity Verification:**
-- Cryptographic Hashing: Blake3 for tamper detection
-- Distributed Checksums: Segment-level verification throughout payload
-- Chain of Trust: Hierarchical integrity verification
-
-**Layer 3 - Error Correction:**
-- Reed-Solomon Encoding: Configurable protection levels (10%-100% overhead)
-- Distributed Error Correction: Resilient to localized data corruption
-- Format-Specific Protection: Tailored to expected degradation patterns
-
-### Steganographic Security Levels
-
-- **Maximum Stealth** (`StealthLevel::Maximum`): Spread Spectrum (signals), Edge-Based (imagery) — lowest detectable footprint
-- **High** (`StealthLevel::High`): Phase Modulation (signals), Edge-Based (imagery) — balanced security/capacity
-- **Medium** (`StealthLevel::Medium`): FFT-based (signals), Adaptive LSB (imagery) — higher capacity with reasonable stealth
-- **Low** (`StealthLevel::Low`): Time Domain LSB (signals), Simple LSB (imagery) — maximum capacity for trusted environments
-
-## Performance Targets
-
-| Operation | CPU (8-core) | GPU (RTX 4090) | Memory Usage |
-|-----------|--------------|----------------|--------------|
-| LSB Embed 1GB | 2.5s | 0.3s | 2GB |
-| FFT Embed 100MB | 1.2s | 0.15s | 400MB |
-| Reed-Solomon 500MB | 3.1s | 0.4s | 1GB |
-| Full Pipeline 1GB | 8.2s | 1.1s | 3GB |
-
-## Supported Data Formats
-
-### Genomics & Bioinformatics  
-- **FASTA**: Sequence data with header/comment manipulation
-- **FASTQ**: Advanced quality score steganography with biological integrity verification
-  - Phred quality score embedding (Conservative/Balanced/Aggressive strategies)
-  - Automatic capacity estimation based on quality score distribution
-  - Biological integrity preservation and validation
-- **VCF**: Variant Call Format with INFO field and quality precision steganography ✨ **NEW**
-  - INFO field steganography preserving critical annotations
-  - Quality score precision embedding for high-coverage data
-  - FORMAT field embedding across multiple samples
-  - Population genetics integrity preservation
-- **SAM/BAM**: Sequence Alignment/Map format steganography ✨ **NEW**
-  - Optional fields embedding preserving core alignment
-  - Quality score precision embedding with sliding window
-  - Comment lines embedding for pipeline metadata
-  - Variant calling compatibility verification
-
-### Medical Imaging
-- **DICOM**: Digital Imaging and Communications in Medicine ✨ **NEW**
-  - Private data elements embedding with HIPAA compliance
-  - Medical-grade pixel LSB with diagnostic quality preservation
-  - Unused metadata fields embedding
-  - Clinical trial and regulatory compliance support
-- **TIFF**: Multi-channel scientific images with metadata embedding
-- **PNG**: Standard images with LSB techniques
-- **Microscopy**: Multi-dimensional stacks (planned)
-
-### Signal Data
-- **WAV**: Audio signals with various embedding techniques
-- **CSV**: Time series data
-- **Binary**: Generic signal formats
-
-## API Reference
-
-### Core Types
-
-```rust
-pub enum DataFormat {
-    FASTA, FASTQ, VCF, SAM, BAM,           // Genomics
-    TIFF, PNG, MICROSCOPY, DICOM,          // Imagery  
-    WAV, BinarySignal, CsvTimeseries,      // Signals
-    BINARY, TEXT,                          // Generic
-}
-
-pub struct CarrierData {
-    pub format: DataFormat,
-    pub raw_data: Vec<u8>,
-    pub metadata: HashMap<String, serde_json::Value>,
-    pub dimensions: Option<Dimensions>,
-    pub sampling_rate: Option<f64>,
-}
-
-pub struct EmbedParams {
-    pub encryption_key: Vec<u8>,
-    pub error_correction_level: ECLevel,
-    pub stealth_level: StealthLevel,
-    pub use_gpu: bool,
-    pub enable_validation: bool,
-    pub format_specific: HashMap<String, serde_json::Value>,
-}
-```
-
-### Handler Trait
-
-```rust
-#[async_trait]
-pub trait DataHandler: Send + Sync {
-    fn detect_format(&self, data: &[u8]) -> Option<DataFormat>;
-    fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo>;
-    async fn embed(&self, carrier: &mut CarrierData, payload: &[u8], params: &EmbedParams) -> Result<EmbedResult>;
-    async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>>;
-    fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool>;
-}
-```
-
-## Development
-
-### Setup Development Environment
+**Go.** This is a CGO wrapper over the C ABI. See [go/README.md](go/README.md).
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/stegano.git
-cd stegano
-
-# Run setup script to install tools and hooks
-./scripts/setup-hooks.sh
-
-# Verify setup
-cargo test
-cargo tarpaulin --skip-clean
-```
-
-### Development Rules
-
-**🎯 Quality Standards:**
-- **Overall Coverage**: ≥ 85% (MANDATORY)
-- **Individual Files**: ≥ 80% (MANDATORY)
-- **Security Modules**: ≥ 95% (crypto, handlers, core)
-
-**🔧 Pre-commit Hooks (Automated):**
-- Code coverage verification
-- Rust linting (clippy) with zero warnings
-- Code formatting verification
-- Security vulnerability scanning
-- File format linting (YAML, Markdown, TOML)
-- Secrets detection
-
-### Building
-
-```bash
-# Standard build
-cargo build
-
-# Release build with optimizations
 cargo build --release
-
-# Build with GPU support
-cargo build --release --features gpu
-
-# Build with all features
-cargo build --release --all-features
+CGO_LDFLAGS="-L$(pwd)/target/release" go test ./go/...
 ```
 
-### Testing & Coverage
+**Python.** Built with [maturin](https://www.maturin.rs/) using the `python` feature:
 
 ```bash
-# Run all tests
-cargo test
-
-# Run with coverage (enforced ≥85%)
-cargo tarpaulin --fail-under 85
-
-# Run specific test
-cargo test test_basic_steganography_roundtrip
-
-# Run benchmarks
-cargo bench --features benchmarks
-
-# Quick development aliases
-git coverage  # Run coverage check
-git lint      # Run clippy linting
-git security  # Run security audit
+pip install maturin
+maturin develop --release
+python -c "import stegano; print(stegano.version())"
 ```
 
-### Code Quality Gates
+The module exposes `embed`, `extract`, `estimate_capacity` and `version`.
 
-**All commits must pass:**
-- [ ] Code coverage ≥ 85% overall, ≥ 80% per file
-- [ ] Zero clippy warnings (`cargo clippy -- -D warnings`)
-- [ ] Proper formatting (`cargo fmt --check`)
-- [ ] Security audit clean (`cargo audit`)
-- [ ] All tests passing
-- [ ] Documentation builds successfully
-
-**Pull requests require:**
-- [ ] All pre-commit hooks passing
-- [ ] Minimum 1 reviewer approval
-- [ ] CI/CD pipeline success
-- [ ] Security review (for crypto/handler changes)
-
-### GPU Acceleration
-
-To enable GPU acceleration:
+**WebAssembly.** This needs [wasm-pack](https://rustwasm.github.io/wasm-pack/):
 
 ```bash
-# Build with GPU features (includes WGPU)
-cargo build --features gpu
-
-# Build with Metal support on macOS (optimal performance)
-cargo build --features "gpu,metal"
-
-# Run with GPU enabled
-RUST_LOG=debug cargo run --example basic_demo
+./scripts/build-wasm.sh          # builds pkg-web/ and pkg-nodejs/
+./scripts/build-wasm.sh web      # browser (ESM) only
 ```
 
-**GPU Backend Selection:**
-- **Metal**: Native macOS acceleration using Apple's Metal framework (recommended on macOS)
-- **WGPU**: Cross-platform compute shaders (Metal/Vulkan/DirectX/OpenGL)
-- **CUDA**: NVIDIA-specific maximum performance kernels (planned)
-- **OpenCL**: Cross-vendor compatibility (planned)
+The wasm32 build currently fails. The fix is tracked in [#40](https://github.com/scttfrdmn/stegano/issues/40).
 
-**Metal on macOS Benefits:**
-- Direct access to Apple Silicon GPU cores
-- Optimized memory management with unified memory architecture
-- Lower overhead compared to WGPU abstraction layer
-- Native integration with macOS graphics stack
-- Support for specialized Apple GPU features
+## Documentation
 
-## Contributing
+- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md): installation and first steps
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md): library API
+- [docs/SCIENTIFIC_FORMATS_GUIDE.md](docs/SCIENTIFIC_FORMATS_GUIDE.md): format handlers and strategies
+- [docs/VALIDATION_GUIDE.md](docs/VALIDATION_GUIDE.md): statistical validation suite
+- [CHANGELOG.md](CHANGELOG.md): release history
+- [SECURITY.md](SECURITY.md): reporting vulnerabilities
+- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow
 
-### Adding New Format Support
-
-1. Implement `DataHandler` trait in new module
-2. Add format detection logic
-3. Implement format-specific embedding strategies
-4. Add capacity estimation algorithm
-5. Create comprehensive tests with sample data
-
-### GPU Optimization
-
-1. Identify computationally intensive operations
-2. Design WGSL compute shaders for cross-platform support
-3. Implement CUDA kernels for NVIDIA optimization
-4. Profile and optimize memory transfer patterns
-5. Benchmark against CPU implementations
-
-## Roadmap
-
-### Phase 1: Core Framework ✅
-- [x] Project structure and build system
-- [x] Basic data type detection and registry
-- [x] Simple LSB embedding for each format
-- [x] AES encryption layer
-- [x] Basic error correction
-
-### Phase 2: Advanced Algorithms (In Progress)
-- [ ] Format-specific optimized embedding strategies
-- [ ] Advanced error correction with Reed-Solomon
-- [ ] Performance profiling and benchmarking
-- [x] Capacity estimation engine implementation
-
-### Phase 3: GPU Acceleration (Planned)
-- [ ] WGPU compute shader implementation
-- [ ] CUDA kernel development for NVIDIA optimization
-- [ ] GPU memory management and data transfer optimization
-- [ ] Performance comparison and optimization
-
-### Phase 4: Advanced Features (Planned)
-- [ ] Post-quantum cryptography integration
-- [ ] Distributed embedding across multiple carriers
-- [ ] Real-time streaming data embedding
-- [ ] Advanced tamper detection and recovery
-
-## Security Considerations
-
-### Threat Model
-- Data manipulation and corruption
-- Statistical analysis detection
-- Format-specific steganalysis
-- Side-channel attacks on embedded systems
-
-### Mitigation Strategies
-- Multi-layered protection with redundancy
-- Statistical steganography techniques
-- Constant-time cryptographic operations
-- Secure key management and derivation
+Older planning, roadmap and session documents are kept for reference in
+[docs/archive/](docs/archive/). They are historical and not maintained.
 
 ## License
 
-Copyright (c) 2025 Scott Friedman. All rights reserved.
+Licensed under the [Apache License, Version 2.0](LICENSE). See also [NOTICE](NOTICE).
 
-This software is proprietary and confidential. See [LICENSE](LICENSE) for full terms.
-
-**This is proprietary software - All rights reserved. Unauthorized copying, distribution, or use is strictly prohibited.**
-
-## Acknowledgments
-
-- Rust cryptography ecosystem (RustCrypto, Blake3)
-- WGPU team for cross-platform GPU computing
-- Scientific data format communities (bioinformatics, imaging, signals)
-
-## Contact
-
-For licensing inquiries and authorized use, please contact Scott Friedman.
-
-**Note**: This is proprietary software. Unauthorized access or use is prohibited.
-
-**Key Innovation**: Purpose-built steganographic protection tailored specifically for scientific workflows, with GPU acceleration and multi-format support in a unified high-performance framework.
+Copyright 2025-2026 Scott Friedman.

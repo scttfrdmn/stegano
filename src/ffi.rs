@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Foreign Function Interface (FFI) for C/C++ integration
-//!
-//! Copyright (c) 2025 Scott Friedman. All rights reserved.
-//! This software is proprietary and confidential.
 
 use crate::core::*;
 use crate::handlers::HandlerRegistry;

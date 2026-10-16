@@ -26,7 +26,7 @@ ignore = [
 
 [licenses]
 # License allowlist for DEPENDENCIES ONLY
-# Note: This project itself is PROPRIETARY SOFTWARE
+# Note: This project itself is licensed under Apache-2.0
 # These licenses are allowed for external dependencies we use
 unlicensed = "deny"
 allow = [

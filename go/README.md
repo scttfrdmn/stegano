@@ -94,3 +94,7 @@ if err != nil {
 - Carrier bytes are never modified in place; `Embed` always returns a new slice.
 - `stegano_free` is called automatically via `defer` after `Extract`.
 - Thread-safe: the underlying Rust FFI uses a shared Tokio runtime (`OnceLock`).
+
+## License
+
+Apache-2.0. See [`LICENSE`](../LICENSE) in the repository root.
