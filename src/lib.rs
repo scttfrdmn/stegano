@@ -10,10 +10,7 @@
 //!
 //! - **Multi-Format Support**: Specialized handlers for FASTA/FASTQ genomics data, TIFF/PNG imagery, and WAV/binary signals
 //! - **Advanced Security**: AES-256-GCM encryption with Blake3 key derivation and authenticated encryption
-//! - **GPU Acceleration**: WGPU-based compute shaders with Metal backend optimization for Apple Silicon
 //! - **Biological Integrity**: FASTQ quality score embedding with preservation of biological data validity
-//! - **Production Monitoring**: Comprehensive health checks, metrics, and telemetry for enterprise deployment
-//! - **ML Optimization**: Neural networks and genetic algorithms for adaptive embedding strategies
 //!
 //! ## Quick Start
 //!
@@ -51,9 +48,15 @@
 //!
 //! - [`handlers`]: Format-specific embedding and extraction implementations
 //! - [`crypto`]: Cryptographic layer with AES-GCM and Blake3
-//! - [`gpu`]: GPU acceleration using WGPU compute shaders
 //! - [`core`]: Core types, traits, and data structures
-//! - [`ffi`]: Foreign Function Interface for C/C++ integration
+//! - `ffi`: Foreign Function Interface for C/C++ integration (native targets only)
+//!
+//! ## Experimental modules
+//!
+//! The `gpu`, `ml` and `monitoring` modules are compiled only with the
+//! off-by-default `experimental` Cargo feature (implied by `gpu`, `metal` and
+//! `cuda`). They are not used by the embedding pipeline, are unsupported, and
+//! may change or be removed in any release.
 
 pub mod capacity;
 pub mod cli;
@@ -62,11 +65,15 @@ pub mod core;
 pub mod crypto;
 pub mod embedding;
 pub mod error_correction;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ffi;
+#[cfg(feature = "experimental")]
 pub mod gpu;
 pub mod handlers;
 pub mod integrity;
+#[cfg(feature = "experimental")]
 pub mod ml;
+#[cfg(feature = "experimental")]
 pub mod monitoring;
 pub mod validation;
 
@@ -95,9 +102,12 @@ pub use capacity::CapacityEstimator;
 pub use crypto::{CryptoLayer, SecurePayload};
 pub use embedding::SteganoEmbedder;
 pub use error_correction::IntegritySystem;
+#[cfg(feature = "experimental")]
 pub use gpu::GpuAccelerator;
 pub use handlers::DataHandler;
+#[cfg(feature = "experimental")]
 pub use ml::{MLOptimizer, StrategyRecommendation};
+#[cfg(feature = "experimental")]
 pub use monitoring::{MonitoringConfig, MonitoringSystem};
 pub use validation::{StatisticalValidationSuite, ValidationReport};
 

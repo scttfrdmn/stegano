@@ -1,5 +1,10 @@
 //! GPU acceleration for high-performance steganography operations
 //!
+//! **Experimental.** Available only with the `experimental` Cargo feature
+//! (implied by `gpu`, `metal` and `cuda`). This module is not used by the
+//! embedding pipeline, is unsupported, and its API may change or be removed
+//! in any release.
+//!
 //! This module provides GPU acceleration capabilities for stegano, with automatic
 //! backend selection and CPU fallbacks for optimal performance across platforms.
 

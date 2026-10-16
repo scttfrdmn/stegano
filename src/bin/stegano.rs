@@ -1,7 +1,10 @@
 use clap::Parser;
 use stegano::cli::{Cli, Commands};
 
-#[tokio::main]
+// wasm32 has no multi-threaded runtime; the CLI is only built there by
+// `cargo check`, so a current-thread runtime is enough.
+#[cfg_attr(not(target_arch = "wasm32"), tokio::main)]
+#[cfg_attr(target_arch = "wasm32", tokio::main(flavor = "current_thread"))]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 

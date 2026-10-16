@@ -1,5 +1,9 @@
 //! Production monitoring and observability for stegano
 //!
+//! **Experimental.** Available only with the `experimental` Cargo feature.
+//! This module is not wired into the embedding pipeline, is unsupported, and
+//! its API may change or be removed in any release.
+//!
 //! This module provides comprehensive monitoring, health checks, metrics collection,
 //! and observability features for production deployments of stegano.
 
