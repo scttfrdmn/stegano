@@ -419,7 +419,7 @@ impl TelemetryCollector {
                 span_count: trace.spans.len(),
             })
             .collect();
-        slowest_operations.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+        slowest_operations.sort_by_key(|a| std::cmp::Reverse(a.duration_ms));
         slowest_operations.truncate(10);
 
         // Calculate memory stats
@@ -436,11 +436,10 @@ impl TelemetryCollector {
                 current_allocated: latest.allocated_bytes,
                 peak_allocated: peak,
                 total_allocations: latest.total_allocations,
-                avg_allocation_size: if latest.total_allocations > 0 {
-                    latest.allocated_bytes / latest.total_allocations
-                } else {
-                    0
-                },
+                avg_allocation_size: latest
+                    .allocated_bytes
+                    .checked_div(latest.total_allocations)
+                    .unwrap_or(0),
             })
         } else {
             None
@@ -496,7 +495,7 @@ impl TelemetryCollector {
                 });
             }
         }
-        hot_paths.sort_by(|a, b| b.execution_count.cmp(&a.execution_count));
+        hot_paths.sort_by_key(|a| std::cmp::Reverse(a.execution_count));
         hot_paths.truncate(10);
 
         TelemetrySummary {
@@ -796,8 +795,6 @@ mod tests {
             "cpu_percentage={} out of range",
             sample.cpu_percentage
         );
-        // user + system time should be cumulative and non-decreasing
-        assert!(sample.user_time.as_micros() >= 0);
     }
 
     #[cfg(unix)]

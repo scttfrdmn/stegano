@@ -553,6 +553,7 @@ fn test_objective_function_edge_cases() {
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        ..Default::default()
     };
 
     let carrier = create_test_carrier(1);

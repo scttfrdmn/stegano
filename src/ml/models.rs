@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_returns_real_metrics() {
-        let mut model = NeuralNetworkModel::new(&[4, 4, 3], 0.05);
+        let model = NeuralNetworkModel::new(&[4, 4, 3], 0.05);
 
         // Create a small test set
         let examples: Vec<TrainingExample> = (0..10)

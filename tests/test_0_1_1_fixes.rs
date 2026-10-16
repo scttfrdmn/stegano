@@ -49,6 +49,7 @@ async fn test_issue_1_genomics_handler_implemented() {
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        ..Default::default()
     };
 
     let result = handler.embed(&mut carrier, payload, &params).await.unwrap();
@@ -175,6 +176,7 @@ async fn test_issue_5_phantom_science_integration_examples() {
         use_gpu: false,
         format_specific: HashMap::new(),
         enable_validation: false,
+        ..Default::default()
     };
 
     // Embed phantom-science metadata

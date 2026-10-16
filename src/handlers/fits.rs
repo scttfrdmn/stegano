@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(fits.len(), 2880);
 
         // Data section: fill with known values
-        fits.extend(std::iter::repeat(0x80u8).take(data_bytes));
+        fits.extend(std::iter::repeat_n(0x80u8, data_bytes));
         fits
     }
 

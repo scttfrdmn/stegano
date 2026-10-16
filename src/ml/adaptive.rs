@@ -490,7 +490,7 @@ mod tests {
     fn test_performance_calculation() {
         let strategy = AdaptiveStrategy::new();
 
-        let performances = vec![StrategyPerformance {
+        let performances = [StrategyPerformance {
             params: EmbedParams {
                 encryption_key: vec![],
                 error_correction_level: ECLevel::Low,
