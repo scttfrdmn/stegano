@@ -163,7 +163,10 @@ async fn test_issue_5_phantom_science_integration_examples() {
 
     let mut carrier = CarrierData {
         format: DataFormat::FASTA,
-        raw_data: b">seq1 test sequence with capacity for phantom data\nATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG\n".to_vec(),
+        // FASTA carries at most 128 payload bytes per header (#48), so use
+        // several records for the encrypted + EC-protected metadata.
+        raw_data: b">seq1 test sequence with capacity for phantom data\nATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG\n"
+            .repeat(16),
         metadata: HashMap::new(),
         dimensions: None,
         sampling_rate: None,
@@ -216,7 +219,9 @@ fn test_issue_7_fastq_quality_score_concept() {
     let carrier = CarrierData {
         format: DataFormat::FASTQ,
         raw_data:
-            b"@seq1 test with longer header for embedding\nATCGATCGATCGATCG\n+\nIIIIIIIIIIIIIIII\n"
+            // Capacity is exact and excludes the 72-bit stream header (#48),
+            // so the carrier needs more than 36 quality characters.
+            b"@seq1 test with longer header for embedding\nATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n"
                 .to_vec(),
         metadata: HashMap::new(),
         dimensions: None,
