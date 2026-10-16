@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
 //! # Scientific Data Steganography System
-//!
-//! Copyright (c) 2025 Scott Friedman. All rights reserved.
-//! This software is proprietary and confidential.
 //!
 //! A high-performance, multi-format steganography library designed specifically for protecting
 //! scientific data including genomics, imagery, and signal data.

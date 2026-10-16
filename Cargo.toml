@@ -4,7 +4,7 @@ version = "0.5.1"
 edition = "2021"
 authors = ["Scott Friedman <scttfrdmn@gmail.com>"]
 description = "High-performance scientific data steganography system"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/scttfrdmn/stegano"
 
 [lib]

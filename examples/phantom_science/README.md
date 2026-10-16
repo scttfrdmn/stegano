@@ -236,9 +236,7 @@ When adding new phantom-science integration examples:
 
 ## License
 
-These examples are part of the Stegano project and are subject to the same proprietary license terms.
-
-Copyright (c) 2025 Scott Friedman. All rights reserved.
+These examples are part of the Stegano project and are licensed under the Apache License, Version 2.0. See the top-level `LICENSE` file.
 
 ---
 
