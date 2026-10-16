@@ -1,4 +1,7 @@
+#![cfg(feature = "experimental")]
 //! Comprehensive test suite for ML optimization algorithms
+//!
+//! Requires `--features experimental`.
 //!
 //! Tests all optimization algorithms including:
 //! - Genetic Algorithm with real operators

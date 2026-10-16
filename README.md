@@ -55,8 +55,11 @@ project. To use this library, add a git dependency:
 stegano = { git = "https://github.com/scttfrdmn/stegano" }
 ```
 
-Optional Cargo features: `gpu` (default; wgpu), `metal`, `cuda`, `python`,
-`wasm`, `benchmarks`.
+Optional Cargo features (none are on by default): `python`, `wasm`,
+`benchmarks`, and `experimental`. `experimental` enables the unsupported
+`gpu`, `ml` and `monitoring` modules, which the embedding pipeline does not
+use and whose APIs may change or be removed. `gpu` (wgpu), `metal` and `cuda`
+imply `experimental`.
 
 ## CLI usage
 

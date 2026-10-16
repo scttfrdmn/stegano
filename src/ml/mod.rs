@@ -1,5 +1,9 @@
 //! Machine Learning Optimization Framework
 //!
+//! **Experimental.** Available only with the `experimental` Cargo feature.
+//! This module is not used by the embedding pipeline, is unsupported, and
+//! its API may change or be removed in any release.
+//!
 //! Implements adaptive steganography using machine learning to optimize
 //! embedding strategies based on carrier data characteristics, detection
 //! resistance, and embedding efficiency.

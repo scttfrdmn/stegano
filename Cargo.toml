@@ -12,8 +12,9 @@ name = "stegano"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-# Core async runtime
-tokio = { version = "1.0", features = ["full"] }
+# Core async runtime. Only the wasm32-compatible subset is enabled here;
+# the multi-threaded runtime is added for native targets further below.
+tokio = { version = "1.0", default-features = false, features = ["rt", "macros", "sync", "time"] }
 async-trait = "0.1"
 
 # Serialization
@@ -41,7 +42,7 @@ num_cpus = "1.15"
 num-complex = "0.4"
 rustfft = "6.1"
 
-# GPU acceleration
+# GPU acceleration (experimental; not used by the embedding pipeline)
 wgpu = { version = "22.0", optional = true, features = ["wgsl"] }
 bytemuck = { version = "1.14", features = ["derive"] }
 futures = "0.3"
@@ -82,6 +83,15 @@ js-sys = { version = "0.3", optional = true }
 # getrandom with "js" feature provides browser-native entropy for wasm32 targets.
 getrandom = { version = "0.2", optional = true, features = ["js"] }
 
+# NOTE: everything below a `[target...]` header belongs to that target only.
+# Keep all cross-platform dependencies ABOVE this point.
+
+# Native-only: multi-threaded runtime (used by #[tokio::main], the FFI and
+# Python bindings) and process spawning (used by the experimental monitoring
+# module). Neither compiles on wasm32.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.0", default-features = false, features = ["rt-multi-thread", "process"] }
+
 # Metal support for macOS
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.29", optional = true }
@@ -99,10 +109,13 @@ serial_test = "3.0"  # For sequential test execution
 mockall = "0.12"     # For mocking in tests
 
 [features]
-default = ["gpu"]
-gpu = ["wgpu"]
-metal = ["dep:metal", "dep:objc", "dep:core-graphics-types"]
-cuda = ["dep:cudarc"]
+default = []
+# Unstable, unsupported modules (`gpu`, `ml`, `monitoring`). They are not used
+# by the embedding pipeline and their APIs may change or be removed.
+experimental = []
+gpu = ["experimental", "dep:wgpu"]
+metal = ["experimental", "dep:metal", "dep:objc", "dep:core-graphics-types"]
+cuda = ["experimental", "dep:cudarc"]
 benchmarks = ["criterion"]
 python = ["dep:pyo3"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:getrandom"]
@@ -133,7 +146,7 @@ required-features = ["benchmarks"]
 [[bench]]
 name = "ml_optimization_benchmarks"
 harness = false
-required-features = ["benchmarks"]
+required-features = ["benchmarks", "experimental"]
 
 [[example]]
 name = "basic_demo"
@@ -154,7 +167,7 @@ path = "examples/signals/demo.rs"
 [[example]]
 name = "gpu_acceleration_demo"
 path = "examples/gpu_acceleration_demo.rs"
-required-features = ["gpu"]
+required-features = ["experimental"]
 
 # Phantom-science integration examples
 [[example]]

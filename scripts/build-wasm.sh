@@ -2,7 +2,9 @@
 # Build WebAssembly bindings for browser (ESM) and Node.js (CJS) targets.
 #
 # Requirements:
-#   cargo install wasm-pack   # wasm-pack >= 0.13
+#   cargo install wasm-pack                    # wasm-pack >= 0.13
+#   rustup target add wasm32-unknown-unknown   # needs a rustup toolchain;
+#                                              # Homebrew's rustc has no wasm32 std
 #
 # Usage:
 #   ./scripts/build-wasm.sh           # both targets
@@ -17,6 +19,26 @@ set -euo pipefail
 
 TARGET="${1:-all}"
 FEATURES="--no-default-features --features wasm"
+
+# Run from the crate root regardless of the caller's cwd.
+cd "$(dirname "$0")/.."
+
+# Prefer the rustup-managed toolchain: a Homebrew/distro rustc earlier on PATH
+# lacks the wasm32 standard library and fails with "can't find crate for core".
+if [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/rustup" ]; then
+    export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:${PATH}"
+fi
+
+command -v wasm-pack >/dev/null 2>&1 || {
+    echo "error: wasm-pack not found (cargo install wasm-pack)" >&2
+    exit 1
+}
+if command -v rustup >/dev/null 2>&1; then
+    rustup target list --installed | grep -qx wasm32-unknown-unknown ||
+        rustup target add wasm32-unknown-unknown
+else
+    echo "warning: rustup not found; assuming rustc has the wasm32-unknown-unknown target" >&2
+fi
 
 build_target() {
     local target="$1"
