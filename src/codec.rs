@@ -27,7 +27,8 @@
 use crate::core::{CipherKind, EmbedParams, Result, SteganoError};
 use crate::crypto::{self, NONCE_LEN, SALT_LEN, TAG_LEN};
 use crate::error_correction::{
-    ecc_len_for, rs_correct_block, rs_decode_stream, rs_encode_block, rs_encode_stream, ECC_LENS,
+    ecc_len_for, rs_block_count, rs_correct_block, rs_decode_stream, rs_encode_block,
+    rs_encode_stream, ECC_LENS, RS_BLOCK,
 };
 
 /// Wire format version written by this crate.
@@ -206,6 +207,27 @@ fn try_header(data: &[u8], ecc_len: usize) -> Result<(Header, usize)> {
         Header::parse(&corrected, ecc_len)?
     };
     Ok((header, hdr_block))
+}
+
+/// Cheap structural check: does `data` start with a valid v2 payload?
+///
+/// Requires a header that parses (after RS correction, for any allowed EC
+/// level) and whose declared body length fits in the remaining bytes.  No
+/// key derivation or decryption is performed, so this cannot tell whether a
+/// password is correct — only whether a payload is plausibly present.
+pub(crate) fn looks_like_payload(data: &[u8]) -> bool {
+    ECC_LENS.into_iter().any(|ecc| {
+        let Ok((header, body_off)) = try_header(data, ecc) else {
+            return false;
+        };
+        let len = header.len as usize;
+        let need = if ecc == 0 {
+            Some(len)
+        } else {
+            rs_block_count(len, ecc).checked_mul(RS_BLOCK)
+        };
+        need.is_some_and(|n| n <= data.len() - body_off)
+    })
 }
 
 /// Decode a payload previously encoded with [`encode_payload`].
@@ -540,6 +562,20 @@ mod tests {
         assert!(decode_payload(&[0xFFu8; 600], &p).is_err());
         let enc = encode_payload(&[9u8; 400], &p).unwrap();
         assert!(decode_payload(&enc[..enc.len() - 1], &p).is_err());
+    }
+
+    #[test]
+    fn test_looks_like_payload() {
+        for level in LEVELS {
+            for key in [&b""[..], b"pw"] {
+                let enc = encode_payload(b"present", &params(key, level)).unwrap();
+                assert!(looks_like_payload(&enc), "{level:?}");
+                assert!(!looks_like_payload(&enc[..enc.len() - 1]), "{level:?}");
+            }
+        }
+        assert!(!looks_like_payload(&[]));
+        assert!(!looks_like_payload(&[0u8; 4096]));
+        assert!(!looks_like_payload(&[0xFFu8; 4096]));
     }
 
     #[test]

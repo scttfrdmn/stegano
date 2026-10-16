@@ -1343,13 +1343,16 @@ mod tests {
             assert_eq!(handler.extract(&c, &p).await.unwrap(), payload, "{name}");
             let mut c = carrier_for(Layout::PngRgb8, cover.clone());
             let too_big = vec![0x5Au8; max_payload + 1];
-            assert!(
-                matches!(
-                    handler.embed(&mut c, &too_big, &p).await,
-                    Err(SteganoError::InsufficientCapacity { .. })
-                ),
-                "{name}: over-capacity must error"
-            );
+            // Units are bits (#61).
+            match handler.embed(&mut c, &too_big, &p).await {
+                Err(SteganoError::InsufficientCapacity { needed, available }) => {
+                    // Both include the imagery framing header.
+                    assert_eq!(available, bits + HEADER_LEN * 8, "{name}");
+                    let n = (HEADER_LEN + max_payload + 1 + overhead) * 8;
+                    assert_eq!(needed, n, "{name}");
+                }
+                other => panic!("{name}: expected InsufficientCapacity, got {other:?}"),
+            }
         }
     }
 

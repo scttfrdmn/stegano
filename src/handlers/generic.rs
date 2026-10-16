@@ -7,8 +7,8 @@ use std::time::Instant;
 
 /// Fallback handler for arbitrary binary carrier data.
 ///
-/// Uses simple LSB substitution with a 32-bit length header prepended
-/// to the payload. Suitable for any format not covered by a specialised handler.
+/// Uses simple LSB substitution (1 bit per carrier byte) with a 32-bit length
+/// header prepended to the wire-format-v2 encoded payload. Suitable for any format not covered by a specialised handler.
 pub struct GenericHandler;
 
 impl Default for GenericHandler {
@@ -213,15 +213,14 @@ impl DataHandler for GenericHandler {
         use crate::codec;
         let start_time = Instant::now();
 
-        let use_codec = !params.encryption_key.is_empty()
-            || params.error_correction_level != ECLevel::None;
-        let (effective_payload, encryption_time_ms) = if use_codec {
-            let enc_start = Instant::now();
-            let encoded = codec::encode_payload(payload, params)?;
-            let enc_ms = enc_start.elapsed().as_nanos().max(1) as u64 / 1_000_000;
-            (encoded, enc_ms.max(1))
+        // Always frame with the v2 codec so `verify_integrity` can recognise
+        // the payload structurally (see #60).
+        let enc_start = Instant::now();
+        let effective_payload = codec::encode_payload(payload, params)?;
+        let encryption_time_ms = if params.encryption_key.is_empty() {
+            0
         } else {
-            (payload.to_vec(), 0)
+            (enc_start.elapsed().as_millis() as u64).max(1)
         };
 
         let _bits_embedded = self.lsb_embed(&mut carrier.raw_data, &effective_payload)?;
@@ -245,30 +244,17 @@ impl DataHandler for GenericHandler {
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
         use crate::codec;
         let raw = self.lsb_extract(&carrier.raw_data)?;
-        let use_codec = !params.encryption_key.is_empty()
-            || params.error_correction_level != ECLevel::None;
-        if use_codec {
-            codec::decode_payload(&raw, params)
-        } else {
-            Ok(raw)
-        }
+        codec::decode_payload(&raw, params)
     }
 
     fn verify_integrity(&self, carrier: &CarrierData) -> Result<bool> {
-        // Basic integrity check - verify we can extract a valid payload length
-        if carrier.raw_data.len() < 32 {
-            return Ok(false);
+        // Presence requires the outer length header to fit *and* the framed
+        // bytes to carry a structurally valid wire-format-v2 header (version,
+        // flags, EC length, declared length within capacity). No KDF/decrypt.
+        match self.lsb_extract(&carrier.raw_data) {
+            Ok(raw) => Ok(crate::codec::looks_like_payload(&raw)),
+            Err(_) => Ok(false),
         }
-
-        let mut len_bits = Vec::with_capacity(32);
-        for i in 0..32 {
-            len_bits.push(carrier.raw_data[i] & 1);
-        }
-        let payload_len = self.bits_to_u32(&len_bits);
-
-        // Check if declared payload length is reasonable
-        let max_possible_payload = (carrier.raw_data.len() - 32) / 8;
-        Ok(payload_len as usize <= max_possible_payload)
     }
 }
 
@@ -597,6 +583,74 @@ mod tests {
         };
 
         assert!(!handler.verify_integrity(&carrier).unwrap());
+    }
+
+    fn binary_carrier(raw_data: Vec<u8>) -> CarrierData {
+        CarrierData {
+            format: DataFormat::BINARY,
+            raw_data,
+            metadata: HashMap::new(),
+            dimensions: None,
+            sampling_rate: None,
+        }
+    }
+
+    #[test]
+    fn test_verify_integrity_all_zero_carrier_not_found() {
+        let handler = GenericHandler::new();
+        for n in [32, 100, 4096, 20_000] {
+            assert!(!handler
+                .verify_integrity(&binary_carrier(vec![0; n]))
+                .unwrap());
+        }
+    }
+
+    #[test]
+    fn test_verify_integrity_random_carrier_not_found() {
+        use rand::{Rng, SeedableRng};
+        let handler = GenericHandler::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x60);
+        for _ in 0..50 {
+            let data: Vec<u8> = (0..8192).map(|_| rng.gen()).collect();
+            assert!(!handler.verify_integrity(&binary_carrier(data)).unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verify_integrity_embedded_found() {
+        let handler = GenericHandler::new();
+        for key in [&b""[..], b"pw"] {
+            for level in [ECLevel::None, ECLevel::Medium] {
+                let params = EmbedParams {
+                    encryption_key: key.to_vec(),
+                    error_correction_level: level,
+                    ..Default::default()
+                };
+                let mut carrier = binary_carrier(vec![0; 8192]);
+                handler
+                    .embed(&mut carrier, b"hidden", &params)
+                    .await
+                    .unwrap();
+                assert!(
+                    handler.verify_integrity(&carrier).unwrap(),
+                    "key={key:?} level={level:?}"
+                );
+                assert_eq!(handler.extract(&carrier, &params).await.unwrap(), b"hidden");
+            }
+        }
+    }
+
+    #[test]
+    fn test_insufficient_capacity_reports_bits() {
+        let handler = GenericHandler::new();
+        let mut carrier = vec![0; 100];
+        match handler.lsb_embed(&mut carrier, &[0u8; 10]) {
+            Err(SteganoError::InsufficientCapacity { needed, available }) => {
+                assert_eq!(needed, 32 + 80);
+                assert_eq!(available, 100);
+            }
+            other => panic!("expected InsufficientCapacity, got {other:?}"),
+        }
     }
 
     #[test]

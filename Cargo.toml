@@ -140,14 +140,11 @@ opt-level = 3
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+# Must unwind: the FFI wraps every export in `catch_unwind` so a panic is
+# reported as `SteganoErrorCode::Panic` instead of aborting the host process.
+panic = "unwind"
 
 [profile.bench]
-# Benches link against the lib; inheriting release `panic = "abort"` makes
-# deps abort while the bench crate itself unwinds ("requires panic strategy
-# `abort`" errors). Cargo warns this setting is ignored, but it is not: it
-# still governs how dependencies are built for `cargo bench`.
-panic = "unwind"
 debug = true
 
 [[bench]]

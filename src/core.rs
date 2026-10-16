@@ -734,6 +734,10 @@ pub enum SteganoError {
     #[error("Unsupported data format: {0:?}")]
     UnsupportedFormat(DataFormat),
 
+    /// The carrier cannot hold the payload.
+    ///
+    /// Both `needed` and `available` are in **bits** (including any
+    /// handler framing/header), for every handler.
     #[error("Insufficient capacity: need {needed} bits, have {available}")]
     InsufficientCapacity { needed: usize, available: usize },
 

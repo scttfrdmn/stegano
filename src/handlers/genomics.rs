@@ -1185,7 +1185,15 @@ mod tests {
             .embed(&mut c, &vec![0u8; max_plain + 1], &p)
             .await
             .unwrap_err();
-        assert!(matches!(err, SteganoError::InsufficientCapacity { .. }));
+        // Units are bits (#61).
+        match err {
+            SteganoError::InsufficientCapacity { needed, available } => {
+                // Both include the 9-byte genomics framing header.
+                assert_eq!(available, cap_bits + HEADER_LEN * 8);
+                assert_eq!(needed, (HEADER_LEN + max_plain + 1 + overhead) * 8);
+            }
+            other => panic!("expected InsufficientCapacity, got {other:?}"),
+        }
         assert_eq!(c.raw_data, orig, "carrier must be untouched on error");
     }
 
