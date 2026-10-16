@@ -4,7 +4,7 @@
 //! including classical statistical tests, advanced steganalysis, and publication-ready metrics.
 
 use crate::core::*;
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -367,60 +367,16 @@ impl ClassicalStatisticalTests {
 
     // Helper methods for statistical calculations
 
+    /// Upper-tail probability `P(χ²_df ≥ chi_square)` (exact, via the regularized
+    /// incomplete gamma function).
     fn chi_square_p_value(&self, chi_square: f64, df: usize) -> f64 {
-        if df == 0 {
-            return 1.0;
-        }
-        if df == 1 {
-            // χ²₁ = Z², so P(χ²₁ ≥ t) = P(|Z| ≥ √t) = 2*(1 - Φ(√t))
-            2.0 * (1.0 - self.standard_normal_cdf(chi_square.max(0.0).sqrt()))
-        } else {
-            // Fisher approximation: z ≈ √(2χ²) - √(2k-1), p = 1 - Φ(z) (one-tailed right tail)
-            let z = (2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt();
-            (1.0 - self.standard_normal_cdf(z)).clamp(0.0, 1.0)
-        }
+        chi_square_survival(chi_square, df)
     }
 
+    /// One-tailed (upper) critical value of the χ² distribution at significance
+    /// `α = 1 − confidence`, i.e. the value `c` with `P(χ²_df ≥ c) = α`.
     fn chi_square_critical_value(&self, df: usize, confidence: f64) -> f64 {
-        // Simplified critical value calculation
-        // For production, use a proper statistical library
-        let alpha = 1.0 - confidence;
-        match df {
-            1 => {
-                if alpha <= 0.05 {
-                    3.84
-                } else {
-                    2.71
-                }
-            }
-            2 => {
-                if alpha <= 0.05 {
-                    5.99
-                } else {
-                    4.61
-                }
-            }
-            3 => {
-                if alpha <= 0.05 {
-                    7.81
-                } else {
-                    6.25
-                }
-            }
-            4 => {
-                if alpha <= 0.05 {
-                    9.49
-                } else {
-                    7.78
-                }
-            }
-            _ => {
-                // Wilson-Hilferty approximation
-                let h = 2.0 / (9.0 * df as f64);
-                let z = if alpha <= 0.05 { 1.96 } else { 1.645 };
-                df as f64 * (1.0 - h + z * (h).sqrt()).powi(3)
-            }
-        }
+        chi_square_upper_quantile(1.0 - confidence, df)
     }
 
     fn ks_critical_value(&self, n1: usize, n2: usize, confidence: f64) -> f64 {
@@ -539,12 +495,36 @@ impl AdvancedSteganalysis {
         }
     }
 
-    /// Comprehensive pixel pair analysis for LSB embedding detection
+    /// Pixel-pair LSB steganalysis.
+    ///
+    /// Historically this function computed a statistic that was identically
+    /// `0.5 · N` for every input. It is now a thin wrapper around
+    /// [`AdvancedSteganalysis::sample_pairs_analysis`] (Dumitrescu–Wu–Wang
+    /// Sample Pairs Analysis), which works on pairs of spatially adjacent samples.
+    ///
+    /// * `image` — raw 8-bit samples in row-major order (not a compressed file).
+    /// * `width`, `height` — image dimensions in pixels. If `width * height`
+    ///   evenly divides `image.len()` with a quotient of 1–4, that quotient is used
+    ///   as the interleaved channel count; otherwise one channel is assumed. If
+    ///   `height == 0` or the image is smaller than `width * height`, the data is
+    ///   treated as rows of `width` samples.
+    ///
+    /// Field meanings in the result:
+    /// * `embedding_probability` — SPA estimate of the LSB-replacement embedding
+    ///   rate (fraction of samples carrying message bits), clamped to `[0, 1]`.
+    /// * `affected_pairs` — `round(embedding_probability × pairs analysed)`.
+    /// * `chi_square_statistic` / `p_value` — the SPA balance test
+    ///   `(|X| − |Y|)² / (|X| + |Y|)` with 1 degree of freedom. For a clean cover
+    ///   SPA assumes `|X| ≈ |Y|`; LSB replacement breaks that balance, so a small
+    ///   `p_value` is evidence of embedding.
+    /// * `confidence` — `1 − p_value`.
+    /// * `lsb_embedding_detected` — estimated rate exceeds the configured
+    ///   detection threshold **and** the balance test rejects at α = 0.05.
     pub fn pixel_pair_analysis(
         &self,
         image: &[u8],
         width: usize,
-        _height: usize,
+        height: usize,
     ) -> Result<PixelPairAnalysisResult> {
         if image.is_empty() || width == 0 {
             return Err(SteganoError::InvalidParameter(
@@ -552,64 +532,176 @@ impl AdvancedSteganalysis {
             ));
         }
 
-        let mut adjacent_pairs: usize = 0;
-        let mut affected_pairs = 0;
-        let mut chi_square = 0.0;
-
-        // Analyze horizontal adjacent pixels
-        for row_start in (0..image.len()).step_by(width) {
-            for i in 0..width.saturating_sub(1) {
-                if row_start + i + 1 < image.len() {
-                    let pixel1 = image[row_start + i];
-                    let pixel2 = image[row_start + i + 1];
-
-                    adjacent_pairs += 1;
-
-                    // Check for LSB manipulation patterns
-                    let lsb1 = pixel1 & 1;
-                    let lsb2 = pixel2 & 1;
-
-                    // Statistical analysis of LSB relationships
-                    let expected_correlation = 0.5; // Random expectation
-                    let observed_correlation = if lsb1 == lsb2 { 1.0 } else { 0.0 };
-
-                    let diff = observed_correlation - expected_correlation;
-                    chi_square += diff * diff / expected_correlation;
-
-                    // Detect unnatural LSB patterns
-                    if (pixel1 ^ pixel2) & 1 == 0 && (pixel1 >> 1) != (pixel2 >> 1) {
-                        affected_pairs += 1;
-                    }
-                }
+        let pixels = width.saturating_mul(height);
+        let (samples, channels, rows) = if height > 0 && pixels > 0 && image.len() >= pixels {
+            let ch = image.len() / pixels;
+            if image.len().is_multiple_of(pixels) && (1..=4).contains(&ch) {
+                (&image[..pixels * ch], ch, height)
+            } else {
+                (&image[..pixels], 1, height)
             }
+        } else {
+            (image, 1, image.len().div_ceil(width))
+        };
+
+        if samples.len() < 2 {
+            return Ok(PixelPairAnalysisResult {
+                lsb_embedding_detected: false,
+                embedding_probability: 0.0,
+                affected_pairs: 0,
+                chi_square_statistic: 0.0,
+                p_value: 1.0,
+                confidence: 0.0,
+            });
         }
 
-        let embedding_probability = if adjacent_pairs > 0 {
-            affected_pairs as f64 / adjacent_pairs as f64
-        } else {
-            0.0
-        };
-
-        // Calculate p-value for chi-square test
-        let df = adjacent_pairs.saturating_sub(1);
-        let p_value = if df > 0 {
-            self.chi_square_p_value(chi_square, df)
-        } else {
-            1.0
-        };
-
-        let lsb_embedding_detected =
-            embedding_probability > self.detection_threshold || p_value < 0.05;
-        let confidence = 1.0 - p_value;
+        let spa = self.sample_pairs_analysis(samples, width, rows, channels)?;
+        let affected_pairs = (spa.estimated_rate * spa.pairs_analyzed as f64).round() as usize;
 
         Ok(PixelPairAnalysisResult {
-            lsb_embedding_detected,
-            embedding_probability,
+            lsb_embedding_detected: spa.embedding_detected,
+            embedding_probability: spa.estimated_rate,
             affected_pairs,
-            chi_square_statistic: chi_square,
-            p_value,
-            confidence,
+            chi_square_statistic: spa.balance_chi_square,
+            p_value: spa.balance_p_value,
+            confidence: 1.0 - spa.balance_p_value,
         })
+    }
+
+    /// Westfeld–Pfitzmann pairs-of-values (PoV) χ² attack on LSB replacement.
+    ///
+    /// Reference: A. Westfeld and A. Pfitzmann, "Attacks on Steganographic
+    /// Systems", *Information Hiding 1999*, LNCS 1768, pp. 61–76.
+    ///
+    /// LSB replacement with uniformly random message bits equalises the
+    /// histogram counts within every pair of values `(2k, 2k+1)`. The test is a
+    /// Pearson goodness-of-fit against that *stego* hypothesis:
+    ///
+    /// `χ² = Σ_k (h[2k] − h[2k+1])² / (h[2k] + h[2k+1])`
+    ///
+    /// which is the full two-cell Pearson sum for each pair (Westfeld's paper
+    /// sums only the even cell, which halves the statistic). Pairs with fewer
+    /// than 10 total samples (expected count < 5 per cell) are skipped. Under the
+    /// stego hypothesis the statistic is asymptotically χ² with one degree of
+    /// freedom per pair used.
+    ///
+    /// `embedding_probability = P(χ²_df ≥ statistic)` is Westfeld's "probability
+    /// of embedding": it is roughly uniform on `(0, 1)` for a fully embedded
+    /// carrier and collapses towards 0 for a cover whose histogram has
+    /// pair-asymmetric structure. The attack is blind to covers whose histogram
+    /// is already smooth at the 1-LSB scale (such covers look "embedded" to PoV);
+    /// use [`Self::sample_pairs_analysis`] for those. For sequential embedding,
+    /// apply the test to increasing prefixes of the carrier as Westfeld does; the
+    /// probability stays high while the prefix lies inside the embedded region.
+    ///
+    /// `embedding_detected` is true when the stego hypothesis is *not* rejected
+    /// at α = 0.05 (`embedding_probability > 0.05`) and at least two pairs were
+    /// used.
+    pub fn pairs_of_values_test(&self, samples: &[u8]) -> Result<PairsOfValuesResult> {
+        if samples.is_empty() {
+            return Err(SteganoError::InvalidParameter(
+                "Cannot run pairs-of-values test on empty data".to_string(),
+            ));
+        }
+        let mut hist = [0u64; 256];
+        for &b in samples {
+            hist[b as usize] += 1;
+        }
+
+        let mut chi_square = 0.0;
+        let mut pairs_used = 0usize;
+        for &[even, odd] in hist.as_chunks::<2>().0 {
+            let (even, odd) = (even as f64, odd as f64);
+            let total = even + odd;
+            if total < POV_MIN_PAIR_COUNT {
+                continue;
+            }
+            chi_square += (even - odd).powi(2) / total;
+            pairs_used += 1;
+        }
+
+        let embedding_probability = if pairs_used == 0 {
+            0.0
+        } else {
+            chi_square_survival(chi_square, pairs_used)
+        };
+
+        Ok(PairsOfValuesResult {
+            chi_square_statistic: chi_square,
+            degrees_of_freedom: pairs_used,
+            embedding_probability,
+            pairs_used,
+            embedding_detected: pairs_used >= 2 && embedding_probability > DETECTOR_ALPHA,
+        })
+    }
+
+    /// Sample Pairs Analysis (SPA) estimate of the LSB-replacement embedding rate.
+    ///
+    /// Reference: S. Dumitrescu, X. Wu and Z. Wang, "Detection of LSB
+    /// steganography via sample pair analysis", *IEEE Trans. Signal Processing*
+    /// 51(7), 2003, pp. 1995–2007.
+    ///
+    /// Each pair `(u, v)` of adjacent samples (horizontal neighbours `channels`
+    /// bytes apart within a row of `width · channels` bytes, plus vertical
+    /// neighbours when `height > 1`) is classified into:
+    ///
+    /// * `X`: `v` even and `u < v`, or `v` odd and `u > v`;
+    /// * `Y`: `v` even and `u > v`, or `v` odd and `u < v`;
+    /// * `K = W ∪ Z`: `⌊u/2⌋ = ⌊v/2⌋` (the closed set `C₀`).
+    ///
+    /// Under the SPA cover model (`|X₂ₘ₊₁| = |Y₂ₘ₊₁|`), the embedding rate `p`
+    /// (fraction of samples carrying message bits — about half of which flip)
+    /// is the smaller root of
+    ///
+    /// `(|K| / 2) p² + (2|X| − |P|) p + (|Y| − |X|) = 0`.
+    ///
+    /// `estimated_rate` is that root clamped to `[0, 1]`; `raw_estimate` is the
+    /// unclamped root (useful as a continuous detector score). A clean natural
+    /// cover typically yields `|raw_estimate|` of a few percent; 100 % embedding
+    /// yields ≈ 1. The balance test `(|X| − |Y|)² / (|X| + |Y|) ~ χ²₁` gives a
+    /// p-value for the clean-cover hypothesis `|X| = |Y|`.
+    ///
+    /// For 1-D signals pass `height = 1` and `width = samples.len()`.
+    pub fn sample_pairs_analysis(
+        &self,
+        samples: &[u8],
+        width: usize,
+        height: usize,
+        channels: usize,
+    ) -> Result<SamplePairsResult> {
+        if samples.len() < 2 || width == 0 || channels == 0 {
+            return Err(SteganoError::InvalidParameter(
+                "Sample pairs analysis needs at least two samples and non-zero width/channels"
+                    .to_string(),
+            ));
+        }
+        let counts = spa_counts(samples, width, height, channels);
+        Ok(self.spa_from_counts(&counts))
+    }
+
+    fn spa_from_counts(&self, c: &SpaCounts) -> SamplePairsResult {
+        let raw = spa_rate(c);
+        let raw = if raw.is_finite() { raw } else { 0.0 };
+        let estimated_rate = raw.clamp(0.0, 1.0);
+        let (balance_chi_square, balance_p_value) = if c.x + c.y > 0 {
+            let d = c.x as f64 - c.y as f64;
+            let chi = d * d / (c.x + c.y) as f64;
+            (chi, chi_square_survival(chi, 1))
+        } else {
+            (0.0, 1.0)
+        };
+        SamplePairsResult {
+            estimated_rate,
+            raw_estimate: raw,
+            pairs_analyzed: c.pairs,
+            x_pairs: c.x,
+            y_pairs: c.y,
+            closed_pairs: c.k,
+            balance_chi_square,
+            balance_p_value,
+            embedding_detected: estimated_rate > self.detection_threshold
+                && balance_p_value < DETECTOR_ALPHA,
+        }
     }
 
     /// Wavelet-based structural analysis for advanced steganalysis
@@ -847,49 +939,13 @@ impl AdvancedSteganalysis {
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(n);
 
-        let mut buffer: Vec<Complex<f32>> = data
-            .iter()
-            .map(|&x| Complex { re: x, im: 0.0 })
-            .collect();
+        let mut buffer: Vec<Complex<f32>> =
+            data.iter().map(|&x| Complex { re: x, im: 0.0 }).collect();
 
         fft.process(&mut buffer);
 
         let magnitudes: Vec<f32> = buffer.iter().map(|c| c.norm()).collect();
         Ok(magnitudes)
-    }
-
-    fn chi_square_p_value(&self, chi_square: f64, df: usize) -> f64 {
-        if df == 0 {
-            return 1.0;
-        }
-        if df == 1 {
-            2.0 * (1.0 - self.standard_normal_cdf(chi_square.max(0.0).sqrt()))
-        } else {
-            // Fisher approximation: z ≈ √(2χ²) - √(2k-1), p = 1 - Φ(z) (one-tailed)
-            let z = (2.0 * chi_square).sqrt() - (2.0 * df as f64 - 1.0).sqrt();
-            (1.0 - self.standard_normal_cdf(z)).clamp(0.0, 1.0)
-        }
-    }
-
-    fn standard_normal_cdf(&self, x: f64) -> f64 {
-        0.5 * (1.0 + self.error_function(x / 2_f64.sqrt()))
-    }
-
-    fn error_function(&self, x: f64) -> f64 {
-        let a1 = 0.254829592;
-        let a2 = -0.284496736;
-        let a3 = 1.421413741;
-        let a4 = -1.453152027;
-        let a5 = 1.061405429;
-        let p = 0.3275911;
-
-        let sign = if x < 0.0 { -1.0 } else { 1.0 };
-        let x = x.abs();
-
-        let t = 1.0 / (1.0 + p * x);
-        let y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * (-x * x).exp();
-
-        sign * y
     }
 }
 
@@ -988,8 +1044,10 @@ impl PerformanceAnalysis {
             threshold_values.push(threshold);
         }
 
-        // Calculate AUC using trapezoidal rule
-        let auc = self.calculate_auc(&fpr_values, &tpr_values);
+        // AUC = P(score_stego > score_cover) + ½·P(tie) (Mann–Whitney U), which is
+        // the exact area under the full empirical ROC curve including its
+        // (0,0) and (1,1) endpoints.
+        let auc = CrossValidation::mann_whitney_auc(true_labels, predicted_scores);
 
         // Find optimal threshold using Youden's index
         let (optimal_threshold, optimal_sensitivity, optimal_specificity, youden_index) =
@@ -1030,21 +1088,6 @@ impl PerformanceAnalysis {
         }
 
         (tp, fp, tn, fn_count)
-    }
-
-    fn calculate_auc(&self, fpr: &[f64], tpr: &[f64]) -> f64 {
-        if fpr.len() != tpr.len() || fpr.is_empty() {
-            return 0.0;
-        }
-
-        let mut auc = 0.0;
-        for i in 1..fpr.len() {
-            let dx = fpr[i] - fpr[i - 1];
-            let avg_y = (tpr[i] + tpr[i - 1]) / 2.0;
-            auc += dx * avg_y;
-        }
-
-        auc.abs() // Ensure positive AUC
     }
 
     fn find_optimal_threshold(
@@ -1197,40 +1240,366 @@ impl CrossValidation {
         })
     }
 
-    /// AUC via Mann-Whitney U statistic: fraction of (positive, negative) score pairs
-    /// where the positive score exceeds the negative score.
+    /// AUC via the Mann–Whitney U statistic: the fraction of (positive, negative)
+    /// score pairs where the positive score is higher, counting ties as ½.
+    /// Rank-based, `O(n log n)`. Returns 0.5 when either class is empty.
     fn mann_whitney_auc(labels: &[bool], scores: &[f64]) -> f64 {
-        let n_pos = labels.iter().filter(|&&l| l).count() as f64;
-        let n_neg = labels.iter().filter(|&&l| !l).count() as f64;
-        if n_pos == 0.0 || n_neg == 0.0 {
+        let n = labels.len().min(scores.len());
+        let n_pos = labels[..n].iter().filter(|&&l| l).count();
+        let n_neg = n - n_pos;
+        if n_pos == 0 || n_neg == 0 {
             return 0.5; // undefined; return chance level
         }
 
-        let pos_scores: Vec<f64> = scores
-            .iter()
-            .zip(labels.iter())
-            .filter(|(_, &l)| l)
-            .map(|(&s, _)| s)
-            .collect();
-        let neg_scores: Vec<f64> = scores
-            .iter()
-            .zip(labels.iter())
-            .filter(|(_, &l)| !l)
-            .map(|(&s, _)| s)
-            .collect();
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_by(|&a, &b| scores[a].total_cmp(&scores[b]));
 
-        let mut u = 0.0f64;
-        for &p in &pos_scores {
-            for &n in &neg_scores {
-                if p > n {
-                    u += 1.0;
-                } else if (p - n).abs() < f64::EPSILON {
-                    u += 0.5;
+        // Sum of mid-ranks (1-based) of the positive samples.
+        let mut rank_sum_pos = 0.0f64;
+        let mut i = 0;
+        while i < idx.len() {
+            let mut j = i;
+            while j + 1 < idx.len() && scores[idx[j + 1]] == scores[idx[i]] {
+                j += 1;
+            }
+            let mid_rank = (i + j) as f64 / 2.0 + 1.0;
+            for &k in &idx[i..=j] {
+                if labels[k] {
+                    rank_sum_pos += mid_rank;
                 }
             }
+            i = j + 1;
         }
-        u / (n_pos * n_neg)
+        let (np, nn) = (n_pos as f64, n_neg as f64);
+        let u = rank_sum_pos - np * (np + 1.0) / 2.0;
+        u / (np * nn)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Distribution functions
+// ---------------------------------------------------------------------------
+
+/// Natural log of the gamma function, `ln Γ(x)` (Lanczos approximation, g = 7).
+fn ln_gamma(x: f64) -> f64 {
+    const COEF: [f64; 9] = [
+        0.999_999_999_999_809_9,
+        676.520_368_121_885_1,
+        -1_259.139_216_722_402_8,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
+        12.507_343_278_686_905,
+        -0.138_571_095_265_720_12,
+        9.984_369_578_019_572e-6,
+        1.505_632_735_149_311_6e-7,
+    ];
+    if x < 0.5 {
+        // Reflection formula
+        let pi = std::f64::consts::PI;
+        return (pi / (pi * x).sin()).ln() - ln_gamma(1.0 - x);
+    }
+    let x = x - 1.0;
+    let t = x + 7.5;
+    let mut a = COEF[0];
+    for (i, &c) in COEF.iter().enumerate().skip(1) {
+        a += c / (x + i as f64);
+    }
+    0.5 * (2.0 * std::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+}
+
+/// Regularized upper incomplete gamma function `Q(a, x) = Γ(a, x) / Γ(a)`.
+///
+/// Uses the power series for `x < a + 1` and Lentz's continued fraction
+/// otherwise (Numerical Recipes §6.2).
+pub fn regularized_gamma_q(a: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 1.0;
+    }
+    if a <= 0.0 {
+        return 0.0;
+    }
+    const EPS: f64 = 1e-15;
+    const TINY: f64 = 1e-300;
+    let log_prefactor = -x + a * x.ln() - ln_gamma(a);
+    if x < a + 1.0 {
+        let mut ap = a;
+        let mut del = 1.0 / a;
+        let mut sum = del;
+        for _ in 0..10_000 {
+            ap += 1.0;
+            del *= x / ap;
+            sum += del;
+            if del.abs() < sum.abs() * EPS {
+                break;
+            }
+        }
+        (1.0 - sum * log_prefactor.exp()).clamp(0.0, 1.0)
+    } else {
+        let mut b = x + 1.0 - a;
+        let mut c = 1.0 / TINY;
+        let mut d = 1.0 / b;
+        let mut h = d;
+        for i in 1..10_000 {
+            let an = -(i as f64) * (i as f64 - a);
+            b += 2.0;
+            d = an * d + b;
+            if d.abs() < TINY {
+                d = TINY;
+            }
+            c = b + an / c;
+            if c.abs() < TINY {
+                c = TINY;
+            }
+            d = 1.0 / d;
+            let del = d * c;
+            h *= del;
+            if (del - 1.0).abs() < EPS {
+                break;
+            }
+        }
+        (log_prefactor.exp() * h).clamp(0.0, 1.0)
+    }
+}
+
+/// χ² survival function `P(χ²_df ≥ x)` — the one-tailed (upper) p-value.
+///
+/// Computed as `Q(df/2, x/2)`. Returns 1 for `df == 0`.
+pub fn chi_square_survival(x: f64, df: usize) -> f64 {
+    if df == 0 || x.is_nan() {
+        return 1.0;
+    }
+    regularized_gamma_q(df as f64 / 2.0, x.max(0.0) / 2.0)
+}
+
+/// Upper-tail χ² quantile: the value `c` with `P(χ²_df ≥ c) = alpha`.
+///
+/// Solved by bisection on [`chi_square_survival`]; e.g. `df = 1, α = 0.05`
+/// gives 3.841 and `df = 10, α = 0.05` gives 18.307.
+pub fn chi_square_upper_quantile(alpha: f64, df: usize) -> f64 {
+    if df == 0 || alpha >= 1.0 {
+        return 0.0;
+    }
+    let alpha = alpha.max(1e-300);
+    let mut lo = 0.0;
+    let mut hi = (df as f64).max(1.0);
+    while chi_square_survival(hi, df) > alpha && hi < 1e12 {
+        hi *= 2.0;
+    }
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if chi_square_survival(mid, df) > alpha {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if hi - lo <= 1e-12 * hi.max(1.0) {
+            break;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+// ---------------------------------------------------------------------------
+// LSB detector internals
+// ---------------------------------------------------------------------------
+
+/// Minimum `h[2k] + h[2k+1]` for a value pair to enter the PoV statistic
+/// (expected count ≥ 5 per cell).
+const POV_MIN_PAIR_COUNT: f64 = 10.0;
+/// Significance level used by the LSB detectors.
+const DETECTOR_ALPHA: f64 = 0.05;
+
+/// Westfeld–Pfitzmann pairs-of-values attack result. See
+/// [`AdvancedSteganalysis::pairs_of_values_test`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairsOfValuesResult {
+    /// Pearson χ² against the pair-equalised (stego) histogram.
+    pub chi_square_statistic: f64,
+    /// Degrees of freedom (= `pairs_used`).
+    pub degrees_of_freedom: usize,
+    /// `P(χ²_df ≥ statistic)`: high ⇒ histogram consistent with full LSB
+    /// replacement; ≈ 0 ⇒ histogram has cover-like pair asymmetry.
+    pub embedding_probability: f64,
+    /// Number of value pairs `(2k, 2k+1)` with enough samples to be tested.
+    pub pairs_used: usize,
+    /// Stego hypothesis not rejected at α = 0.05.
+    pub embedding_detected: bool,
+}
+
+/// Sample Pairs Analysis result. See
+/// [`AdvancedSteganalysis::sample_pairs_analysis`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamplePairsResult {
+    /// Estimated LSB-replacement embedding rate, clamped to `[0, 1]`.
+    pub estimated_rate: f64,
+    /// Unclamped SPA root (continuous detector score).
+    pub raw_estimate: f64,
+    /// Total adjacent pairs `|P|`.
+    pub pairs_analyzed: usize,
+    /// `|X|`.
+    pub x_pairs: usize,
+    /// `|Y|`.
+    pub y_pairs: usize,
+    /// `|K| = |W ∪ Z|`, pairs with `⌊u/2⌋ = ⌊v/2⌋`.
+    pub closed_pairs: usize,
+    /// `(|X| − |Y|)² / (|X| + |Y|)`.
+    pub balance_chi_square: f64,
+    /// `P(χ²₁ ≥ balance_chi_square)`; small ⇒ evidence of embedding.
+    pub balance_p_value: f64,
+    /// `estimated_rate > threshold` and `balance_p_value < 0.05`.
+    pub embedding_detected: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SpaCounts {
+    pairs: usize,
+    x: usize,
+    y: usize,
+    k: usize,
+}
+
+impl SpaCounts {
+    #[inline]
+    fn add(&mut self, u: u8, v: u8) {
+        self.pairs += 1;
+        let v_even = v & 1 == 0;
+        if (v_even && u < v) || (!v_even && u > v) {
+            self.x += 1;
+        } else if u != v {
+            self.y += 1;
+        }
+        if u >> 1 == v >> 1 {
+            self.k += 1;
+        }
+    }
+}
+
+/// Count SPA pair classes over horizontal (and, if `height > 1`, vertical)
+/// neighbours. Rows are `width * channels` bytes; a trailing partial row is
+/// included for horizontal pairs only.
+fn spa_counts(samples: &[u8], width: usize, height: usize, channels: usize) -> SpaCounts {
+    let mut c = SpaCounts::default();
+    let stride = width * channels;
+    for row in samples.chunks(stride) {
+        for i in channels..row.len() {
+            c.add(row[i - channels], row[i]);
+        }
+    }
+    if height > 1 {
+        let full = (samples.len() / stride).min(height);
+        for r in 1..full {
+            let prev = &samples[(r - 1) * stride..r * stride];
+            let cur = &samples[r * stride..(r + 1) * stride];
+            for (&u, &v) in prev.iter().zip(cur) {
+                c.add(u, v);
+            }
+        }
+    }
+    c
+}
+
+/// Smaller root of the SPA quadratic; `NaN` if undefined.
+fn spa_rate(c: &SpaCounts) -> f64 {
+    let a = c.k as f64 / 2.0;
+    let b = 2.0 * c.x as f64 - c.pairs as f64;
+    let cc = c.y as f64 - c.x as f64;
+    if a <= 0.0 {
+        // Degenerate (linear) case
+        return if b != 0.0 { -cc / b } else { f64::NAN };
+    }
+    let disc = b * b - 4.0 * a * cc;
+    if disc < 0.0 {
+        // No real root: the vertex is the closest estimate
+        return -b / (2.0 * a);
+    }
+    let sq = disc.sqrt();
+    ((-b - sq) / (2.0 * a)).min((-b + sq) / (2.0 * a))
+}
+
+/// Deterministic SplitMix64 PRNG used to simulate embedding in validation.
+#[derive(Debug, Clone)]
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// Threshold `t` maximising training accuracy of the rule `score ≥ t ⇒ stego`.
+fn fit_threshold(train: &[(Vec<f64>, bool)]) -> f64 {
+    let mut pts: Vec<(f64, bool)> = train.iter().map(|(f, l)| (f[0], *l)).collect();
+    if pts.is_empty() {
+        return 0.0;
+    }
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total_pos = pts.iter().filter(|p| p.1).count();
+    // Threshold below everything: all predicted positive.
+    let mut best_correct = total_pos;
+    let mut best_t = pts[0].0 - 1.0;
+    let mut neg_below = 0usize;
+    let mut pos_below = 0usize;
+    for i in 0..pts.len() {
+        if pts[i].1 {
+            pos_below += 1;
+        } else {
+            neg_below += 1;
+        }
+        // Only split between distinct scores
+        if i + 1 < pts.len() && pts[i + 1].0 == pts[i].0 {
+            continue;
+        }
+        let correct = neg_below + (total_pos - pos_below);
+        if correct > best_correct {
+            best_correct = correct;
+            best_t = if i + 1 < pts.len() {
+                0.5 * (pts[i].0 + pts[i + 1].0)
+            } else {
+                pts[i].0 + 1.0
+            };
+        }
+    }
+    best_t
+}
+
+/// Standard deviation of training scores (floored to keep the score map finite).
+fn score_spread(train: &[(Vec<f64>, bool)]) -> f64 {
+    if train.is_empty() {
+        return 1.0;
+    }
+    let n = train.len() as f64;
+    let mean = train.iter().map(|(f, _)| f[0]).sum::<f64>() / n;
+    let var = train
+        .iter()
+        .map(|(f, _)| (f[0] - mean).powi(2))
+        .sum::<f64>()
+        / n;
+    var.sqrt().max(1e-9)
+}
+
+/// Simulate LSB replacement: each sample is selected with probability `rate`
+/// and its LSB replaced by a uniformly random bit (so ≈ `rate / 2` of samples
+/// actually change). This is the per-sample operation the LSB handlers apply
+/// with an encrypted (pseudo-random) payload.
+fn simulate_lsb_replacement(cover: &[u8], rate: f64, rng: &mut SplitMix64) -> Vec<u8> {
+    cover
+        .iter()
+        .map(|&b| {
+            if rng.next_f64() < rate {
+                (b & !1) | (rng.next_u64() & 1) as u8
+            } else {
+                b
+            }
+        })
+        .collect()
 }
 
 /// Domain-specific validation for scientific data
@@ -1334,8 +1703,7 @@ impl StatisticalValidationSuite {
             || {
                 rayon::join(
                     || {
-                        let binary_seq: Vec<bool> =
-                            stego.iter().map(|&x| x & 1 == 1).collect();
+                        let binary_seq: Vec<bool> = stego.iter().map(|&x| x & 1 == 1).collect();
                         ct.runs_test(&binary_seq)
                     },
                     || {
@@ -1419,8 +1787,15 @@ impl StatisticalValidationSuite {
 
         match format {
             DataFormat::PNG | DataFormat::TIFF => {
-                results.pixel_pair_analysis =
-                    Some(self.steganalysis.pixel_pair_analysis(stego, 256, 256)?);
+                // Dimensions are unknown here, so the samples are analysed as a
+                // single row (1-D adjacent pairs). Callers that know the image
+                // geometry should call `pixel_pair_analysis` directly.
+                results.pixel_pair_analysis = Some(self.steganalysis.pixel_pair_analysis(
+                    stego,
+                    stego.len(),
+                    1,
+                )?);
+                results.pairs_of_values = Some(self.steganalysis.pairs_of_values_test(stego)?);
                 results.wavelet_analysis =
                     Some(self.steganalysis.wavelet_structural_analysis(stego)?);
             }
@@ -1437,6 +1812,8 @@ impl StatisticalValidationSuite {
                         f32::from_le_bytes(bytes)
                     })
                     .collect();
+                // The sampling rate is not known at this layer; 44.1 kHz is assumed.
+                // `SteganoEmbedder` validation uses `carrier.sampling_rate` instead.
                 results.audio_analysis =
                     Some(self.steganalysis.audio_steganalysis(&audio_data, 44100.0)?);
             }
@@ -1449,7 +1826,28 @@ impl StatisticalValidationSuite {
         Ok(results)
     }
 
-    fn run_performance_analysis(
+    /// Detector performance on cover/stego sample sets derived from the carrier.
+    ///
+    /// The detector is Sample Pairs Analysis (its unclamped rate estimate is the
+    /// score; higher ⇒ more likely stego). Samples are built as follows:
+    ///
+    /// 1. The *observed* embedding rate is `min(1, 2 · fraction of samples that
+    ///    differ between original and stego)` — LSB replacement with random bits
+    ///    changes about half of the samples it touches.
+    /// 2. The original carrier is cut into equal segments (32–8192 bytes,
+    ///    about 40 segments). Each segment yields one **cover** sample (as-is)
+    ///    and one **stego** sample (the same segment after simulated LSB
+    ///    replacement of random bits at the observed rate, deterministic seed).
+    ///    Segments are analysed as 1-D signals (adjacent-byte pairs).
+    ///
+    /// `roc_analysis` is computed over all samples (SPA is unsupervised, so no
+    /// training leakage). `cross_validation` is honest k-fold CV: for each fold
+    /// the decision threshold is fit on the training folds (maximum training
+    /// accuracy) and accuracy/AUC are evaluated on the held-out fold only.
+    ///
+    /// An AUC near 0.5 means the embedding at this rate is statistically
+    /// invisible to SPA on this carrier; near 1.0 means it is reliably detected.
+    pub fn run_performance_analysis(
         &self,
         original: &[u8],
         stego: &[u8],
@@ -1459,41 +1857,61 @@ impl StatisticalValidationSuite {
             return Ok(PerformanceResults::default());
         }
 
-        // Build a labeled dataset: cover bytes (label=false) vs stego bytes (label=true).
-        // Feature = normalized byte value [0, 1].  We interleave cover and stego so the
-        // k-fold splitter sees balanced classes in every fold.
-        let max_samples = 100.min(n / 2);
-        let stride = (n / 2 / max_samples).max(1);
+        let changed = original[..n]
+            .iter()
+            .zip(&stego[..n])
+            .filter(|(o, s)| o != s)
+            .count();
+        let rate = (2.0 * changed as f64 / n as f64).min(1.0);
 
-        let mut true_labels: Vec<bool> = Vec::with_capacity(max_samples * 2);
-        let mut scores: Vec<f64> = Vec::with_capacity(max_samples * 2);
-        let mut cv_data: Vec<(Vec<f64>, bool)> = Vec::with_capacity(max_samples * 2);
+        let segment_len = (n / 40).clamp(32, 8192);
+        let segments = n / segment_len;
 
-        for i in (0..n / 2).step_by(stride).take(max_samples) {
-            let orig_score = original[i] as f64 / 255.0;
-            let stego_score = stego[i] as f64 / 255.0;
-
+        let mut rng = SplitMix64(0x5354_4547_414E_4F00 ^ n as u64);
+        let mut true_labels = Vec::with_capacity(segments * 2);
+        let mut scores = Vec::with_capacity(segments * 2);
+        let spa_score = |seg: &[u8]| -> f64 {
+            let c = spa_counts(seg, seg.len(), 1, 1);
+            let r = spa_rate(&c);
+            if r.is_finite() {
+                r
+            } else {
+                0.0
+            }
+        };
+        for seg in original[..segments * segment_len].chunks_exact(segment_len) {
             true_labels.push(false);
-            scores.push(orig_score);
-            cv_data.push((vec![orig_score], false));
-
+            scores.push(spa_score(seg));
+            let stego_seg = simulate_lsb_replacement(seg, rate, &mut rng);
             true_labels.push(true);
-            scores.push(stego_score);
-            cv_data.push((vec![stego_score], true));
+            scores.push(spa_score(&stego_seg));
         }
 
-        // ROC analysis: use raw normalised byte value as the detection score.
         let roc = self
             .performance_analysis
             .roc_analysis(&true_labels, &scores)
             .ok();
 
-        // 5-fold cross-validation: trivial linear scorer (feature value = predicted score).
+        // Samples are interleaved (cover, stego, cover, …) so every contiguous
+        // fold is class-balanced.
+        let cv_data: Vec<(Vec<f64>, bool)> = scores
+            .iter()
+            .zip(&true_labels)
+            .map(|(&s, &l)| (vec![s], l))
+            .collect();
         let cv_result = if cv_data.len() >= 10 {
             self.performance_analysis
                 .cross_validation
-                .k_fold_validation(&cv_data, |_train, test| {
-                    Ok(test.iter().map(|(f, _)| f[0]).collect())
+                .k_fold_validation(&cv_data, |train, test| {
+                    let threshold = fit_threshold(train);
+                    let spread = score_spread(train);
+                    // Monotone map with 0.5 exactly at the fitted threshold, so the
+                    // CV accuracy rule (score ≥ 0.5) equals "raw score ≥ threshold"
+                    // and the AUC is that of the raw detector score.
+                    Ok(test
+                        .iter()
+                        .map(|(f, _)| 0.5 + 0.5 * ((f[0] - threshold) / spread).tanh())
+                        .collect())
                 })
                 .ok()
         } else {
@@ -1503,6 +1921,9 @@ impl StatisticalValidationSuite {
         Ok(PerformanceResults {
             roc_analysis: roc,
             cross_validation: cv_result,
+            detector: "sample_pairs_analysis".to_string(),
+            simulated_embedding_rate: rate,
+            samples: true_labels.len(),
         })
     }
 
@@ -1527,7 +1948,9 @@ impl StatisticalValidationSuite {
                     // SAM/FASTQ/FASTA/VCF: text-based; verify >95 % of bytes are printable ASCII
                     let printable = stego
                         .iter()
-                        .filter(|&&b| b == b'\n' || b == b'\r' || b == b'\t' || (32..127).contains(&b))
+                        .filter(|&&b| {
+                            b == b'\n' || b == b'\r' || b == b'\t' || (32..127).contains(&b)
+                        })
                         .count();
                     printable * 20 >= stego.len() * 19 // ≥95 % printable
                 }
@@ -1536,9 +1959,7 @@ impl StatisticalValidationSuite {
         } else if format.is_imagery() {
             // Medical/imaging formats: verify known magic / structure markers are intact.
             let medical_ok = match format {
-                DataFormat::DICOM => {
-                    stego.len() >= 132 && &stego[128..132] == b"DICM"
-                }
+                DataFormat::DICOM => stego.len() >= 132 && &stego[128..132] == b"DICM",
                 DataFormat::TIFF => {
                     stego.len() >= 4
                         && ((&stego[..2] == b"II" && stego[2] == 42)
@@ -1561,8 +1982,8 @@ impl StatisticalValidationSuite {
                 stego
             };
             if !audio_data.is_empty() {
-                let mean = audio_data.iter().map(|&b| b as f64).sum::<f64>()
-                    / audio_data.len() as f64;
+                let mean =
+                    audio_data.iter().map(|&b| b as f64).sum::<f64>() / audio_data.len() as f64;
                 let rms = (audio_data
                     .iter()
                     .map(|&b| (b as f64 - mean).powi(2))
@@ -1633,14 +2054,30 @@ pub struct ClassicalTestResults {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SteganalysisResults {
     pub pixel_pair_analysis: Option<PixelPairAnalysisResult>,
+    /// Westfeld–Pfitzmann pairs-of-values attack (image formats).
+    #[serde(default)]
+    pub pairs_of_values: Option<PairsOfValuesResult>,
     pub wavelet_analysis: Option<WaveletAnalysisResult>,
     pub audio_analysis: Option<AudioSteganalysisResult>,
 }
 
+/// Detector performance over cover/stego sample sets. See
+/// [`StatisticalValidationSuite::run_performance_analysis`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceResults {
+    /// ROC of the detector score over all cover/stego samples.
     pub roc_analysis: Option<ROCAnalysis>,
+    /// k-fold CV with the decision threshold fit on the training folds only.
     pub cross_validation: Option<CrossValidationResult>,
+    /// Detector whose score was evaluated.
+    #[serde(default)]
+    pub detector: String,
+    /// Embedding rate used for the simulated stego samples.
+    #[serde(default)]
+    pub simulated_embedding_rate: f64,
+    /// Total number of (cover + stego) samples.
+    #[serde(default)]
+    pub samples: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2099,7 +2536,10 @@ mod tests {
         let p_large = ct.chi_square_p_value(20.0, 5);
         // A small chi-square should give a large p-value
         let p_small = ct.chi_square_p_value(1.0, 5);
-        assert!(p_large < p_small, "large χ² must give smaller p than small χ²");
+        assert!(
+            p_large < p_small,
+            "large χ² must give smaller p than small χ²"
+        );
         // df=1: well-known value — χ²=3.841 corresponds to p≈0.05
         let p_df1 = ct.chi_square_p_value(3.841, 1);
         assert!(
@@ -2110,7 +2550,12 @@ mod tests {
         // p-values must be in [0, 1]
         for &chi2 in &[0.0, 1.0, 5.0, 10.0, 50.0] {
             let p = ct.chi_square_p_value(chi2, 4);
-            assert!((0.0..=1.0).contains(&p), "p out of range for χ²={}: {}", chi2, p);
+            assert!(
+                (0.0..=1.0).contains(&p),
+                "p out of range for χ²={}: {}",
+                chi2,
+                p
+            );
         }
     }
 
@@ -2172,12 +2617,11 @@ mod tests {
             .map(|i| (vec![(i % 3) as f64 / 3.0], i % 2 == 0))
             .collect();
 
-        let model_fn = |_: &[(Vec<f64>, bool)],
-                        test: &[(Vec<f64>, bool)]|
-         -> crate::core::Result<Vec<f64>> {
-            // Return constant score — no discrimination
-            Ok(vec![0.5; test.len()])
-        };
+        let model_fn =
+            |_: &[(Vec<f64>, bool)], test: &[(Vec<f64>, bool)]| -> crate::core::Result<Vec<f64>> {
+                // Return constant score — no discrimination
+                Ok(vec![0.5; test.len()])
+            };
 
         let result = cv.k_fold_validation(&data, model_fn).unwrap();
         // AUC should be ~0.5 for a non-discriminating model
@@ -2233,7 +2677,8 @@ mod tests {
     fn test_run_domain_validation_genomics() {
         let suite = StatisticalValidationSuite::new();
         // A SAM-like text payload: all printable ASCII
-        let original = b"@HD\tVN:1.0\nread1\t0\tchr1\t100\t60\t10M\t*\t0\t0\tACGTACGTAC\tIIIIIIIIII\n";
+        let original =
+            b"@HD\tVN:1.0\nread1\t0\tchr1\t100\t60\t10M\t*\t0\t0\tACGTACGTAC\tIIIIIIIIII\n";
         let stego = original; // unchanged
         let results = suite
             .run_domain_validation(original, stego, &DataFormat::SAM)
@@ -2268,5 +2713,227 @@ mod tests {
         assert!(results.audio_quality.is_some());
         let q = results.audio_quality.unwrap();
         assert!((0.0..=1.0).contains(&q), "audio quality must be in [0,1]");
+    }
+
+    // -----------------------------------------------------------------------
+    // LSB detector acceptance tests (issue #41)
+    // -----------------------------------------------------------------------
+
+    /// Smooth, natural-ish greyscale image: low-frequency gradients plus mild
+    /// Gaussian-like sensor noise (σ ≈ 1.4), 8-bit, row-major.
+    fn natural_image(width: usize, height: usize, seed: u64) -> Vec<u8> {
+        let mut rng = SplitMix64(seed);
+        let mut img = Vec::with_capacity(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                let (xf, yf) = (x as f64, y as f64);
+                let base = 110.0
+                    + 0.35 * xf
+                    + 0.2 * yf
+                    + 40.0 * (xf / 19.0).sin() * (yf / 27.0).cos()
+                    + 15.0 * ((xf + yf) / 41.0).sin();
+                // Sum of 4 uniforms - 2 ~ N(0, 1/3); scale to σ ≈ 1.4
+                let noise: f64 = (0..4).map(|_| rng.next_f64()).sum::<f64>() - 2.0;
+                img.push((base + 2.4 * noise).round().clamp(0.0, 255.0) as u8);
+            }
+        }
+        img
+    }
+
+    /// The same scene after a contrast stretch (×1.4), as done by most camera
+    /// and editing pipelines. Stretching leaves a "combed" histogram whose
+    /// pairs of values are strongly unbalanced — the cover property PoV uses.
+    fn stretched_image(width: usize, height: usize, seed: u64) -> Vec<u8> {
+        natural_image(width, height, seed)
+            .into_iter()
+            .map(|v| ((v as f64 - 60.0) * 1.4).round().clamp(0.0, 255.0) as u8)
+            .collect()
+    }
+
+    /// Sequential LSB replacement of `fraction` of the samples with random bits.
+    fn sequential_lsb_embed(cover: &[u8], fraction: f64, seed: u64) -> Vec<u8> {
+        let mut rng = SplitMix64(seed);
+        let n = (cover.len() as f64 * fraction).round() as usize;
+        cover
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| {
+                if i < n {
+                    (b & !1) | (rng.next_u64() & 1) as u8
+                } else {
+                    b
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_chi_square_survival_matches_tables() {
+        // Reference values from standard χ² tables.
+        let cases = [
+            (3.841_459, 1, 0.05),
+            (6.634_897, 1, 0.01),
+            (5.991_465, 2, 0.05),
+            (11.070_498, 5, 0.05),
+            (18.307_038, 10, 0.05),
+            (124.342_113, 100, 0.05),
+        ];
+        for &(x, df, p) in &cases {
+            let got = chi_square_survival(x, df);
+            assert!((got - p).abs() < 1e-6, "sf({x}, {df}) = {got}, want {p}");
+            let q = chi_square_upper_quantile(p, df);
+            assert!((q - x).abs() < 1e-4, "quantile({p}, {df}) = {q}, want {x}");
+        }
+        assert_eq!(chi_square_survival(0.0, 3), 1.0);
+        assert!(chi_square_survival(1e4, 3) < 1e-100);
+    }
+
+    #[test]
+    fn test_chi_square_critical_value_is_one_tailed() {
+        let ct = ClassicalStatisticalTests::new(0.95);
+        // df > 4 used to fall back to a two-sided z = 1.96 approximation.
+        assert!((ct.chi_square_critical_value(10, 0.95) - 18.307).abs() < 1e-3);
+        assert!((ct.chi_square_critical_value(255, 0.95) - 293.248).abs() < 1e-2);
+        assert!((ct.chi_square_critical_value(10, 0.90) - 15.987).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_pov_flags_full_embedding_not_cover() {
+        let steg = AdvancedSteganalysis::new(0.1);
+        // Under full embedding the PoV probability is ~Uniform(0,1), so it is
+        // only expected to exceed α = 0.05 in ~95 % of carriers: check several.
+        let mut detected = 0;
+        for seed in 0..10u64 {
+            let cover = stretched_image(128, 128, 100 + seed);
+            let stego = sequential_lsb_embed(&cover, 1.0, 200 + seed);
+            let c = steg.pairs_of_values_test(&cover).unwrap();
+            let s = steg.pairs_of_values_test(&stego).unwrap();
+            println!(
+                "PoV seed {seed}: cover chi2={:.1} df={} p={:.2e} | stego chi2={:.1} df={} p={:.3}",
+                c.chi_square_statistic,
+                c.degrees_of_freedom,
+                c.embedding_probability,
+                s.chi_square_statistic,
+                s.degrees_of_freedom,
+                s.embedding_probability
+            );
+            assert!(!c.embedding_detected, "clean cover must not be flagged");
+            assert!(c.embedding_probability < 1e-6);
+            if s.embedding_detected {
+                detected += 1;
+            }
+        }
+        assert!(
+            detected >= 8,
+            "100% LSB embedding detected in only {detected}/10"
+        );
+    }
+
+    #[test]
+    fn test_spa_estimates_embedding_rate() {
+        let steg = AdvancedSteganalysis::new(0.1);
+        let spa = |d: &[u8]| steg.sample_pairs_analysis(d, 128, 128, 1).unwrap();
+        for seed in 1u64..=8 {
+            let cover = natural_image(128, 128, seed);
+            let c = spa(&cover);
+            let tiny = spa(&sequential_lsb_embed(&cover, 0.01, seed + 10));
+            let half = spa(&sequential_lsb_embed(&cover, 0.5, seed + 20));
+            let full = spa(&sequential_lsb_embed(&cover, 1.0, seed + 30));
+            println!(
+                "SPA seed {seed}: cover={:.4} 1%={:.4} 50%={:.4} 100%={:.4}",
+                c.raw_estimate, tiny.raw_estimate, half.raw_estimate, full.raw_estimate
+            );
+            assert!(
+                c.raw_estimate.abs() < 0.05,
+                "cover estimate {}",
+                c.raw_estimate
+            );
+            assert!(!c.embedding_detected, "cover must not be flagged");
+            assert!(
+                tiny.estimated_rate < 0.06,
+                "~0% estimate {}",
+                tiny.estimated_rate
+            );
+            assert!(!tiny.embedding_detected);
+            assert!(
+                (half.raw_estimate - 0.5).abs() < 0.1,
+                "50% estimate {}",
+                half.raw_estimate
+            );
+            assert!(half.embedding_detected);
+            // SPA variance is largest near p = 1 (the discriminant approaches 0).
+            assert!(
+                (full.raw_estimate - 1.0).abs() < 0.2,
+                "100% estimate {}",
+                full.raw_estimate
+            );
+            assert!(full.embedding_detected, "100% embedding must be flagged");
+        }
+
+        // A contrast-stretched ("combed") cover violates the SPA cover model and
+        // biases the estimate, but full embedding is still clearly separated.
+        let cover = stretched_image(128, 128, 3);
+        let c = spa(&cover);
+        let full = spa(&sequential_lsb_embed(&cover, 1.0, 41));
+        println!(
+            "SPA stretched: cover={:.4} 100%={:.4}",
+            c.raw_estimate, full.raw_estimate
+        );
+        assert!(!c.embedding_detected);
+        assert!(full.estimated_rate > 0.85 && full.embedding_detected);
+    }
+
+    #[test]
+    fn test_pixel_pair_statistic_varies_and_detects() {
+        let steg = AdvancedSteganalysis::new(0.1);
+        let cover = natural_image(96, 96, 5);
+        let stego = sequential_lsb_embed(&cover, 1.0, 6);
+        let other = natural_image(96, 96, 77);
+        let rc = steg.pixel_pair_analysis(&cover, 96, 96).unwrap();
+        let rs = steg.pixel_pair_analysis(&stego, 96, 96).unwrap();
+        let ro = steg.pixel_pair_analysis(&other, 96, 96).unwrap();
+        println!(
+            "pixel-pair cover: chi2={:.2} p={:.3} rate={:.3}; stego: chi2={:.2} p={:.3e} rate={:.3}",
+            rc.chi_square_statistic,
+            rc.p_value,
+            rc.embedding_probability,
+            rs.chi_square_statistic,
+            rs.p_value,
+            rs.embedding_probability
+        );
+        // Statistic is a function of the data, not of the pair count.
+        assert_ne!(rc.chi_square_statistic, rs.chi_square_statistic);
+        assert_ne!(rc.chi_square_statistic, ro.chi_square_statistic);
+        assert_ne!(rc.p_value, rs.p_value);
+        assert!(!rc.lsb_embedding_detected);
+        assert!(rs.lsb_embedding_detected);
+        assert!(rs.p_value < 0.05);
+    }
+
+    #[test]
+    fn test_performance_analysis_detects_full_embedding() {
+        let suite = StatisticalValidationSuite::new();
+        let cover = natural_image(128, 128, 21);
+        let stego = sequential_lsb_embed(&cover, 1.0, 22);
+        let res = suite.run_performance_analysis(&cover, &stego).unwrap();
+        let roc = res.roc_analysis.unwrap();
+        let cv = res.cross_validation.unwrap();
+        println!(
+            "perf: rate={:.3} samples={} auc={:.3} cv_auc={:.3} cv_acc={:.3}",
+            res.simulated_embedding_rate, res.samples, roc.auc, cv.mean_auc, cv.mean_accuracy
+        );
+        assert!(res.simulated_embedding_rate > 0.9);
+        assert!(roc.auc > 0.95, "AUC {}", roc.auc);
+        assert!(cv.mean_auc > 0.95, "CV AUC {}", cv.mean_auc);
+        assert!(cv.mean_accuracy > 0.9, "CV accuracy {}", cv.mean_accuracy);
+
+        // No embedding: detector cannot separate the classes.
+        let res0 = suite.run_performance_analysis(&cover, &cover).unwrap();
+        assert_eq!(res0.simulated_embedding_rate, 0.0);
+        let auc0 = res0.roc_analysis.unwrap().auc;
+        assert!(
+            (auc0 - 0.5).abs() < 0.1,
+            "AUC at 0% embedding should be ~0.5, got {auc0}"
+        );
     }
 }
