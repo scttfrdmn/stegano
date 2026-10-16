@@ -1,217 +1,355 @@
-//! Cryptographic layer for secure steganography
+//! Cryptographic layer for secure steganography.
+//!
+//! This module provides:
+//!
+//! * [`derive_key`] — Argon2id password-based key derivation with a per-payload
+//!   random salt (parameters in [`PRODUCTION_KDF`]).
+//! * [`aead_seal`] / [`aead_open`] — AES-256-GCM / ChaCha20-Poly1305 with
+//!   associated data, used by the payload wire format in [`crate::codec`].
+//! * [`CryptoLayer`] — a standalone encrypt/decrypt helper with its own small
+//!   self-describing serialisation ([`CryptoLayer::serialize_payload`]).
+//!
+//! All derived keys and stored key material are wiped from memory on drop
+//! via [`zeroize`].  See `docs/WIRE_FORMAT.md` for the byte layouts.
 
 use crate::core::*;
 use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload},
+    Aes256Gcm,
 };
-use blake3::Hasher;
+use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::ChaCha20Poly1305;
 use rand::{thread_rng, RngCore};
+use zeroize::Zeroizing;
+
+/// Length of the per-payload Argon2id salt in bytes.
+pub const SALT_LEN: usize = 16;
+/// Length of the AEAD nonce in bytes (both ciphers).
+pub const NONCE_LEN: usize = 12;
+/// Length of the AEAD authentication tag in bytes (both ciphers).
+pub const TAG_LEN: usize = 16;
+/// Length of derived symmetric keys in bytes.
+pub const KEY_LEN: usize = 32;
+
+/// Argon2id cost parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KdfParams {
+    /// Memory cost in KiB.
+    pub m_cost_kib: u32,
+    /// Number of passes (time cost).
+    pub t_cost: u32,
+    /// Degree of parallelism (lanes).
+    pub p_cost: u32,
+}
+
+/// Production Argon2id parameters: 64 MiB memory, 3 passes, 1 lane.
+///
+/// These follow the RFC 9106 "second recommended" profile and are fixed by
+/// wire-format version 2 (they are implied by the version byte and not
+/// stored per payload).
+pub const PRODUCTION_KDF: KdfParams = KdfParams {
+    m_cost_kib: 64 * 1024,
+    t_cost: 3,
+    p_cost: 1,
+};
+
+/// Cheap parameters used only by this crate's own unit tests (`cfg(test)`)
+/// to keep the test suite fast.  Never used in a normal build.
+#[cfg(test)]
+pub(crate) const TEST_KDF: KdfParams = KdfParams {
+    m_cost_kib: 1024,
+    t_cost: 1,
+    p_cost: 1,
+};
+
+/// The parameters actually used by [`derive_key`].
+#[cfg(not(test))]
+pub const ACTIVE_KDF: KdfParams = PRODUCTION_KDF;
+/// The parameters actually used by [`derive_key`] (cheap test build).
+#[cfg(test)]
+pub const ACTIVE_KDF: KdfParams = TEST_KDF;
+
+/// Derive a 256-bit key from a password and salt with Argon2id using
+/// [`ACTIVE_KDF`] (equal to [`PRODUCTION_KDF`] in all non-test builds).
+pub fn derive_key(password: &[u8], salt: &[u8; SALT_LEN]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    derive_key_with_params(password, salt, &ACTIVE_KDF)
+}
+
+/// Derive a 256-bit key from a password and salt with explicit Argon2id
+/// parameters.
+pub fn derive_key_with_params(
+    password: &[u8],
+    salt: &[u8; SALT_LEN],
+    kdf: &KdfParams,
+) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    let params = Params::new(kdf.m_cost_kib, kdf.t_cost, kdf.p_cost, Some(KEY_LEN))
+        .map_err(|e| SteganoError::EncryptionError(format!("Argon2 params: {e}")))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = Zeroizing::new([0u8; KEY_LEN]);
+    argon
+        .hash_password_into(password, salt, out.as_mut())
+        .map_err(|e| SteganoError::EncryptionError(format!("Argon2 derivation: {e}")))?;
+    Ok(out)
+}
+
+/// Fill an `N`-byte array from the OS-seeded thread RNG.
+pub(crate) fn random_array<const N: usize>() -> [u8; N] {
+    let mut out = [0u8; N];
+    thread_rng().fill_bytes(&mut out);
+    out
+}
+
+/// AEAD-encrypt `plaintext`, authenticating `aad`.  Output is `ct ‖ tag`.
+pub fn aead_seal(
+    kind: CipherKind,
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
+    let payload = Payload {
+        msg: plaintext,
+        aad,
+    };
+    match kind {
+        CipherKind::Aes256Gcm => Aes256Gcm::new_from_slice(key)
+            .map_err(|e| SteganoError::EncryptionError(format!("AES key init: {e}")))?
+            .encrypt(aes_gcm::Nonce::from_slice(nonce), payload)
+            .map_err(|e| SteganoError::EncryptionError(format!("AES encrypt: {e}"))),
+        CipherKind::ChaCha20Poly1305 => ChaCha20Poly1305::new_from_slice(key)
+            .map_err(|e| SteganoError::EncryptionError(format!("ChaCha key init: {e}")))?
+            .encrypt(chacha20poly1305::Nonce::from_slice(nonce), payload)
+            .map_err(|e| SteganoError::EncryptionError(format!("ChaCha encrypt: {e}"))),
+    }
+}
+
+/// AEAD-decrypt `ct ‖ tag`, verifying `aad`.  Any mismatch (wrong key,
+/// modified ciphertext, nonce or associated data) yields
+/// [`SteganoError::EncryptionError`].
+pub fn aead_open(
+    kind: CipherKind,
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>> {
+    let payload = Payload {
+        msg: ciphertext,
+        aad,
+    };
+    let fail = |_| {
+        SteganoError::EncryptionError(
+            "Decryption failed: wrong password or tampered payload".to_string(),
+        )
+    };
+    match kind {
+        CipherKind::Aes256Gcm => Aes256Gcm::new_from_slice(key)
+            .map_err(|e| SteganoError::EncryptionError(format!("AES key init: {e}")))?
+            .decrypt(aes_gcm::Nonce::from_slice(nonce), payload)
+            .map_err(fail),
+        CipherKind::ChaCha20Poly1305 => ChaCha20Poly1305::new_from_slice(key)
+            .map_err(|e| SteganoError::EncryptionError(format!("ChaCha key init: {e}")))?
+            .decrypt(chacha20poly1305::Nonce::from_slice(nonce), payload)
+            .map_err(fail),
+    }
+}
+
+/// Key material held by a [`CryptoLayer`]; zeroized on drop.
+enum Secret {
+    /// Password: a fresh key is derived per payload with Argon2id + salt.
+    Password(Zeroizing<Vec<u8>>),
+    /// Caller-supplied raw 256-bit key (no KDF).
+    Key(Zeroizing<[u8; KEY_LEN]>),
+}
 
 /// Authenticated encryption layer.
 ///
 /// Supports AES-256-GCM (default, fast with AES-NI) and ChaCha20-Poly1305
 /// (constant-time in software, better on ARM / embedded targets).
+///
+/// Password-based layers derive a new key for every payload with Argon2id and
+/// a random 16-byte salt stored in the [`SecurePayload`].
 pub struct CryptoLayer {
     kind: CipherKind,
-    key_bytes: [u8; 32],
+    secret: Secret,
 }
 
-#[derive(Debug)]
+impl std::fmt::Debug for CryptoLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CryptoLayer")
+            .field("kind", &self.kind)
+            .field("secret", &"<redacted>")
+            .finish()
+    }
+}
+
+/// An encrypted payload produced by [`CryptoLayer::encrypt`].
+#[derive(Debug, Clone)]
 pub struct SecurePayload {
+    /// Cipher used to produce `encrypted_data`.
     pub cipher: CipherKind,
+    /// `ciphertext ‖ tag`.
     pub encrypted_data: Vec<u8>,
-    pub nonce: [u8; 12],
-    pub hash: [u8; 32],
+    /// AEAD nonce.
+    pub nonce: [u8; NONCE_LEN],
+    /// Argon2id salt (random; only used for password-based layers).
+    pub salt: [u8; SALT_LEN],
+}
+
+/// Version byte of the [`CryptoLayer::serialize_payload`] format.
+const SECURE_PAYLOAD_VERSION: u8 = 2;
+/// `[version][cipher][salt16][nonce12][len u32]`
+const SECURE_PAYLOAD_HEADER_LEN: usize = 1 + 1 + SALT_LEN + NONCE_LEN + 4;
+
+impl SecurePayload {
+    /// Serialised header; also used as the AEAD associated data so that the
+    /// cipher byte, salt, nonce and length are all authenticated.
+    fn header(&self) -> [u8; SECURE_PAYLOAD_HEADER_LEN] {
+        let len = u32::try_from(self.encrypted_data.len()).unwrap_or(u32::MAX);
+        Self::header_for(self.cipher, &self.salt, &self.nonce, len)
+    }
+
+    fn header_for(
+        cipher: CipherKind,
+        salt: &[u8; SALT_LEN],
+        nonce: &[u8; NONCE_LEN],
+        len: u32,
+    ) -> [u8; SECURE_PAYLOAD_HEADER_LEN] {
+        let mut h = [0u8; SECURE_PAYLOAD_HEADER_LEN];
+        h[0] = SECURE_PAYLOAD_VERSION;
+        h[1] = cipher.to_u8();
+        h[2..2 + SALT_LEN].copy_from_slice(salt);
+        h[2 + SALT_LEN..2 + SALT_LEN + NONCE_LEN].copy_from_slice(nonce);
+        h[2 + SALT_LEN + NONCE_LEN..].copy_from_slice(&len.to_le_bytes());
+        h
+    }
 }
 
 impl CryptoLayer {
-    /// Create new crypto layer from password (AES-256-GCM by default).
+    /// Create a password-based crypto layer (AES-256-GCM).
     pub fn new_from_password(password: &str) -> Result<Self> {
-        let key_bytes = Self::derive_key_bytes(password)?;
         Ok(Self {
             kind: CipherKind::Aes256Gcm,
-            key_bytes,
+            secret: Secret::Password(Zeroizing::new(password.as_bytes().to_vec())),
         })
     }
 
-    /// Create crypto layer from raw key (AES-256-GCM).
+    /// Create a password-based crypto layer using ChaCha20-Poly1305.
+    pub fn new_from_password_chacha20(password: &str) -> Result<Self> {
+        Ok(Self {
+            kind: CipherKind::ChaCha20Poly1305,
+            secret: Secret::Password(Zeroizing::new(password.as_bytes().to_vec())),
+        })
+    }
+
+    /// Create crypto layer from a raw 32-byte key (AES-256-GCM).
     pub fn new_from_key(key_bytes: &[u8]) -> Result<Self> {
         Self::new_from_key_with_kind(key_bytes, CipherKind::Aes256Gcm)
     }
 
-    /// Create crypto layer from raw key with a specified cipher.
+    /// Create crypto layer from a raw 32-byte key with a specified cipher.
     pub fn new_from_key_with_kind(key_bytes: &[u8], kind: CipherKind) -> Result<Self> {
-        if key_bytes.len() != 32 {
+        if key_bytes.len() != KEY_LEN {
             return Err(SteganoError::EncryptionError(
                 "Key must be exactly 32 bytes".to_string(),
             ));
         }
-        let mut arr = [0u8; 32];
+        let mut arr = Zeroizing::new([0u8; KEY_LEN]);
         arr.copy_from_slice(key_bytes);
-        Ok(Self { kind, key_bytes: arr })
-    }
-
-    /// Create crypto layer from password using ChaCha20-Poly1305.
-    pub fn new_from_password_chacha20(password: &str) -> Result<Self> {
-        let key_bytes = Self::derive_key_bytes(password)?;
         Ok(Self {
-            kind: CipherKind::ChaCha20Poly1305,
-            key_bytes,
+            kind,
+            secret: Secret::Key(arr),
         })
     }
 
-    /// Derive a 256-bit key from a password using Blake3.
-    fn derive_key_bytes(password: &str) -> Result<[u8; 32]> {
-        let mut hasher = Hasher::new();
-        hasher.update(password.as_bytes());
-        hasher.update(b"stegano-salt-2025"); // Fixed salt for deterministic keys
-        Ok(*hasher.finalize().as_bytes())
+    /// Resolve the key to use for a payload with the given salt.
+    fn key_for(&self, salt: &[u8; SALT_LEN]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+        match &self.secret {
+            Secret::Password(pw) => derive_key(pw, salt),
+            Secret::Key(k) => Ok(Zeroizing::new(**k)),
+        }
     }
 
     /// Encrypt payload with authenticated encryption.
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<SecurePayload> {
-        // Generate random 12-byte nonce
-        let mut nonce_bytes = [0u8; 12];
-        thread_rng().fill_bytes(&mut nonce_bytes);
-
-        let encrypted_data = match self.kind {
-            CipherKind::Aes256Gcm => {
-                let cipher = Aes256Gcm::new_from_slice(&self.key_bytes)
-                    .map_err(|e| SteganoError::EncryptionError(format!("AES key init: {e}")))?;
-                let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
-                cipher
-                    .encrypt(nonce, plaintext)
-                    .map_err(|e| SteganoError::EncryptionError(format!("AES encrypt: {e}")))?
-            }
-            CipherKind::ChaCha20Poly1305 => {
-                let cipher = ChaCha20Poly1305::new_from_slice(&self.key_bytes)
-                    .map_err(|e| SteganoError::EncryptionError(format!("ChaCha key init: {e}")))?;
-                let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
-                cipher
-                    .encrypt(nonce, plaintext)
-                    .map_err(|e| SteganoError::EncryptionError(format!("ChaCha encrypt: {e}")))?
-            }
-        };
-
-        // BLAKE3 integrity hash over (ciphertext ‖ nonce)
-        let mut hasher = Hasher::new();
-        hasher.update(&encrypted_data);
-        hasher.update(&nonce_bytes);
-        let hash = *hasher.finalize().as_bytes();
-
+        let ct_len = plaintext
+            .len()
+            .checked_add(TAG_LEN)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| {
+                SteganoError::InvalidParameter("Payload too large to encrypt (> u32::MAX)".into())
+            })?;
+        let salt = random_array::<SALT_LEN>();
+        let nonce = random_array::<NONCE_LEN>();
+        let key = self.key_for(&salt)?;
+        let aad = SecurePayload::header_for(self.kind, &salt, &nonce, ct_len);
+        let encrypted_data = aead_seal(self.kind, &key, &nonce, &aad, plaintext)?;
         Ok(SecurePayload {
             cipher: self.kind,
             encrypted_data,
-            nonce: nonce_bytes,
-            hash,
+            nonce,
+            salt,
         })
     }
 
-    /// Decrypt and verify a payload.  The cipher used is taken from `secure_payload.cipher`
-    /// (stored in the payload header during encryption), not from `self.kind`.
+    /// Decrypt and verify a payload.  The cipher used is taken from
+    /// `secure_payload.cipher` (stored in the payload header), not `self.kind`.
     pub fn decrypt(&self, secure_payload: &SecurePayload) -> Result<Vec<u8>> {
-        // Verify integrity hash first
-        let mut hasher = Hasher::new();
-        hasher.update(&secure_payload.encrypted_data);
-        hasher.update(&secure_payload.nonce);
-        let computed_hash = *hasher.finalize().as_bytes();
-
-        if computed_hash != secure_payload.hash {
-            return Err(SteganoError::IntegrityError(
-                "Payload hash verification failed".to_string(),
-            ));
-        }
-
-        // Dispatch on the cipher stored in the payload (auto-detect on extract)
-        match secure_payload.cipher {
-            CipherKind::Aes256Gcm => {
-                let cipher = Aes256Gcm::new_from_slice(&self.key_bytes)
-                    .map_err(|e| SteganoError::EncryptionError(format!("AES key init: {e}")))?;
-                let nonce = Nonce::from_slice(&secure_payload.nonce);
-                cipher
-                    .decrypt(nonce, secure_payload.encrypted_data.as_ref())
-                    .map_err(|e| SteganoError::EncryptionError(format!("AES decrypt: {e}")))
-            }
-            CipherKind::ChaCha20Poly1305 => {
-                let cipher = ChaCha20Poly1305::new_from_slice(&self.key_bytes)
-                    .map_err(|e| SteganoError::EncryptionError(format!("ChaCha key init: {e}")))?;
-                let nonce = chacha20poly1305::Nonce::from_slice(&secure_payload.nonce);
-                cipher
-                    .decrypt(nonce, secure_payload.encrypted_data.as_ref())
-                    .map_err(|e| SteganoError::EncryptionError(format!("ChaCha decrypt: {e}")))
-            }
-        }
+        let key = self.key_for(&secure_payload.salt)?;
+        aead_open(
+            secure_payload.cipher,
+            &key,
+            &secure_payload.nonce,
+            &secure_payload.header(),
+            &secure_payload.encrypted_data,
+        )
     }
 
     /// Serialize secure payload to bytes.
     ///
-    /// Layout: `[cipher(1)] [len(4)] [nonce(12)] [hash(32)] [ciphertext(N)]`
-    /// Total minimum size: 49 bytes.
+    /// Layout: `[version=2][cipher(1)][salt(16)][nonce(12)][len u32 LE][ct‖tag]`
+    /// (34-byte header).  The header is the AEAD associated data.
     pub fn serialize_payload(payload: &SecurePayload) -> Vec<u8> {
-        let mut result = Vec::new();
-
-        // Cipher kind byte (1 byte) — enables auto-detection on extract
-        result.push(payload.cipher.to_u8());
-
-        // Length of encrypted data (4 bytes, LE)
-        result.extend_from_slice(&(payload.encrypted_data.len() as u32).to_le_bytes());
-
-        // Nonce (12 bytes)
-        result.extend_from_slice(&payload.nonce);
-
-        // Hash (32 bytes)
-        result.extend_from_slice(&payload.hash);
-
-        // Encrypted data
+        let header = payload.header();
+        let mut result = Vec::with_capacity(header.len() + payload.encrypted_data.len());
+        result.extend_from_slice(&header);
         result.extend_from_slice(&payload.encrypted_data);
-
         result
     }
 
-    /// Deserialize secure payload from bytes.
-    ///
-    /// The cipher kind stored in byte 0 is returned as part of [`SecurePayload`]
-    /// so that [`decrypt`](CryptoLayer::decrypt) can auto-select the right algorithm.
+    /// Deserialize a secure payload produced by [`serialize_payload`](Self::serialize_payload).
     pub fn deserialize_payload(data: &[u8]) -> Result<SecurePayload> {
-        // 1 (cipher) + 4 (len) + 12 (nonce) + 32 (hash) = 49 minimum bytes
-        if data.len() < 49 {
+        if data.len() < SECURE_PAYLOAD_HEADER_LEN + TAG_LEN {
             return Err(SteganoError::IntegrityError(
                 "Invalid payload format".to_string(),
             ));
         }
-
-        // Read cipher kind
-        let cipher = CipherKind::from_u8(data[0]).ok_or_else(|| {
-            SteganoError::IntegrityError(format!("Unknown cipher kind byte: {}", data[0]))
+        if data[0] != SECURE_PAYLOAD_VERSION {
+            return Err(SteganoError::IntegrityError(format!(
+                "Unsupported secure payload version {}",
+                data[0]
+            )));
+        }
+        let cipher = CipherKind::from_u8(data[1]).ok_or_else(|| {
+            SteganoError::IntegrityError(format!("Unknown cipher kind byte: {}", data[1]))
         })?;
-
-        // Read length
-        let data_len = u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as usize;
-
-        if data.len() != 49 + data_len {
+        let mut salt = [0u8; SALT_LEN];
+        salt.copy_from_slice(&data[2..2 + SALT_LEN]);
+        let mut nonce = [0u8; NONCE_LEN];
+        nonce.copy_from_slice(&data[2 + SALT_LEN..2 + SALT_LEN + NONCE_LEN]);
+        let off = 2 + SALT_LEN + NONCE_LEN;
+        let len = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+        let body = &data[SECURE_PAYLOAD_HEADER_LEN..];
+        if u64::from(len) != body.len() as u64 {
             return Err(SteganoError::IntegrityError(
                 "Payload size mismatch".to_string(),
             ));
         }
-
-        // Read nonce (bytes 5–16)
-        let mut nonce = [0u8; 12];
-        nonce.copy_from_slice(&data[5..17]);
-
-        // Read hash (bytes 17–48)
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(&data[17..49]);
-
-        // Read encrypted data
-        let encrypted_data = data[49..].to_vec();
-
         Ok(SecurePayload {
             cipher,
-            encrypted_data,
+            encrypted_data: body.to_vec(),
             nonce,
-            hash,
+            salt,
         })
     }
 }
@@ -221,262 +359,187 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_production_kdf_params_are_strong() {
+        assert_eq!(PRODUCTION_KDF.m_cost_kib, 65536);
+        assert_eq!(PRODUCTION_KDF.t_cost, 3);
+        assert_eq!(PRODUCTION_KDF.p_cost, 1);
+    }
+
+    #[test]
+    fn test_argon2_params_honoured() {
+        let salt = [7u8; SALT_LEN];
+        let ours = derive_key(b"pw", &salt).unwrap();
+        // Reference computation with the argon2 crate and the same params.
+        let p = Params::new(
+            ACTIVE_KDF.m_cost_kib,
+            ACTIVE_KDF.t_cost,
+            ACTIVE_KDF.p_cost,
+            Some(KEY_LEN),
+        )
+        .unwrap();
+        let mut reference = [0u8; KEY_LEN];
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, p)
+            .hash_password_into(b"pw", &salt, &mut reference)
+            .unwrap();
+        assert_eq!(*ours, reference);
+        // Different params (t_cost) must give a different key.
+        let other = derive_key_with_params(
+            b"pw",
+            &salt,
+            &KdfParams {
+                t_cost: ACTIVE_KDF.t_cost + 1,
+                ..ACTIVE_KDF
+            },
+        )
+        .unwrap();
+        assert_ne!(*ours, *other);
+        // Different salt must give a different key.
+        let other_salt = derive_key(b"pw", &[8u8; SALT_LEN]).unwrap();
+        assert_ne!(*ours, *other_salt);
+    }
+
+    #[test]
     fn test_crypto_layer_from_password() {
         let crypto = CryptoLayer::new_from_password("test_password").unwrap();
-        let test_data = b"test";
-        let encrypted = crypto.encrypt(test_data).unwrap();
-        let decrypted = crypto.decrypt(&encrypted).unwrap();
-        assert_eq!(test_data, decrypted.as_slice());
+        let encrypted = crypto.encrypt(b"test").unwrap();
+        assert_eq!(crypto.decrypt(&encrypted).unwrap(), b"test");
     }
 
     #[test]
     fn test_crypto_layer_from_key() {
-        let key = [1u8; 32];
-        let crypto = CryptoLayer::new_from_key(&key).unwrap();
-        let test_data = b"test";
-        let encrypted = crypto.encrypt(test_data).unwrap();
-        let decrypted = crypto.decrypt(&encrypted).unwrap();
-        assert_eq!(test_data, decrypted.as_slice());
+        let crypto = CryptoLayer::new_from_key(&[1u8; 32]).unwrap();
+        let encrypted = crypto.encrypt(b"test").unwrap();
+        assert_eq!(crypto.decrypt(&encrypted).unwrap(), b"test");
     }
 
     #[test]
     fn test_crypto_layer_from_key_invalid_length() {
-        let key = [1u8; 16]; // Invalid length
-        let result = CryptoLayer::new_from_key(&key);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(matches!(e, SteganoError::EncryptionError(_)));
-        }
+        let result = CryptoLayer::new_from_key(&[1u8; 16]);
+        assert!(matches!(result, Err(SteganoError::EncryptionError(_))));
     }
 
     #[test]
-    fn test_key_derivation_deterministic() {
-        let k1 = CryptoLayer::derive_key_bytes("password123").unwrap();
-        let k2 = CryptoLayer::derive_key_bytes("password123").unwrap();
-        assert_eq!(k1, k2);
+    fn test_debug_redacts_secret() {
+        let crypto = CryptoLayer::new_from_password("hunter2").unwrap();
+        let s = format!("{crypto:?}");
+        assert!(!s.contains("hunter2"));
+        assert!(s.contains("redacted"));
     }
 
     #[test]
-    fn test_key_derivation_different_passwords() {
-        let k1 = CryptoLayer::derive_key_bytes("password1").unwrap();
-        let k2 = CryptoLayer::derive_key_bytes("password2").unwrap();
-        assert_ne!(k1, k2);
+    fn test_password_salts_are_random() {
+        let crypto = CryptoLayer::new_from_password("pw").unwrap();
+        let a = crypto.encrypt(b"x").unwrap();
+        let b = crypto.encrypt(b"x").unwrap();
+        assert_ne!(a.salt, b.salt);
+        assert_ne!(a.nonce, b.nonce);
+        assert_ne!(a.encrypted_data, b.encrypted_data);
     }
 
     #[test]
-    fn test_aes_encryption_decryption_roundtrip() {
-        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"Secret scientific data";
-        let encrypted = crypto.encrypt(plaintext).unwrap();
-        assert_eq!(encrypted.cipher, CipherKind::Aes256Gcm);
-        let decrypted = crypto.decrypt(&encrypted).unwrap();
-        assert_eq!(plaintext, decrypted.as_slice());
-    }
-
-    #[test]
-    fn test_chacha20_encryption_decryption_roundtrip() {
+    fn test_chacha20_roundtrip() {
         let crypto = CryptoLayer::new_from_password_chacha20("secure_password").unwrap();
-        let plaintext = b"Secret scientific data (ChaCha20)";
-        let encrypted = crypto.encrypt(plaintext).unwrap();
+        let encrypted = crypto.encrypt(b"Secret (ChaCha20)").unwrap();
         assert_eq!(encrypted.cipher, CipherKind::ChaCha20Poly1305);
-        let decrypted = crypto.decrypt(&encrypted).unwrap();
-        assert_eq!(plaintext, decrypted.as_slice());
-    }
-
-    #[test]
-    fn test_chacha20_from_key() {
-        let key = [0xBBu8; 32];
-        let crypto =
-            CryptoLayer::new_from_key_with_kind(&key, CipherKind::ChaCha20Poly1305).unwrap();
-        let data = b"chacha test payload";
-        let enc = crypto.encrypt(data).unwrap();
-        let dec = crypto.decrypt(&enc).unwrap();
-        assert_eq!(data, dec.as_slice());
-    }
-
-    #[test]
-    fn test_cipher_stored_in_payload() {
-        // After serialization+deserialization the cipher kind survives
-        let crypto = CryptoLayer::new_from_password_chacha20("pw").unwrap();
-        let enc = crypto.encrypt(b"hello").unwrap();
-        let serialized = CryptoLayer::serialize_payload(&enc);
-        let deser = CryptoLayer::deserialize_payload(&serialized).unwrap();
-        assert_eq!(deser.cipher, CipherKind::ChaCha20Poly1305);
+        assert_eq!(crypto.decrypt(&encrypted).unwrap(), b"Secret (ChaCha20)");
     }
 
     #[test]
     fn test_auto_detect_cipher_on_decrypt() {
-        // Encrypt with ChaCha20, decrypt with a CryptoLayer created with AES kind.
-        // The stored cipher byte must make decrypt() use ChaCha20 regardless of self.kind.
         let key = [0x42u8; 32];
         let enc_layer =
             CryptoLayer::new_from_key_with_kind(&key, CipherKind::ChaCha20Poly1305).unwrap();
-        let payload = b"auto-detect test";
-        let encrypted = enc_layer.encrypt(payload).unwrap();
-        let serialized = CryptoLayer::serialize_payload(&encrypted);
+        let serialized = CryptoLayer::serialize_payload(&enc_layer.encrypt(b"auto").unwrap());
         let deserialized = CryptoLayer::deserialize_payload(&serialized).unwrap();
-        // Create decrypt layer with default AES kind — should still work because
-        // decrypt() dispatches on deserialized.cipher
+        assert_eq!(deserialized.cipher, CipherKind::ChaCha20Poly1305);
         let dec_layer = CryptoLayer::new_from_key(&key).unwrap();
-        let decrypted = dec_layer.decrypt(&deserialized).unwrap();
-        assert_eq!(payload, decrypted.as_slice());
+        assert_eq!(dec_layer.decrypt(&deserialized).unwrap(), b"auto");
     }
 
     #[test]
-    fn test_encryption_produces_different_nonces() {
+    fn test_empty_and_large_data() {
         let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"Same data";
-        let encrypted1 = crypto.encrypt(plaintext).unwrap();
-        let encrypted2 = crypto.encrypt(plaintext).unwrap();
-        assert_ne!(encrypted1.nonce, encrypted2.nonce);
-        assert_ne!(encrypted1.encrypted_data, encrypted2.encrypted_data);
+        let e = crypto.encrypt(b"").unwrap();
+        assert!(crypto.decrypt(&e).unwrap().is_empty());
+        let big = vec![0xAAu8; 10000];
+        let e = crypto.encrypt(&big).unwrap();
+        assert_eq!(crypto.decrypt(&e).unwrap(), big);
     }
 
     #[test]
-    fn test_empty_data_encryption() {
+    fn test_tampering_fails() {
         let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"";
-        let encrypted = crypto.encrypt(plaintext).unwrap();
-        let decrypted = crypto.decrypt(&encrypted).unwrap();
-        assert_eq!(plaintext, decrypted.as_slice());
+        let enc = crypto.encrypt(b"Secret data").unwrap();
+
+        let mut t = enc.clone();
+        t.encrypted_data[0] ^= 1;
+        assert!(crypto.decrypt(&t).is_err());
+
+        let mut t = enc.clone();
+        t.nonce[0] ^= 1;
+        assert!(crypto.decrypt(&t).is_err());
+
+        let mut t = enc.clone();
+        t.salt[0] ^= 1;
+        assert!(crypto.decrypt(&t).is_err());
+
+        // Cipher byte is authenticated (AAD) as well as selecting the algorithm.
+        let mut t = enc;
+        t.cipher = CipherKind::ChaCha20Poly1305;
+        assert!(matches!(
+            crypto.decrypt(&t),
+            Err(SteganoError::EncryptionError(_))
+        ));
     }
 
     #[test]
-    fn test_large_data_encryption() {
-        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = vec![0xAAu8; 10000]; // 10 KB
-        let encrypted = crypto.encrypt(&plaintext).unwrap();
-        let decrypted = crypto.decrypt(&encrypted).unwrap();
-        assert_eq!(plaintext, decrypted);
+    fn test_wrong_password_is_crypto_error() {
+        let a = CryptoLayer::new_from_password("password1").unwrap();
+        let b = CryptoLayer::new_from_password("password2").unwrap();
+        let enc = a.encrypt(b"Same plaintext").unwrap();
+        assert!(matches!(
+            b.decrypt(&enc),
+            Err(SteganoError::EncryptionError(_))
+        ));
     }
 
     #[test]
-    fn test_tampered_encrypted_data_fails() {
-        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"Secret data";
-        let mut encrypted = crypto.encrypt(plaintext).unwrap();
-        if !encrypted.encrypted_data.is_empty() {
-            encrypted.encrypted_data[0] ^= 1;
-        }
-        let result = crypto.decrypt(&encrypted);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_tampered_nonce_fails() {
-        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"Secret data";
-        let mut encrypted = crypto.encrypt(plaintext).unwrap();
-        encrypted.nonce[0] ^= 1;
-        let result = crypto.decrypt(&encrypted);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_tampered_hash_fails() {
-        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"Secret data";
-        let mut encrypted = crypto.encrypt(plaintext).unwrap();
-        encrypted.hash[0] ^= 1;
-        let result = crypto.decrypt(&encrypted);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(matches!(e, SteganoError::IntegrityError(_)));
-        }
-    }
-
-    #[test]
-    fn test_payload_serialization_roundtrip() {
-        let crypto = CryptoLayer::new_from_password("secure_password").unwrap();
-        let plaintext = b"Data to serialize";
-        let encrypted = crypto.encrypt(plaintext).unwrap();
-        let serialized = CryptoLayer::serialize_payload(&encrypted);
-        let deserialized = CryptoLayer::deserialize_payload(&serialized).unwrap();
-        assert_eq!(encrypted.cipher, deserialized.cipher);
-        assert_eq!(encrypted.encrypted_data, deserialized.encrypted_data);
-        assert_eq!(encrypted.nonce, deserialized.nonce);
-        assert_eq!(encrypted.hash, deserialized.hash);
-    }
-
-    #[test]
-    fn test_deserialization_too_short() {
-        let data = vec![0u8; 40]; // less than 49 bytes
-        let result = CryptoLayer::deserialize_payload(&data);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(matches!(e, SteganoError::IntegrityError(_)));
-        }
-    }
-
-    #[test]
-    fn test_deserialization_size_mismatch() {
-        let mut data = vec![0u8; 49]; // cipher(1)+len(4)+nonce(12)+hash(32) = 49
-        // Set length to 100 but provide no encrypted bytes
-        data[1..5].copy_from_slice(&100u32.to_le_bytes());
-        let result = CryptoLayer::deserialize_payload(&data);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(matches!(e, SteganoError::IntegrityError(_)));
-        }
-    }
-
-    #[test]
-    fn test_serialization_format() {
-        let payload = SecurePayload {
-            cipher: CipherKind::Aes256Gcm,
-            encrypted_data: vec![0xAA, 0xBB, 0xCC],
-            nonce: [1u8; 12],
-            hash: [2u8; 32],
-        };
-        let serialized = CryptoLayer::serialize_payload(&payload);
-        // Byte 0: cipher kind
-        assert_eq!(serialized[0], 0); // Aes256Gcm
-        // Bytes 1-4: length (3 LE)
+    fn test_serialization_roundtrip_and_format() {
+        let crypto = CryptoLayer::new_from_password("pw").unwrap();
+        let enc = crypto.encrypt(b"Data to serialize").unwrap();
+        let s = CryptoLayer::serialize_payload(&enc);
+        assert_eq!(s.len(), SECURE_PAYLOAD_HEADER_LEN + 17 + TAG_LEN);
+        assert_eq!(s[0], SECURE_PAYLOAD_VERSION);
+        assert_eq!(s[1], CipherKind::Aes256Gcm.to_u8());
+        assert_eq!(&s[2..18], &enc.salt);
+        assert_eq!(&s[18..30], &enc.nonce);
         assert_eq!(
-            u32::from_le_bytes([serialized[1], serialized[2], serialized[3], serialized[4]]),
-            3
+            u32::from_le_bytes([s[30], s[31], s[32], s[33]]) as usize,
+            enc.encrypted_data.len()
         );
-        // Bytes 5-16: nonce
-        assert_eq!(&serialized[5..17], &[1u8; 12]);
-        // Bytes 17-48: hash
-        assert_eq!(&serialized[17..49], &[2u8; 32]);
-        // Bytes 49..: encrypted data
-        assert_eq!(&serialized[49..], &[0xAA, 0xBB, 0xCC]);
+        let d = CryptoLayer::deserialize_payload(&s).unwrap();
+        assert_eq!(crypto.decrypt(&d).unwrap(), b"Data to serialize");
     }
 
     #[test]
-    fn test_full_crypto_workflow() {
-        let crypto = CryptoLayer::new_from_password("workflow_test").unwrap();
-        let original_data = b"Complete workflow test data with various characters: !@#$%^&*()";
-        let encrypted_payload = crypto.encrypt(original_data).unwrap();
-        let serialized = CryptoLayer::serialize_payload(&encrypted_payload);
-        let deserialized_payload = CryptoLayer::deserialize_payload(&serialized).unwrap();
-        let decrypted_data = crypto.decrypt(&deserialized_payload).unwrap();
-        assert_eq!(original_data, decrypted_data.as_slice());
-    }
-
-    #[test]
-    fn test_full_chacha20_workflow() {
-        let crypto = CryptoLayer::new_from_password_chacha20("workflow_test_chacha").unwrap();
-        let original_data = b"ChaCha20 full workflow test with: !@#$%^&*()";
-        let encrypted_payload = crypto.encrypt(original_data).unwrap();
-        let serialized = CryptoLayer::serialize_payload(&encrypted_payload);
-        let deserialized_payload = CryptoLayer::deserialize_payload(&serialized).unwrap();
-        let decrypted_data = crypto.decrypt(&deserialized_payload).unwrap();
-        assert_eq!(original_data, decrypted_data.as_slice());
-    }
-
-    #[test]
-    fn test_different_passwords_different_results() {
-        let crypto1 = CryptoLayer::new_from_password("password1").unwrap();
-        let crypto2 = CryptoLayer::new_from_password("password2").unwrap();
-        let plaintext = b"Same plaintext";
-        let encrypted1 = crypto1.encrypt(plaintext).unwrap();
-        let encrypted2 = crypto2.encrypt(plaintext).unwrap();
-        assert_ne!(encrypted1.encrypted_data, encrypted2.encrypted_data);
-        // Cross-decryption should fail (AEAD tag mismatch)
-        let result = crypto1.decrypt(&encrypted2);
-        assert!(result.is_err());
+    fn test_deserialization_rejects_bad_input() {
+        assert!(matches!(
+            CryptoLayer::deserialize_payload(&[0u8; 40]),
+            Err(SteganoError::IntegrityError(_))
+        ));
+        let crypto = CryptoLayer::new_from_password("pw").unwrap();
+        let mut s = CryptoLayer::serialize_payload(&crypto.encrypt(b"abc").unwrap());
+        // Length mismatch.
+        let mut bad = s.clone();
+        bad[30..34].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(CryptoLayer::deserialize_payload(&bad).is_err());
+        // Unknown version.
+        let mut bad = s.clone();
+        bad[0] = 1;
+        assert!(CryptoLayer::deserialize_payload(&bad).is_err());
+        // Unknown cipher.
+        s[1] = 9;
+        assert!(CryptoLayer::deserialize_payload(&s).is_err());
     }
 
     #[test]

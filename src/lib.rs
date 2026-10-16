@@ -101,7 +101,6 @@ pub use core::*;
 pub use capacity::CapacityEstimator;
 pub use crypto::{CryptoLayer, SecurePayload};
 pub use embedding::SteganoEmbedder;
-pub use error_correction::IntegritySystem;
 #[cfg(feature = "experimental")]
 pub use gpu::GpuAccelerator;
 pub use handlers::DataHandler;

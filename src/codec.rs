@@ -1,59 +1,219 @@
-//! Payload encoding pipeline: encryption + Reed-Solomon error correction.
+//! Payload encoding pipeline (wire format v2): Argon2id + AEAD encryption and
+//! Reed-Solomon error correction.
 //!
-//! This module provides a self-framing encode/decode pipeline that applies,
-//! in order: AES-256-GCM encryption (from `EmbedParams::encryption_key`) and
-//! Reed-Solomon error correction (from `EmbedParams::error_correction_level`).
+//! Layout (see `docs/WIRE_FORMAT.md` for full details):
 //!
-//! The exact same `EmbedParams` must be used for both `encode_payload` and
-//! `decode_payload`; there is no format auto-detection.
+//! ```text
+//! header (36 bytes):
+//!   [version=2][flags][cipher][ecc_len][salt 16][nonce 12][len u32 LE]
+//! body (len bytes):
+//!   ciphertext ‖ 16-byte tag   (if FLAG_ENCRYPTED)
+//!   plaintext                  (otherwise)
+//!
+//! ecc_len == 0:  header ‖ body
+//! ecc_len  > 0:  RS(header) [36 + ecc_len bytes] ‖ RS(body) [ceil(len / (255-ecc_len)) × 255 bytes]
+//! ```
+//!
+//! When encrypted, the key is `Argon2id(password, salt)` and all 36 header
+//! bytes are the AEAD associated data, so flags, cipher, EC level, salt,
+//! nonce and length are authenticated.  The header is protected by the same
+//! RS parity length as the body, so the chosen EC level covers it too.
+//!
+//! Decoding auto-detects the EC level (trying `params.error_correction_level`
+//! first) and the cipher.  A password must be supplied iff the payload is
+//! encrypted; a mismatch in either direction is an error (no silent
+//! downgrade).  There is no decode path for the pre-v0.6 format.
 
-use crate::core::{ECLevel, EmbedParams, SteganoError};
-use crate::crypto::CryptoLayer;
-use reed_solomon::{Decoder, Encoder};
+use crate::core::{CipherKind, EmbedParams, Result, SteganoError};
+use crate::crypto::{self, NONCE_LEN, SALT_LEN, TAG_LEN};
+use crate::error_correction::{
+    ecc_len_for, rs_correct_block, rs_decode_stream, rs_encode_block, rs_encode_stream, ECC_LENS,
+};
 
-// Flags stored in the first byte of the encoded payload.
+/// Wire format version written by this crate.
+pub const WIRE_VERSION: u8 = 2;
+/// Size of the (unprotected) header in bytes.
+pub const HEADER_LEN: usize = 4 + SALT_LEN + NONCE_LEN + 4;
+
+/// Flag: body is AEAD-encrypted.
 const FLAG_ENCRYPTED: u8 = 0x01;
+/// Flag: header and body are Reed-Solomon protected (`ecc_len > 0`).
 const FLAG_EC: u8 = 0x02;
+const KNOWN_FLAGS: u8 = FLAG_ENCRYPTED | FLAG_EC;
+
+const OFF_SALT: usize = 4;
+const OFF_NONCE: usize = OFF_SALT + SALT_LEN;
+const OFF_LEN: usize = OFF_NONCE + NONCE_LEN;
+
+/// Parsed v2 header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Header {
+    flags: u8,
+    cipher: CipherKind,
+    ecc_len: usize,
+    salt: [u8; SALT_LEN],
+    nonce: [u8; NONCE_LEN],
+    len: u32,
+}
+
+impl Header {
+    fn encrypted(&self) -> bool {
+        self.flags & FLAG_ENCRYPTED != 0
+    }
+
+    fn to_bytes(&self) -> [u8; HEADER_LEN] {
+        let mut h = [0u8; HEADER_LEN];
+        h[0] = WIRE_VERSION;
+        h[1] = self.flags;
+        h[2] = self.cipher.to_u8();
+        h[3] = self.ecc_len as u8;
+        h[OFF_SALT..OFF_NONCE].copy_from_slice(&self.salt);
+        h[OFF_NONCE..OFF_LEN].copy_from_slice(&self.nonce);
+        h[OFF_LEN..].copy_from_slice(&self.len.to_le_bytes());
+        h
+    }
+
+    /// Parse and validate a header, requiring its `ecc_len` to equal
+    /// `expected_ecc` (the parity length it was decoded with).
+    fn parse(h: &[u8], expected_ecc: usize) -> Result<Self> {
+        let bad = |m: &str| Err(SteganoError::IntegrityError(format!("Invalid header: {m}")));
+        if h.len() < HEADER_LEN {
+            return bad("truncated");
+        }
+        if h[0] != WIRE_VERSION {
+            return bad("unsupported wire format version");
+        }
+        let flags = h[1];
+        if flags & !KNOWN_FLAGS != 0 {
+            return bad("unknown flags");
+        }
+        let ecc_len = h[3] as usize;
+        if ecc_len != expected_ecc || !ECC_LENS.contains(&ecc_len) {
+            return bad("EC length mismatch");
+        }
+        if (flags & FLAG_EC != 0) != (ecc_len != 0) {
+            return bad("EC flag inconsistent with EC length");
+        }
+        let cipher = CipherKind::from_u8(h[2]).ok_or_else(|| {
+            SteganoError::IntegrityError(format!("Unknown cipher kind byte: {}", h[2]))
+        })?;
+        let mut salt = [0u8; SALT_LEN];
+        salt.copy_from_slice(&h[OFF_SALT..OFF_NONCE]);
+        let mut nonce = [0u8; NONCE_LEN];
+        nonce.copy_from_slice(&h[OFF_NONCE..OFF_LEN]);
+        let len = u32::from_le_bytes([h[OFF_LEN], h[OFF_LEN + 1], h[OFF_LEN + 2], h[OFF_LEN + 3]]);
+        let hdr = Header {
+            flags,
+            cipher,
+            ecc_len,
+            salt,
+            nonce,
+            len,
+        };
+        if !hdr.encrypted() {
+            if h[2] != 0 || salt != [0; SALT_LEN] || nonce != [0; NONCE_LEN] {
+                return bad("crypto fields set on unencrypted payload");
+            }
+        } else if (len as usize) < TAG_LEN {
+            return bad("ciphertext shorter than tag");
+        }
+        Ok(hdr)
+    }
+}
 
 /// Encode a payload, optionally applying encryption and Reed-Solomon error
 /// correction as specified by `params`.
 ///
 /// Returns a self-framing byte sequence that [`decode_payload`] can reverse.
-/// The returned bytes begin with a flags byte so the decoder knows which
-/// operations were applied.
 pub fn encode_payload(payload: &[u8], params: &EmbedParams) -> crate::core::Result<Vec<u8>> {
-    let mut flags = 0u8;
-    let mut data = payload.to_vec();
+    let ecc_len = ecc_len_for(params.error_correction_level);
+    let encrypted = !params.encryption_key.is_empty();
 
-    // Step 1: encrypt with params key if provided.
-    if !params.encryption_key.is_empty() {
-        let key = normalize_key(&params.encryption_key);
-        let crypto = CryptoLayer::new_from_key_with_kind(&key, params.cipher_kind)?;
-        let sp = crypto.encrypt(&data)?;
-        data = CryptoLayer::serialize_payload(&sp);
+    let body_len = if encrypted {
+        payload.len().checked_add(TAG_LEN)
+    } else {
+        Some(payload.len())
+    };
+    let len = body_len
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| {
+            SteganoError::InvalidParameter("Payload too large for wire format (> u32::MAX)".into())
+        })?;
+
+    let mut flags = 0u8;
+    if encrypted {
         flags |= FLAG_ENCRYPTED;
     }
-
-    // Step 2: apply Reed-Solomon error correction.
-    let ecc_len = ec_level_to_ecc_len(params.error_correction_level);
     if ecc_len > 0 {
-        data = rs_encode(&data, ecc_len)?;
         flags |= FLAG_EC;
     }
 
-    // Build output: [flags(1)] [if EC: ecc_len(1)] [data]
-    let mut out = Vec::with_capacity(1 + if ecc_len > 0 { 1 } else { 0 } + data.len());
-    out.push(flags);
-    if ecc_len > 0 {
-        out.push(ecc_len as u8);
+    let (cipher, salt, nonce) = if encrypted {
+        (
+            params.cipher_kind,
+            crypto::random_array::<SALT_LEN>(),
+            crypto::random_array::<NONCE_LEN>(),
+        )
+    } else {
+        // Canonical zero crypto fields when unencrypted.
+        (CipherKind::Aes256Gcm, [0u8; SALT_LEN], [0u8; NONCE_LEN])
+    };
+
+    let header = Header {
+        flags,
+        cipher,
+        ecc_len,
+        salt,
+        nonce,
+        len,
+    };
+    let header_bytes = header.to_bytes();
+
+    let ciphertext;
+    let body: &[u8] = if encrypted {
+        let key = crypto::derive_key(&params.encryption_key, &salt)?;
+        ciphertext = crypto::aead_seal(cipher, &key, &nonce, &header_bytes, payload)?;
+        &ciphertext
+    } else {
+        payload
+    };
+    debug_assert_eq!(body.len(), len as usize);
+
+    if ecc_len == 0 {
+        let mut out = Vec::with_capacity(HEADER_LEN + body.len());
+        out.extend_from_slice(&header_bytes);
+        out.extend_from_slice(body);
+        Ok(out)
+    } else {
+        let mut out = rs_encode_block(&header_bytes, ecc_len)?;
+        out.extend_from_slice(&rs_encode_stream(body, ecc_len)?);
+        Ok(out)
     }
-    out.extend_from_slice(&data);
-    Ok(out)
+}
+
+/// Try to recover and validate the header assuming `ecc_len` parity bytes.
+fn try_header(data: &[u8], ecc_len: usize) -> Result<(Header, usize)> {
+    let hdr_block = HEADER_LEN + ecc_len;
+    if data.len() < hdr_block {
+        return Err(SteganoError::IntegrityError(
+            "Payload too short for header".to_string(),
+        ));
+    }
+    let header = if ecc_len == 0 {
+        Header::parse(&data[..HEADER_LEN], 0)?
+    } else {
+        let corrected = rs_correct_block(&data[..hdr_block], ecc_len)?;
+        Header::parse(&corrected, ecc_len)?
+    };
+    Ok((header, hdr_block))
 }
 
 /// Decode a payload previously encoded with [`encode_payload`].
 ///
-/// The same `params` must be used as were used for encoding.
+/// The EC level and cipher are detected from the payload.  `params` supplies
+/// the password (which must be present iff the payload is encrypted); its
+/// `error_correction_level` is only used as the first EC level to try.
+/// Trailing bytes after the encoded payload are ignored.
 pub fn decode_payload(data: &[u8], params: &EmbedParams) -> crate::core::Result<Vec<u8>> {
     if data.is_empty() {
         return Err(SteganoError::IntegrityError(
@@ -61,380 +221,332 @@ pub fn decode_payload(data: &[u8], params: &EmbedParams) -> crate::core::Result<
         ));
     }
 
-    let flags = data[0];
-    let mut current = data[1..].to_vec();
-
-    // Step 1: RS decode (EC is the outermost layer; decode it first).
-    if flags & FLAG_EC != 0 {
-        if current.is_empty() {
-            return Err(SteganoError::IntegrityError(
-                "Missing EC length byte".to_string(),
-            ));
+    // Locate the header: try the caller's EC level first, then the others.
+    let preferred = ecc_len_for(params.error_correction_level);
+    let mut found = None;
+    let mut last_err = None;
+    for ecc in std::iter::once(preferred).chain(ECC_LENS.into_iter().filter(|&e| e != preferred)) {
+        match try_header(data, ecc) {
+            Ok(h) => {
+                found = Some(h);
+                break;
+            }
+            Err(e) => last_err = Some(e),
         }
-        let ecc_len = current[0] as usize;
-        current = rs_decode(&current[1..], ecc_len)?;
     }
+    let (header, body_off) = match found {
+        Some(h) => h,
+        None => {
+            return Err(last_err.unwrap_or_else(|| {
+                SteganoError::IntegrityError("No valid payload header".to_string())
+            }))
+        }
+    };
 
-    // Step 2: decrypt.
-    if flags & FLAG_ENCRYPTED != 0 {
-        if params.encryption_key.is_empty() {
+    // No silent downgrade / no keyless decrypt.
+    let have_key = !params.encryption_key.is_empty();
+    match (header.encrypted(), have_key) {
+        (false, true) => {
+            return Err(SteganoError::EncryptionError(
+                "A password was supplied but the payload is not encrypted".to_string(),
+            ))
+        }
+        (true, false) => {
             return Err(SteganoError::EncryptionError(
                 "Encryption key required for decryption".to_string(),
+            ))
+        }
+        _ => {}
+    }
+
+    // Validate the declared length against the available bytes before
+    // allocating anything sized by it.
+    let len = header.len as usize;
+    let rest = &data[body_off..];
+    let body = if header.ecc_len == 0 {
+        if rest.len() < len {
+            return Err(SteganoError::IntegrityError(
+                "Payload shorter than declared length".to_string(),
             ));
         }
-        let key = normalize_key(&params.encryption_key);
-        let crypto = CryptoLayer::new_from_key(&key)?;
-        let sp = CryptoLayer::deserialize_payload(&current)?;
-        current = crypto.decrypt(&sp)?;
+        rest[..len].to_vec()
+    } else {
+        rs_decode_stream(rest, len, header.ecc_len)?
+    };
+
+    if !header.encrypted() {
+        return Ok(body);
     }
-
-    Ok(current)
-}
-
-/// Hash an arbitrary-length key to exactly 32 bytes using Blake3.
-///
-/// If the key is already 32 bytes it is used verbatim.  All other lengths
-/// are hashed to produce a deterministic 32-byte value.
-pub(crate) fn normalize_key(key: &[u8]) -> [u8; 32] {
-    if key.len() == 32 {
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(key);
-        return arr;
-    }
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(key);
-    hasher.update(b"stegano-key-derive-v1");
-    *hasher.finalize().as_bytes()
-}
-
-/// Map an [`ECLevel`] to the number of Reed-Solomon ECC bytes per block.
-///
-/// Returns 0 for `ECLevel::None` (no error correction).
-fn ec_level_to_ecc_len(level: ECLevel) -> usize {
-    match level {
-        ECLevel::None => 0,
-        ECLevel::Low => 16,    // ~6.7 % overhead per 239-byte block
-        ECLevel::Medium => 32,  // ~14.3 % overhead per 223-byte block
-        ECLevel::High => 64,    // ~33.5 % overhead per 191-byte block
-        ECLevel::Maximum => 128, // ~100 % overhead per 127-byte block
-    }
-}
-
-/// Reed-Solomon encode arbitrary-length data.
-///
-/// Data is split into fixed-size chunks of `255 - ecc_len` bytes (the last
-/// chunk is zero-padded to the same size).  Each chunk is independently
-/// encoded to exactly 255 bytes.
-///
-/// Output format: `[4-byte LE original_len][N × 255-byte RS blocks]`.
-fn rs_encode(data: &[u8], ecc_len: usize) -> crate::core::Result<Vec<u8>> {
-    let data_chunk = 255 - ecc_len;
-    let enc = Encoder::new(ecc_len);
-    let orig_len = data.len();
-    // At least one block even for empty input.
-    let num_blocks = orig_len.div_ceil(data_chunk).max(1);
-
-    let capacity = num_blocks
-        .checked_mul(255)
-        .and_then(|n| n.checked_add(4))
-        .ok_or_else(|| {
-            SteganoError::InvalidParameter("Payload too large for Reed-Solomon encoding".into())
-        })?;
-    let mut out = Vec::with_capacity(capacity);
-    out.extend_from_slice(&(orig_len as u32).to_le_bytes());
-
-    for block_idx in 0..num_blocks {
-        let start = block_idx * data_chunk;
-        let end = (start + data_chunk).min(orig_len);
-        let chunk = &data[start..end];
-
-        // Pad to exactly data_chunk bytes so all encoded blocks are 255 bytes.
-        let mut padded = vec![0u8; data_chunk];
-        padded[..chunk.len()].copy_from_slice(chunk);
-
-        let encoded = enc.encode(&padded);
-        // encoded[..] gives all data_chunk + ecc_len = 255 bytes via Deref.
-        out.extend_from_slice(&encoded[..]);
-    }
-
-    Ok(out)
-}
-
-/// Reed-Solomon decode data produced by [`rs_encode`].
-fn rs_decode(data: &[u8], ecc_len: usize) -> crate::core::Result<Vec<u8>> {
-    if data.len() < 4 {
-        return Err(SteganoError::IntegrityError(
-            "RS data too short for length header".to_string(),
-        ));
-    }
-
-    let orig_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    let encoded_data = &data[4..];
-
-    if !encoded_data.len().is_multiple_of(255) {
-        return Err(SteganoError::IntegrityError(format!(
-            "RS encoded data length {} is not a multiple of 255",
-            encoded_data.len()
-        )));
-    }
-
-    let dec = Decoder::new(ecc_len);
-    let mut result = Vec::with_capacity(orig_len.max(1));
-
-    for chunk in encoded_data.chunks(255) {
-        let recovered = dec.correct(chunk, None).map_err(|_| {
-            SteganoError::IntegrityError("Reed-Solomon error correction failed".to_string())
-        })?;
-        result.extend_from_slice(recovered.data());
-    }
-
-    result.truncate(orig_len);
-    Ok(result)
+    let key = crypto::derive_key(&params.encryption_key, &header.salt)?;
+    crypto::aead_open(
+        header.cipher,
+        &key,
+        &header.nonce,
+        &header.to_bytes(),
+        &body,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ECLevel, EmbedParams};
-    use std::collections::HashMap;
+    use crate::core::ECLevel;
 
-    fn params_with_key(key: &[u8]) -> EmbedParams {
-        EmbedParams {
-            encryption_key: key.to_vec(),
-            error_correction_level: ECLevel::None,
-            stealth_level: crate::core::StealthLevel::Medium,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
-        }
-    }
+    const LEVELS: [ECLevel; 5] = [
+        ECLevel::None,
+        ECLevel::Low,
+        ECLevel::Medium,
+        ECLevel::High,
+        ECLevel::Maximum,
+    ];
 
-    fn params_with_ec(level: ECLevel) -> EmbedParams {
-        EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: level,
-            stealth_level: crate::core::StealthLevel::Medium,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
-        }
-    }
-
-    fn params_with_both(key: &[u8], level: ECLevel) -> EmbedParams {
+    fn params(key: &[u8], level: ECLevel) -> EmbedParams {
         EmbedParams {
             encryption_key: key.to_vec(),
             error_correction_level: level,
-            stealth_level: crate::core::StealthLevel::Medium,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
+            ..Default::default()
         }
     }
 
-    fn no_codec_params() -> EmbedParams {
+    fn params_cipher(key: &[u8], level: ECLevel, cipher: CipherKind) -> EmbedParams {
         EmbedParams {
-            encryption_key: vec![],
-            error_correction_level: ECLevel::None,
-            stealth_level: crate::core::StealthLevel::Medium,
-            use_gpu: false,
-            enable_validation: false,
-            format_specific: HashMap::new(),
-            cipher_kind: Default::default(),
+            cipher_kind: cipher,
+            ..params(key, level)
         }
     }
 
     #[test]
-    fn test_no_op_roundtrip() {
-        let params = no_codec_params();
-        let payload = b"hello world";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-        // flags byte == 0, so encoded is [0x00] + payload
-        assert_eq!(encoded.len(), 1 + payload.len());
-    }
-
-    #[test]
-    fn test_encryption_only_roundtrip() {
-        let key = b"test key for encryption testing!"; // 32 bytes
-        let params = params_with_key(key);
+    fn test_roundtrip_all_levels_both_ciphers() {
         let payload = b"secret payload data";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-        // First byte should have FLAG_ENCRYPTED set
-        assert!(encoded[0] & FLAG_ENCRYPTED != 0);
-        assert!(encoded[0] & FLAG_EC == 0);
-    }
-
-    #[test]
-    fn test_ec_only_roundtrip_low() {
-        let params = params_with_ec(ECLevel::Low);
-        let payload = b"data with error correction";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-        assert!(encoded[0] & FLAG_EC != 0);
-        assert!(encoded[0] & FLAG_ENCRYPTED == 0);
-    }
-
-    #[test]
-    fn test_ec_only_roundtrip_medium() {
-        let params = params_with_ec(ECLevel::Medium);
-        let payload = b"medium error correction test";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn test_ec_only_roundtrip_high() {
-        let params = params_with_ec(ECLevel::High);
-        let payload = b"high error correction test";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn test_ec_only_roundtrip_maximum() {
-        let params = params_with_ec(ECLevel::Maximum);
-        let payload = b"maximum error correction";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn test_encryption_and_ec_roundtrip() {
-        let key = b"encryption plus EC test key!!!!!"; // 32 bytes
-        let params = params_with_both(key, ECLevel::Medium);
-        let payload = b"secret data with error correction";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-        // Both flags should be set
-        assert!(encoded[0] & FLAG_ENCRYPTED != 0);
-        assert!(encoded[0] & FLAG_EC != 0);
-    }
-
-    #[test]
-    fn test_short_key_normalization() {
-        let short_key = b"short";
-        let params = params_with_key(short_key);
-        let payload = b"test with short key";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn test_long_key_normalization() {
-        let long_key = b"this is a very long key that is definitely more than 32 bytes long";
-        let params = params_with_key(long_key);
-        let payload = b"test with long key";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn test_empty_payload_roundtrip() {
-        let key = b"key for empty payload test!!!!!!"; // 32 bytes
-        let params = params_with_both(key, ECLevel::Low);
-        let payload = b"";
-        let encoded = encode_payload(payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn test_empty_payload_all_ec_levels() {
-        let payload = b"";
-        for level in [ECLevel::None, ECLevel::Medium, ECLevel::High, ECLevel::Maximum] {
-            let params = params_with_ec(level);
-            let encoded = encode_payload(payload, &params).unwrap();
-            let decoded = decode_payload(&encoded, &params).unwrap();
-            assert_eq!(decoded, payload, "failed for {level:?}");
+        for level in LEVELS {
+            for cipher in [CipherKind::Aes256Gcm, CipherKind::ChaCha20Poly1305] {
+                let p = params_cipher(b"pw", level, cipher);
+                let enc = encode_payload(payload, &p).unwrap();
+                assert_eq!(enc[0], WIRE_VERSION);
+                assert_eq!(
+                    decode_payload(&enc, &p).unwrap(),
+                    payload,
+                    "{level:?} {cipher:?}"
+                );
+            }
+            let p = params(b"", level);
+            let enc = encode_payload(payload, &p).unwrap();
+            assert_eq!(
+                decode_payload(&enc, &p).unwrap(),
+                payload,
+                "{level:?} plain"
+            );
         }
     }
 
     #[test]
-    fn test_large_payload_roundtrip() {
-        let params = params_with_ec(ECLevel::Low);
-        let payload = vec![0xABu8; 5000]; // 5 KB, spans many RS blocks
-        let encoded = encode_payload(&payload, &params).unwrap();
-        let decoded = decode_payload(&encoded, &params).unwrap();
-        assert_eq!(decoded, payload);
+    fn test_empty_and_large_payloads() {
+        for level in LEVELS {
+            for key in [&b""[..], b"pw"] {
+                let p = params(key, level);
+                let enc = encode_payload(b"", &p).unwrap();
+                assert!(decode_payload(&enc, &p).unwrap().is_empty());
+            }
+        }
+        let big = vec![0xABu8; 5000];
+        let p = params(b"pw", ECLevel::Low);
+        let enc = encode_payload(&big, &p).unwrap();
+        assert_eq!(decode_payload(&enc, &p).unwrap(), big);
     }
 
     #[test]
-    fn test_rs_encode_decode_correctness() {
-        let data = b"Reed-Solomon test data with some content";
-        let ecc_len = 16;
-        let encoded = rs_encode(data, ecc_len).unwrap();
-        let decoded = rs_decode(&encoded, ecc_len).unwrap();
-        assert_eq!(decoded, data);
+    fn test_layout_no_ec() {
+        let p = params(b"", ECLevel::None);
+        let enc = encode_payload(b"hello", &p).unwrap();
+        assert_eq!(enc.len(), HEADER_LEN + 5);
+        assert_eq!(enc[0], WIRE_VERSION);
+        assert_eq!(enc[1], 0);
+        assert_eq!(&enc[HEADER_LEN..], b"hello");
+
+        let p = params(b"pw", ECLevel::None);
+        let enc = encode_payload(b"hello", &p).unwrap();
+        assert_eq!(enc.len(), HEADER_LEN + 5 + TAG_LEN);
+        assert_eq!(enc[1], FLAG_ENCRYPTED);
     }
 
     #[test]
-    fn test_rs_encode_block_size() {
-        // Verify encoded output is [4-byte header] + [N * 255 bytes]
-        let data = vec![1u8; 300]; // > 255 - 16 = 239 bytes → 2 blocks
-        let ecc_len = 16;
-        let encoded = rs_encode(&data, ecc_len).unwrap();
-        // 2 blocks = 510 bytes + 4 header = 514 bytes
-        assert_eq!(encoded.len(), 4 + 2 * 255);
+    fn test_layout_ec() {
+        let p = params(b"pw", ECLevel::Medium);
+        let enc = encode_payload(&[1u8; 300], &p).unwrap();
+        // header block + ceil(316 / 223) = 2 body blocks
+        assert_eq!(enc.len(), HEADER_LEN + 32 + 2 * 255);
+        assert_eq!(enc[1], FLAG_ENCRYPTED | FLAG_EC);
+        assert_eq!(enc[3], 32);
     }
 
     #[test]
-    fn test_normalize_key_32_bytes() {
-        let key = [0x42u8; 32];
-        let normalized = normalize_key(&key);
-        assert_eq!(normalized, key);
+    fn test_ec_auto_detected() {
+        let enc = encode_payload(b"data", &params(b"pw", ECLevel::High)).unwrap();
+        assert_eq!(
+            decode_payload(&enc, &params(b"pw", ECLevel::None)).unwrap(),
+            b"data"
+        );
     }
 
     #[test]
-    fn test_normalize_key_other_lengths() {
-        // Different lengths should produce different (deterministic) 32-byte keys
-        let k1 = normalize_key(b"short");
-        let k2 = normalize_key(b"short"); // same → same
-        assert_eq!(k1, k2);
-
-        let k3 = normalize_key(b"different");
-        assert_ne!(k1, k3);
+    fn test_trailing_bytes_ignored() {
+        for level in [ECLevel::None, ECLevel::Low] {
+            let p = params(b"pw", level);
+            let mut enc = encode_payload(b"data", &p).unwrap();
+            enc.extend_from_slice(&[0x5A; 300]);
+            assert_eq!(decode_payload(&enc, &p).unwrap(), b"data");
+        }
     }
 
     #[test]
-    fn test_decode_wrong_key_fails() {
-        let key1 = b"correct encryption key 32 bytes!";
-        let key2 = b"wrong   encryption key 32 bytes!";
-        let params1 = params_with_key(key1);
-        let params2 = params_with_key(key2);
-        let payload = b"secret";
-        let encoded = encode_payload(payload, &params1).unwrap();
-        let result = decode_payload(&encoded, &params2);
-        assert!(result.is_err());
+    fn test_wrong_password_is_crypto_error() {
+        let enc = encode_payload(b"secret", &params(b"right", ECLevel::Low)).unwrap();
+        assert!(matches!(
+            decode_payload(&enc, &params(b"wrong", ECLevel::Low)),
+            Err(SteganoError::EncryptionError(_))
+        ));
     }
 
     #[test]
-    fn test_decode_missing_key_fails() {
-        let key = b"encryption key for this test!!!!"; // 32 bytes
-        let params_enc = params_with_key(key);
-        let params_no_key = no_codec_params();
-        let payload = b"needs a key";
-        let encoded = encode_payload(payload, &params_enc).unwrap();
-        let result = decode_payload(&encoded, &params_no_key);
-        assert!(result.is_err());
+    fn test_missing_key_fails() {
+        let enc = encode_payload(b"needs a key", &params(b"pw", ECLevel::None)).unwrap();
+        assert!(matches!(
+            decode_payload(&enc, &params(b"", ECLevel::None)),
+            Err(SteganoError::EncryptionError(_))
+        ));
     }
 
     #[test]
-    fn test_decode_empty_fails() {
-        let params = no_codec_params();
-        let result = decode_payload(&[], &params);
-        assert!(result.is_err());
+    fn test_key_supplied_but_unencrypted_fails() {
+        let enc = encode_payload(b"plain", &params(b"", ECLevel::Low)).unwrap();
+        assert!(matches!(
+            decode_payload(&enc, &params(b"pw", ECLevel::Low)),
+            Err(SteganoError::EncryptionError(_))
+        ));
+    }
+
+    #[test]
+    fn test_tamper_header_fields_fails_without_ec() {
+        let p = params(b"pw", ECLevel::None);
+        let enc = encode_payload(b"attack at dawn", &p).unwrap();
+
+        // Clearing FLAG_ENCRYPTED must not yield attacker-controlled plaintext.
+        let mut t = enc.clone();
+        t[1] &= !FLAG_ENCRYPTED;
+        assert!(decode_payload(&t, &p).is_err());
+
+        // Cipher byte swap (authenticated via AAD).
+        let mut t = enc.clone();
+        t[2] = CipherKind::ChaCha20Poly1305.to_u8();
+        assert!(decode_payload(&t, &p).is_err());
+
+        // Unknown cipher.
+        let mut t = enc.clone();
+        t[2] = 0x7F;
+        assert!(decode_payload(&t, &p).is_err());
+
+        // Length shortened / lengthened.
+        for delta in [-1i64, 1] {
+            let mut t = enc.clone();
+            let l = u32::from_le_bytes(t[OFF_LEN..OFF_LEN + 4].try_into().unwrap());
+            let nl = (l as i64 + delta) as u32;
+            t[OFF_LEN..OFF_LEN + 4].copy_from_slice(&nl.to_le_bytes());
+            t.push(0); // ensure enough bytes for the lengthened case
+            assert!(decode_payload(&t, &p).is_err());
+        }
+
+        // Salt and nonce.
+        for off in [OFF_SALT, OFF_NONCE] {
+            let mut t = enc.clone();
+            t[off] ^= 1;
+            assert!(matches!(
+                decode_payload(&t, &p),
+                Err(SteganoError::EncryptionError(_))
+            ));
+        }
+
+        // Ciphertext.
+        let mut t = enc.clone();
+        t[HEADER_LEN] ^= 1;
+        assert!(decode_payload(&t, &p).is_err());
+
+        // Version.
+        let mut t = enc;
+        t[0] = 1;
+        assert!(decode_payload(&t, &p).is_err());
+    }
+
+    #[test]
+    fn test_header_bit_flips_corrected_with_ec() {
+        for level in [
+            ECLevel::Low,
+            ECLevel::Medium,
+            ECLevel::High,
+            ECLevel::Maximum,
+        ] {
+            for key in [&b"pw"[..], b""] {
+                let p = params(key, level);
+                let enc = encode_payload(b"robust header", &p).unwrap();
+                // Flip one bit in every header byte position, one at a time.
+                for i in 0..HEADER_LEN {
+                    let mut t = enc.clone();
+                    t[i] ^= 0x10;
+                    assert_eq!(
+                        decode_payload(&t, &p).unwrap(),
+                        b"robust header",
+                        "{level:?} byte {i}"
+                    );
+                }
+                // Several corrupted header bytes at once (within capacity).
+                let mut t = enc.clone();
+                for b in t.iter_mut().take(ecc_len_for(level) / 2) {
+                    *b ^= 0xFF;
+                }
+                assert_eq!(decode_payload(&t, &p).unwrap(), b"robust header");
+            }
+        }
+    }
+
+    #[test]
+    fn test_huge_declared_length_rejected_without_allocation() {
+        for level in LEVELS {
+            let ecc = ecc_len_for(level);
+            let header = Header {
+                flags: if ecc > 0 { FLAG_EC } else { 0 },
+                cipher: CipherKind::Aes256Gcm,
+                ecc_len: ecc,
+                salt: [0; SALT_LEN],
+                nonce: [0; NONCE_LEN],
+                len: u32::MAX,
+            };
+            let mut crafted = if ecc == 0 {
+                header.to_bytes().to_vec()
+            } else {
+                rs_encode_block(&header.to_bytes(), ecc).unwrap()
+            };
+            crafted.extend_from_slice(&[0u8; 64]);
+            assert!(matches!(
+                decode_payload(&crafted, &params(b"", level)),
+                Err(SteganoError::IntegrityError(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn test_garbage_and_truncated_input() {
+        let p = params(b"pw", ECLevel::Medium);
+        assert!(decode_payload(&[], &p).is_err());
+        assert!(decode_payload(&[0u8; 10], &p).is_err());
+        assert!(decode_payload(&[0xFFu8; 600], &p).is_err());
+        let enc = encode_payload(&[9u8; 400], &p).unwrap();
+        assert!(decode_payload(&enc[..enc.len() - 1], &p).is_err());
+    }
+
+    #[test]
+    fn test_unencrypted_with_crypto_fields_rejected() {
+        let p = params(b"", ECLevel::None);
+        let mut enc = encode_payload(b"x", &p).unwrap();
+        enc[OFF_SALT] = 1;
+        assert!(decode_payload(&enc, &p).is_err());
     }
 }

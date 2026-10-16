@@ -99,7 +99,7 @@ fn test_crypto_layer() {
     let encrypted = crypto.encrypt(message).unwrap();
     assert_ne!(encrypted.encrypted_data, message);
     assert_eq!(encrypted.nonce.len(), 12);
-    assert_eq!(encrypted.hash.len(), 32);
+    assert_eq!(encrypted.salt.len(), 16);
 
     // Test decryption
     let decrypted = crypto.decrypt(&encrypted).unwrap();
