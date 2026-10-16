@@ -79,7 +79,6 @@ r005	147	chr1	25	30	10M	=	7	-25	GCCTAAGCTA	IIIIIIIIII	AS:i:20	MD:Z:10
 }
 
 #[tokio::test]
-#[ignore = "bug: VCF handler reports framed (encrypted+RS) length as bytes_embedded instead of payload length (see #47)"]
 async fn test_vcf_info_fields_embedding() {
     let vcf_data = create_test_vcf_data();
     let carrier = CarrierData::new(DataFormat::VCF, vcf_data);
