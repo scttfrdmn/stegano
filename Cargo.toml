@@ -26,6 +26,7 @@ bincode = "1.3"
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 argon2 = "0.5"
+zeroize = "1.8"
 blake3 = "1.5"
 rand = "0.8"
 
@@ -119,6 +120,14 @@ cuda = ["experimental", "dep:cudarc"]
 benchmarks = ["criterion"]
 python = ["dep:pyo3"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:getrandom"]
+
+# Argon2id (payload KDF, 64 MiB / t=3) is unusably slow without optimisation;
+# build it (and its BLAKE2 core) optimised even in dev/test builds.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 lto = true

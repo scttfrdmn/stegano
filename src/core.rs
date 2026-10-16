@@ -351,9 +351,18 @@ impl Dimensions {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// # Secrets
+///
+/// `encryption_key` is a password: it is stretched with Argon2id and a random
+/// per-payload salt (see `docs/WIRE_FORMAT.md`).  It is redacted from the
+/// `Debug` output and never serialized (`#[serde(skip)]`), so a deserialized
+/// `EmbedParams` always has an empty key.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct EmbedParams {
-    /// Encryption key for payload protection
+    /// Encryption password for payload protection (empty = no encryption).
+    /// Not serialized and redacted from `Debug`.
+    #[serde(skip)]
     pub encryption_key: Vec<u8>,
     /// Error correction level for data integrity
     pub error_correction_level: ECLevel,
@@ -368,6 +377,25 @@ pub struct EmbedParams {
     /// Symmetric cipher used for encryption (default: AES-256-GCM)
     #[serde(default)]
     pub cipher_kind: CipherKind,
+}
+
+impl std::fmt::Debug for EmbedParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key = if self.encryption_key.is_empty() {
+            "<none>"
+        } else {
+            "<redacted>"
+        };
+        f.debug_struct("EmbedParams")
+            .field("encryption_key", &format_args!("{key}"))
+            .field("error_correction_level", &self.error_correction_level)
+            .field("stealth_level", &self.stealth_level)
+            .field("use_gpu", &self.use_gpu)
+            .field("enable_validation", &self.enable_validation)
+            .field("format_specific", &self.format_specific)
+            .field("cipher_kind", &self.cipher_kind)
+            .finish()
+    }
 }
 
 impl Default for EmbedParams {
@@ -805,6 +833,20 @@ mod tests {
 
         let dim_3d = Dimensions::new_3d(100, 100, 50);
         assert_eq!(dim_3d.total_elements(), 100 * 100 * 50);
+    }
+
+    #[test]
+    fn test_embed_params_key_redacted_and_not_serialized() {
+        let params = EmbedParams::new(b"hunter2-secret".to_vec());
+        let dbg = format!("{params:?}");
+        assert!(!dbg.contains("hunter2"));
+        assert!(!dbg.contains("104")); // no raw byte list either
+        assert!(dbg.contains("<redacted>"));
+
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(!json.contains("encryption_key"));
+        let back: EmbedParams = serde_json::from_str(&json).unwrap();
+        assert!(back.encryption_key.is_empty());
     }
 
     #[test]
