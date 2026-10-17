@@ -111,6 +111,27 @@ jobs:
           DYLD_LIBRARY_PATH: ${{ github.workspace }}/target/release
         run: go test ./...
 
+  format-validity:
+    name: format validity (external tools)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release CLI
+        run: cargo build --release --bin stegano
+      - name: Install samtools and bcftools
+        run: sudo apt-get update && sudo apt-get install -y samtools bcftools
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/format_validity/requirements.txt
+      - name: Install Python validators
+        run: python -m pip install -r tests/format_validity/requirements.txt
+      - name: Run format-validity suite
+        run: python tests/format_validity/run.py target/release/stegano
+
   c-header:
     name: C header up to date
     runs-on: ubuntu-latest
