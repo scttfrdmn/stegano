@@ -107,6 +107,12 @@ impl EnvelopeReader {
         self.len.is_some()
     }
 
+    /// Whether the magic and strategy byte have been read and match (true
+    /// also after a later length error).
+    pub(crate) fn prefix_matches(&self) -> bool {
+        self.buf.len() > 4 && self.buf[..4] == self.magic && self.buf[4] == self.strategy
+    }
+
     /// Feed one bit.  Returns `Ok(true)` once the envelope is complete
     /// (further bits must not be pushed), or an error if the header does not
     /// match or declares an impossible length.

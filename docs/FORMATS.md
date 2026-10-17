@@ -392,22 +392,44 @@ not `12.`, ` 12`, `"12"`, `nan` or `0x1F`. Each eligible cell carries one bit
 in the parity of the last digit of its mantissa (the digit before any
 exponent). Embedding flips that digit 0↔1, 2↔3, 4↔5, 6↔7 or 8↔9 as needed.
 
+**Significant-digit threshold** (`csv_min_significant_digits`, an integer
+from 1 to 17, default **2**): only cells whose mantissa has at least that many
+significant digits are used. Significant digits run from the first non-zero
+digit to the end of the mantissa: leading zeros do not count, trailing zeros
+do, both after the decimal point and in integers (`0.70` → 2, `0.007` → 1,
+`100` → 3, `6.02E+23` → 3). A mantissa of only zeros (`0`, `0.00`) counts as
+1. With the default, single-digit cells such as `1e-5`, `3`, `0.7` and `0` are
+never modified, so no value moves by more than 10% of itself. Threshold 1 uses
+every numeric cell, which was the only behaviour before the option existed.
+Embedding never changes a cell's count, and the threshold is stored in the
+envelope, so extraction needs no parameter and still reads files written
+before the option existed.
+
 **Header:** the first non-blank record is a header if it has a non-empty cell
 that is not eligible (a name, a quoted cell). A header is never modified, even
 if some of its cells look numeric. An all-numeric first row is data.
 
 **What changes:** only the last mantissa digit of eligible cells, so **numeric
 values do change**, by at most one unit in their last printed place
-(`12.34` → `12.35`, `-7` → `-6`, `1e-5` → `0e-5`). Field widths never change.
+(`12.34` → `12.35`, `-17` → `-16`; with threshold 1 also `-7` → `-6` and
+`1e-5` → `0e-5`). Field widths never change.
 Delimiters, quotes, quoted cells, non-numeric cells, the header, line endings
 (per line) and the final-newline state stay byte-identical. Do not use this on
 columns where a last-place change matters (identifiers, counts, checksums).
 
+**Envelope:** `CSVJ`, a strategy byte, a 4-byte length and the codec frame.
+The strategy byte is the significant-digit threshold (1–17). Files written
+before the option existed always have 1, which is exactly threshold 1. The extractor runs one reader per
+threshold over the same cells and keeps the one whose magic and strategy
+byte match.
+
 **Capacity:** exactly one bit per eligible cell, minus the 9-byte envelope
-(`CSVJ`, strategy byte, length) and the codec overhead. `estimate_capacity`
-reports the eligible cell count and the largest unencrypted and encrypted
-payload, assuming the `,` delimiter. `InsufficientCapacity` is reported in
-bits.
+and the codec overhead. `estimate_capacity` reports the eligible cell count
+and the largest unencrypted and encrypted payload, assuming the `,` delimiter
+and the default threshold, plus
+`eligible_cells_by_min_significant_digits` (element `t - 1` is the cell count
+for threshold `t`; the largest codec frame is `(count - 72) / 8` bytes).
+`InsufficientCapacity` is reported in bits.
 
 **Visibility:** the file stays valid CSV with the same shape and text, but the
 low digits are the payload, and about half of the cells used differ from the
@@ -416,7 +438,8 @@ last-digit distribution of a column may no longer look natural.
 
 **Validated with:** Python's `csv` module (`strict=True`). The suite checks
 that row and column counts are the same, the header and every non-numeric
-cell are equal, every numeric cell is within one last-place unit, and CRLF and
+cell are equal, cells with fewer than 2 significant digits are unchanged,
+every numeric cell is within one last-place unit, and CRLF and
 final-newline state are preserved.
 
 **Streaming:** yes, byte-identical to the in-memory handler.

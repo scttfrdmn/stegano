@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- CSV `csv_min_significant_digits` ([#103](https://github.com/scttfrdmn/stegano/issues/103)):
+  a numeric cell is used only if its mantissa has at least this many significant digits
+  (leading zeros do not count, trailing zeros do: `0.70` has 2, `0.007` has 1; an all-zero
+  mantissa counts as 1). The default is **2**, so single-digit cells such as `1e-5`, `3`, `0.7`
+  and `0` are never modified and no value changes by more than 10% of itself. Set 1 for the
+  previous behaviour (every numeric cell). The threshold is stored in the `CSVJ` envelope's
+  strategy byte (files written before this change have 1, which is threshold 1), and extraction
+  detects it, so no parameter is needed to extract and older files still extract. Both the
+  in-memory and streaming paths honour it and stay byte-identical. Capacity drops by the number
+  of single-digit cells; `estimate_capacity` reports the default threshold and lists the cell
+  count for every threshold in `eligible_cells_by_min_significant_digits`.
 - FITS and WAV streaming ([#80](https://github.com/scttfrdmn/stegano/issues/80)).
   `stegano::stream`, the CLI, `stegano_embed_file` and the bindings now process large
   astronomy and audio files with bounded memory. The output is byte-identical to the

@@ -84,7 +84,7 @@ APIs (CLI `embed`/`extract`, `stegano::stream`, `stegano_embed_file`, Go
 | PNG, TIFF | `imagery_strategy` | from stealth level, or `lsb`, `adaptive`, `edge`, `dct` | no |
 | WAV | `signal_strategy` | from stealth level, or `timedomain`, `frequency`, `phase`, `spread`, `echo` | `timedomain` (or `--stealth low`) |
 | FITS | `fits_strategy` | `pixel_lsb` (integer data), `float_mantissa` (opt-in, float data) | yes |
-| CSV | `csv_strategy` | `digit` (parity of the last digit of each unquoted numeric cell; header and text cells untouched; `csv_delimiter` sets the delimiter) | yes |
+| CSV | `csv_strategy` | `digit` (parity of the last digit of each unquoted numeric cell with at least `csv_min_significant_digits` significant digits, default 2; header and text cells untouched; `csv_delimiter` sets the delimiter) | yes |
 | Text | `text_strategy` | `whitespace` (k trailing spaces/tabs per line, k = 1..64 chosen automatically or set with `text_bits_per_line`) | with a fixed `text_bits_per_line` |
 | Binary | none | LSB of every byte | no |
 

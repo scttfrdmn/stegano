@@ -737,6 +737,17 @@ DICOM_STRATEGIES = [None, "private", "metadata", "sequence", "pixel_lsb", "multi
 CSV_NUMERIC = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
 
 
+# Default csv_min_significant_digits: cells with fewer significant digits
+# must be untouched.
+CSV_MIN_SIG_DIGITS = 2
+
+
+def _sig_digits(cell: str) -> int:
+    """Significant digits of a numeric cell's mantissa (as in csv.rs)."""
+    mant = re.split(r"[eE]", cell, maxsplit=1)[0]
+    return max(1, len(re.sub(r"\D", "", mant).lstrip("0")))
+
+
 def _ulp(cell: str) -> float:
     """One unit in the last printed mantissa place of a numeric cell."""
     m = re.match(r"([^eE]*)(?:[eE]([+-]?\d+))?\Z", cell)
@@ -778,17 +789,20 @@ def validate_csv(orig: Path, out: Path, strategy: Optional[str]) -> Problems:
     pr.check(bool(a) and bool(b) and a[0] == b[0], "header row changed")
     shape = sum(1 for x, y in zip(a, b) if len(x) != len(y))
     pr.check(shape == 0, f"{shape} rows changed column count")
-    text_diff = num_bad = 0
+    text_diff = num_bad = low_sig = 0
     for x, y in zip(a, b):
         for cx, cy in zip(x, y):
             if cx == cy:
                 continue
             if not CSV_NUMERIC.match(cx):
                 text_diff += 1
+            elif _sig_digits(cx) < CSV_MIN_SIG_DIGITS:
+                low_sig += 1
             elif not CSV_NUMERIC.match(cy) or len(cx) != len(cy) or \
                     abs(float(cx) - float(cy)) > _ulp(cx) * (1 + 1e-9):
                 num_bad += 1
     pr.check(text_diff == 0, f"{text_diff} non-numeric cells changed")
+    pr.check(low_sig == 0, f"{low_sig} cells with < {CSV_MIN_SIG_DIGITS} significant digits changed")
     pr.check(num_bad == 0, f"{num_bad} numeric cells changed by more than one last-place unit")
     ra, rb = orig.read_bytes(), out.read_bytes()
     pr.check(ra.count(b"\r\n") == rb.count(b"\r\n"), "CRLF line terminators not preserved")

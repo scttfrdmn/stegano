@@ -588,29 +588,76 @@ fn stream_embed(
 async fn test_csv_stream_interop() {
     use crate::handlers::csv::{embed_encoded, CsvHandler};
     let carriers = [
-        synth_csv(300, "\r\n", false),
-        synth_csv(300, "\n", true),
-        synth_csv(300, "\r\n", true),
+        synth_csv(800, "\r\n", false),
+        synth_csv(800, "\n", true),
+        synth_csv(800, "\r\n", true),
     ];
     for orig in &carriers {
         for pw in [&b""[..], b"pw"] {
-            let p = params(pw, None);
-            for n in [0usize, 1, 40] {
-                let payload: Vec<u8> = (0..n as u8).collect();
-                let encoded = encode_payload(&payload, &p).unwrap();
-                let mem = embed_encoded(orig, &encoded, b',').unwrap();
-                let streamed =
-                    stream_embed(DataFormat::CsvTimeseries, orig, &encoded, &p).unwrap();
-                assert_eq!(streamed, mem);
-                assert_eq!(
-                    extract_stream(DataFormat::CsvTimeseries, Cursor::new(&mem), &p).unwrap(),
-                    payload
-                );
-                let c = CarrierData::new(DataFormat::CsvTimeseries, streamed);
-                assert_eq!(CsvHandler.extract(&c, &p).await.unwrap(), payload);
+            // `None`: the default threshold (2).
+            for min in [None, Some(1u8), Some(2), Some(3)] {
+                let p = match min {
+                    None => params(pw, None),
+                    Some(t) => with_key(params(pw, None), "csv_min_significant_digits", t.into()),
+                };
+                let t = min.unwrap_or(2);
+                for n in [0usize, 1, 40] {
+                    let payload: Vec<u8> = (0..n as u8).collect();
+                    let encoded = encode_payload(&payload, &p).unwrap();
+                    let mem = embed_encoded(orig, &encoded, b',', t).unwrap();
+                    let streamed =
+                        stream_embed(DataFormat::CsvTimeseries, orig, &encoded, &p).unwrap();
+                    assert_eq!(streamed, mem, "min={min:?}");
+                    // Extraction reads the threshold from the envelope.
+                    let p0 = params(pw, None);
+                    assert_eq!(
+                        extract_stream(DataFormat::CsvTimeseries, Cursor::new(&mem), &p0)
+                            .unwrap(),
+                        payload
+                    );
+                    let mut c = CarrierData::new(DataFormat::CsvTimeseries, orig.clone());
+                    CsvHandler.embed(&mut c, &payload, &p).await.unwrap();
+                    assert_eq!(
+                        extract_stream(DataFormat::CsvTimeseries, Cursor::new(&c.raw_data), &p0)
+                            .unwrap(),
+                        payload
+                    );
+                    let c = CarrierData::new(DataFormat::CsvTimeseries, streamed);
+                    assert_eq!(CsvHandler.extract(&c, &p0).await.unwrap(), payload);
+                }
             }
         }
     }
+    // v0.7.0 files (threshold 1, strategy byte 1) extract on both paths.
+    let orig = synth_csv(300, "\n", true);
+    let p = params(b"pw", None);
+    let encoded = encode_payload(b"legacy", &p).unwrap();
+    let stream = crate::handlers::envelope::build(b"CSVJ", 1, &encoded).unwrap();
+    let mut old = orig.clone();
+    let mut scanner = crate::handlers::csv::CsvScanner::new(b',');
+    let (mut base, mut i) = (0, 0);
+    for seg in orig.split_inclusive(|&b| b == b'\n') {
+        let body = crate::handlers::vcf::split_eol(seg).0;
+        for c in scanner.scan_line(body) {
+            if i < stream.len() * 8 {
+                crate::handlers::csv::set_parity(
+                    &mut old[base + c.offset],
+                    crate::handlers::envelope::bit(&stream, i),
+                );
+                i += 1;
+            }
+        }
+        base += seg.len();
+    }
+    assert_eq!(i, stream.len() * 8);
+    assert_eq!(
+        extract_stream(DataFormat::CsvTimeseries, Cursor::new(&old), &p).unwrap(),
+        b"legacy"
+    );
+    let c = CarrierData::new(DataFormat::CsvTimeseries, old);
+    assert_eq!(CsvHandler.extract(&c, &p).await.unwrap(), b"legacy");
+    let bad = with_key(p, "csv_min_significant_digits", 0.into());
+    assert!(!is_streamable(&DataFormat::CsvTimeseries, &bad));
     // A custom delimiter is honoured on both paths.
     let semi: Vec<u8> = String::from_utf8(synth_csv(300, "\n", true))
         .unwrap()
@@ -619,7 +666,7 @@ async fn test_csv_stream_interop() {
     let p = with_key(params(b"", None), "csv_delimiter", ";".into());
     let encoded = encode_payload(b"semi", &p).unwrap();
     let streamed = stream_embed(DataFormat::CsvTimeseries, &semi, &encoded, &p).unwrap();
-    assert_eq!(streamed, embed_encoded(&semi, &encoded, b';').unwrap());
+    assert_eq!(streamed, embed_encoded(&semi, &encoded, b';', 2).unwrap());
     assert_eq!(
         extract_stream(DataFormat::CsvTimeseries, Cursor::new(&streamed), &p).unwrap(),
         b"semi"
@@ -632,13 +679,18 @@ fn test_csv_stream_errors_match_in_memory() {
     let p = params(b"", None);
     let small = synth_csv(20, "\n", true);
     let encoded = encode_payload(&[0u8; 64], &p).unwrap();
-    let mem = embed_encoded(&small, &encoded, b',').unwrap_err();
+    let mem = embed_encoded(&small, &encoded, b',', 2).unwrap_err();
     let st = stream_embed(DataFormat::CsvTimeseries, &small, &encoded, &p).unwrap_err();
     assert!(matches!(mem, SteganoError::InsufficientCapacity { .. }));
     assert_eq!(mem.to_string(), st.to_string());
+    // Same `available` under a non-default threshold too.
+    let p3 = with_key(p.clone(), "csv_min_significant_digits", 3.into());
+    let mem = embed_encoded(&small, &encoded, b',', 3).unwrap_err();
+    let st = stream_embed(DataFormat::CsvTimeseries, &small, &encoded, &p3).unwrap_err();
+    assert_eq!(mem.to_string(), st.to_string());
     let mut bin = synth_csv(300, "\n", true);
     bin.extend_from_slice(b"1,2\0\n");
-    let mem = embed_encoded(&bin, &encoded, b',').unwrap_err();
+    let mem = embed_encoded(&bin, &encoded, b',', 2).unwrap_err();
     let st = stream_embed(DataFormat::CsvTimeseries, &bin, &encoded, &p).unwrap_err();
     assert_eq!(mem.to_string(), st.to_string());
     assert!(extract_stream(DataFormat::CsvTimeseries, Cursor::new(&small), &p).is_err());

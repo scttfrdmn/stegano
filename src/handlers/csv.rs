@@ -21,10 +21,23 @@
 //! of the **last digit of its mantissa** (the digit before any exponent);
 //! embedding flips that digit 0↔1, 2↔3, 4↔5, 6↔7 or 8↔9 when needed.  The
 //! field width never changes, so a value changes by at most one unit in its
-//! last printed mantissa place (`12.34` → `12.35`, `-7` → `-6`,
-//! `1e-5` → `0e-5`).  **Numeric values do change**: do not use this on data
-//! where a last-place change matters (identifiers, counts that must sum,
-//! checksums).
+//! last printed mantissa place (`12.34` → `12.35`, `-17` → `-16`).
+//! **Numeric values do change**: do not use this on data where a last-place
+//! change matters (identifiers, counts that must sum, checksums).
+//!
+//! # Significant-digit threshold
+//!
+//! `format_specific["csv_min_significant_digits"]` (an integer from 1 to 17,
+//! default **2**) restricts embedding to cells whose mantissa has at least
+//! that many significant digits.  Significant digits are counted from the
+//! first non-zero digit to the end of the mantissa: leading zeros do not
+//! count, trailing zeros do, including after the decimal point and in
+//! integers (`0.70` → 2, `0.007` → 1, `100` → 3, `6.02E+23` → 3).  A
+//! mantissa of only zeros (`0`, `0.00`) counts as 1.  With the default, a
+//! single-digit cell such as `1e-5`, `3`, `0.7` or `0` is never modified, so
+//! no value changes by more than 10% of itself (a 100% change such as
+//! `1e-5` → `0e-5` is possible only with threshold 1, which is how the
+//! handler behaved before the threshold existed).  Embedding never changes a cell's significant-digit count.
 //!
 //! The first record is a **header** if it contains a non-empty cell that is
 //! not eligible (a quoted cell, a name, ...); a header is never modified.
@@ -38,11 +51,18 @@
 //!
 //! # Envelope and capacity
 //!
-//! The bits are the envelope stream (`"CSVJ"`, strategy
-//! byte `1`, length, then the [`crate::codec::encode_payload`] output),
-//! written LSB first into eligible cells in file order.  Capacity is exactly
-//! one bit per eligible cell; `recommended_bits` is that minus the 72-bit
-//! envelope header, i.e. the largest codec frame that fits.
+//! The bits are the envelope stream (`"CSVJ"`, strategy byte, length, then
+//! the [`crate::codec::encode_payload`] output), written LSB first into
+//! eligible cells in file order.  The strategy byte is the significant-digit
+//! threshold `t` (`1..=17`).  Files written before the threshold existed
+//! always have `1`, which is exactly threshold 1, so they still extract.  The extractor
+//! does not need the threshold: it runs one envelope reader per threshold
+//! over the same cells, each fed the cells its threshold admits and
+//! expecting its own strategy byte, and keeps the one whose 40-bit
+//! magic-and-strategy prefix matches.
+//!
+//! Capacity is exactly one bit per eligible cell; `recommended_bits` is that
+//! minus the 72-bit envelope header, i.e. the largest codec frame that fits.
 //!
 //! The carrier must be UTF-8 text without NUL bytes; anything else is
 //! rejected with [`SteganoError::IntegrityError`].
@@ -59,8 +79,13 @@ use async_trait::async_trait;
 
 /// Envelope magic.
 pub(crate) const MAGIC: &[u8; 4] = b"CSVJ";
-/// Envelope strategy byte for last-digit parity.
-pub(crate) const STRATEGY_BYTE: u8 = 1;
+/// `format_specific` key: minimum significant digits of an eligible cell.
+pub(crate) const MIN_DIGITS_KEY: &str = "csv_min_significant_digits";
+/// Default `csv_min_significant_digits`.
+pub(crate) const DEFAULT_MIN_DIGITS: u8 = 2;
+/// Largest accepted `csv_min_significant_digits` (an `f64` needs at most 17
+/// significant digits to round-trip).
+pub(crate) const MAX_MIN_DIGITS: u8 = 17;
 /// `format_specific` key selecting the strategy (only `digit`).
 pub(crate) const STRATEGY_KEY: &str = "csv_strategy";
 /// `format_specific` key overriding the delimiter (one ASCII character).
@@ -156,6 +181,126 @@ pub(crate) fn carrier_digit(f: &[u8]) -> Option<usize> {
     (i == f.len() && f[mant_end - 1].is_ascii_digit()).then_some(mant_end - 1)
 }
 
+/// Number of significant digits in `mantissa` (an eligible field up to and
+/// including its carrier digit): every digit from the first non-zero digit
+/// to the end, so leading zeros do not count and trailing zeros do
+/// (`0.70` → 2, `0.007` → 1, `100` → 3, `-3.140` → 4).  A mantissa that is
+/// all zeros (`0`, `0.00`) counts as 1.  Saturates at 255.
+///
+/// Embedding never changes this count: with two or more significant digits
+/// the first non-zero digit is not the carrier digit, and a count of 1 stays
+/// 1 whichever parity the carrier digit takes.
+pub(crate) fn significant_digits(mantissa: &[u8]) -> u8 {
+    let n = mantissa
+        .iter()
+        .filter(|c| c.is_ascii_digit())
+        .skip_while(|&&c| c == b'0')
+        .count();
+    n.clamp(1, 255) as u8
+}
+
+/// An eligible cell found by [`CsvScanner::scan_line`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cell {
+    /// Offset of the carrier digit within the line.
+    pub(crate) offset: usize,
+    /// [`significant_digits`] of the cell's mantissa.
+    pub(crate) sig: u8,
+}
+
+/// The `csv_min_significant_digits` threshold (default
+/// [`DEFAULT_MIN_DIGITS`]): an integer in `1..=MAX_MIN_DIGITS`, given as a
+/// JSON number or a string of digits.
+pub(crate) fn min_digits(params: &EmbedParams) -> Result<u8> {
+    let Some(v) = params.format_specific.get(MIN_DIGITS_KEY) else {
+        return Ok(DEFAULT_MIN_DIGITS);
+    };
+    let n = v
+        .as_u64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()));
+    match n {
+        Some(n) if (1..=u64::from(MAX_MIN_DIGITS)).contains(&n) => Ok(n as u8),
+        _ => Err(SteganoError::InvalidParameter(format!(
+            "{MIN_DIGITS_KEY} must be an integer from 1 to {MAX_MIN_DIGITS}"
+        ))),
+    }
+}
+
+/// Envelope strategy byte for the digit strategy with threshold `t`.
+pub(crate) fn strategy_byte(t: u8) -> u8 {
+    debug_assert!((1..=MAX_MIN_DIGITS).contains(&t));
+    t
+}
+
+/// Extractor that does not need to know the threshold: one
+/// [`EnvelopeReader`] per possible threshold runs in parallel over the same
+/// cells, each fed only the cells it would have used, and expecting its own
+/// strategy byte.  All but the right one fail on the 40-bit magic and
+/// strategy check.  Shared by the in-memory and streaming paths.
+pub(crate) struct CsvExtractor {
+    /// `(threshold, reader)`; `None` once the reader has failed.
+    readers: Vec<(u8, Option<EnvelopeReader>)>,
+    /// Error from a reader whose magic and strategy matched (more useful
+    /// than "not found").
+    matched_err: Option<SteganoError>,
+}
+
+impl CsvExtractor {
+    /// `max_len(t)` is the largest declared body length accepted for
+    /// threshold `t` (`usize::MAX` when unknown).
+    pub(crate) fn new(max_len: impl Fn(u8) -> usize) -> Self {
+        Self {
+            readers: (1..=MAX_MIN_DIGITS)
+                .map(|t| {
+                    let r = EnvelopeReader::new(MAGIC, strategy_byte(t), max_len(t), WHAT);
+                    (t, Some(r))
+                })
+                .collect(),
+            matched_err: None,
+        }
+    }
+
+    /// Feed the bit of one cell.  Returns `Some` once the outcome is known
+    /// (an envelope was read completely, or every reader has failed).
+    pub(crate) fn push(&mut self, cell: Cell, bit: u8) -> Option<Result<Vec<u8>>> {
+        let mut alive = false;
+        for (t, slot) in &mut self.readers {
+            let Some(r) = slot.as_mut() else { continue };
+            if *t <= cell.sig {
+                match r.push(bit) {
+                    Ok(false) => {}
+                    Ok(true) => return slot.take().map(EnvelopeReader::finish),
+                    Err(e) => {
+                        if r.prefix_matches() {
+                            self.matched_err.get_or_insert(e);
+                        }
+                        *slot = None;
+                        continue;
+                    }
+                }
+            }
+            alive = true;
+        }
+        (!alive).then(|| Err(self.failure()))
+    }
+
+    fn failure(&mut self) -> SteganoError {
+        self.matched_err.take().unwrap_or_else(|| envelope::not_found(WHAT))
+    }
+
+    /// The outcome at the end of the carrier.
+    pub(crate) fn finish(mut self) -> Result<Vec<u8>> {
+        if let Some(r) = self
+            .readers
+            .iter_mut()
+            .find_map(|(_, r)| r.take_if(|r| r.header_read()))
+        {
+            return r.finish();
+        }
+        Err(self.failure())
+    }
+}
+
 /// Header-detection state of a [`CsvScanner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Header {
@@ -185,7 +330,7 @@ pub(crate) struct CsvScanner {
     delim: u8,
     in_quotes: bool,
     header: Header,
-    cells: Vec<usize>,
+    cells: Vec<Cell>,
 }
 
 impl CsvScanner {
@@ -198,17 +343,21 @@ impl CsvScanner {
         }
     }
 
-    /// Offsets (into `body`, the line without its terminator) of the carrier
-    /// digits on this line, in order.
-    pub(crate) fn scan_line(&mut self, body: &[u8]) -> &[usize] {
+    /// The numeric cells on this line (offsets into `body`, the line without
+    /// its terminator), in order, regardless of the significant-digit
+    /// threshold; callers filter with [`Cell::sig`].
+    pub(crate) fn scan_line(&mut self, body: &[u8]) -> &[Cell] {
         self.cells.clear();
         let mut non_numeric = false;
         let mut any = false;
-        let mut finish = |cells: &mut Vec<usize>, s: usize, e: usize| {
+        let mut finish = |cells: &mut Vec<Cell>, s: usize, e: usize| {
             if e > s {
                 any = true;
                 match carrier_digit(&body[s..e]) {
-                    Some(off) => cells.push(s + off),
+                    Some(off) => cells.push(Cell {
+                        offset: s + off,
+                        sig: significant_digits(&body[s..=s + off]),
+                    }),
                     None => non_numeric = true,
                 }
             }
@@ -278,25 +427,46 @@ pub(crate) fn set_parity(d: &mut u8, bit: u8) {
     }
 }
 
-/// Absolute offsets of all carrier digits in `data`, after checking that
-/// `data` is text.
-fn carrier_positions(data: &[u8], delim: u8) -> Result<Vec<usize>> {
+/// All numeric cells of `data` (with absolute carrier-digit offsets),
+/// whatever their significant digits, after checking that `data` is text.
+fn carrier_cells(data: &[u8], delim: u8) -> Result<Vec<Cell>> {
     let mut scanner = CsvScanner::new(delim);
     let mut out = Vec::new();
     let mut base = 0;
     for seg in data.split_inclusive(|&b| b == b'\n') {
         envelope::check_text(seg, base, WHAT)?;
         let (body, _) = split_eol(seg);
-        out.extend(scanner.scan_line(body).iter().map(|&o| base + o));
+        out.extend(scanner.scan_line(body).iter().map(|c| Cell {
+            offset: base + c.offset,
+            sig: c.sig,
+        }));
         base += seg.len();
     }
     Ok(out)
 }
 
-/// Embed already codec-encoded bytes; returns the new carrier bytes.
-pub(crate) fn embed_encoded(data: &[u8], encoded: &[u8], delim: u8) -> Result<Vec<u8>> {
-    let positions = carrier_positions(data, delim)?;
-    let stream = envelope::build(MAGIC, STRATEGY_BYTE, encoded)?;
+/// Number of eligible cells under each threshold: element `t - 1` is the
+/// count for `csv_min_significant_digits = t`.
+fn eligible_counts(cells: &[Cell]) -> Vec<usize> {
+    (1..=MAX_MIN_DIGITS)
+        .map(|t| cells.iter().filter(|c| c.sig >= t).count())
+        .collect()
+}
+
+/// Embed already codec-encoded bytes into the cells with at least
+/// `min_digits` significant digits; returns the new carrier bytes.
+pub(crate) fn embed_encoded(
+    data: &[u8],
+    encoded: &[u8],
+    delim: u8,
+    min_digits: u8,
+) -> Result<Vec<u8>> {
+    let positions: Vec<usize> = carrier_cells(data, delim)?
+        .into_iter()
+        .filter(|c| c.sig >= min_digits)
+        .map(|c| c.offset)
+        .collect();
+    let stream = envelope::build(MAGIC, strategy_byte(min_digits), encoded)?;
     let needed = stream.len() * 8;
     if needed > positions.len() {
         return Err(SteganoError::InsufficientCapacity {
@@ -311,17 +481,19 @@ pub(crate) fn embed_encoded(data: &[u8], encoded: &[u8], delim: u8) -> Result<Ve
     Ok(out)
 }
 
-/// Read the codec bytes back out of a carrier.
+/// Read the codec bytes back out of a carrier, whatever threshold it was
+/// embedded with (the threshold is the envelope's strategy byte).
 pub(crate) fn extract_encoded(data: &[u8], delim: u8) -> Result<Vec<u8>> {
-    let positions = carrier_positions(data, delim)?;
-    let max_len = positions.len().saturating_sub(ENVELOPE_BITS) / 8;
-    let mut reader = EnvelopeReader::new(MAGIC, STRATEGY_BYTE, max_len, WHAT);
-    for &p in &positions {
-        if reader.push(data[p] & 1)? {
-            break;
+    let cells = carrier_cells(data, delim)?;
+    let counts = eligible_counts(&cells);
+    let mut ex =
+        CsvExtractor::new(|t| counts[usize::from(t) - 1].saturating_sub(ENVELOPE_BITS) / 8);
+    for &c in &cells {
+        if let Some(r) = ex.push(c, data[c.offset] & 1) {
+            return r;
         }
     }
-    reader.finish()
+    ex.finish()
 }
 
 fn check_format(carrier: &CarrierData) -> Result<()> {
@@ -340,12 +512,16 @@ impl DataHandler for CsvHandler {
         None
     }
 
-    /// Exact capacity: one bit per eligible cell.  `recommended_bits` is the
-    /// largest codec frame (in bits) that fits after the envelope header.
+    /// Exact capacity for the default delimiter and the default
+    /// `csv_min_significant_digits`: one bit per eligible cell.
+    /// `recommended_bits` is the largest codec frame (in bits) that fits
+    /// after the envelope header.  `eligible_cells_by_min_significant_digits`
+    /// lists the cell count for every threshold `1..=17` (element `t - 1`).
     fn estimate_capacity(&self, carrier: &CarrierData) -> Result<CapacityInfo> {
         check_format(carrier)?;
         let data = &carrier.raw_data;
-        let cells = carrier_positions(data, b',')?.len();
+        let counts = eligible_counts(&carrier_cells(data, b',')?);
+        let cells = counts[usize::from(DEFAULT_MIN_DIGITS) - 1];
         let frame_bytes = cells.saturating_sub(ENVELOPE_BITS) / 8;
         let mut info = CapacityInfo::new(data.len() * 8, frame_bytes * 8);
         let fi = &mut info.format_specific_info;
@@ -365,6 +541,11 @@ impl DataHandler for CsvHandler {
         );
         fi.insert("estimated_capacity_bytes".into(), frame_bytes.into());
         fi.insert("delimiter".into(), ",".into());
+        fi.insert("min_significant_digits".into(), DEFAULT_MIN_DIGITS.into());
+        fi.insert(
+            "eligible_cells_by_min_significant_digits".into(),
+            counts.into(),
+        );
         Ok(info)
     }
 
@@ -378,8 +559,9 @@ impl DataHandler for CsvHandler {
         let start = Instant::now();
         check_strategy(params)?;
         let delim = delimiter(params)?;
+        let min = min_digits(params)?;
         // Structural check before the (expensive) codec.
-        carrier_positions(&carrier.raw_data, delim)?;
+        carrier_cells(&carrier.raw_data, delim)?;
         let enc_start = Instant::now();
         let encoded = crate::codec::encode_payload(payload, params)?;
         let encryption_time_ms = if params.encryption_key.is_empty() {
@@ -387,7 +569,7 @@ impl DataHandler for CsvHandler {
         } else {
             (enc_start.elapsed().as_millis() as u64).max(1)
         };
-        carrier.raw_data = embed_encoded(&carrier.raw_data, &encoded, delim)?;
+        carrier.raw_data = embed_encoded(&carrier.raw_data, &encoded, delim, min)?;
         Ok(EmbedResult::success(
             payload.len(),
             PerformanceStats {
@@ -402,6 +584,9 @@ impl DataHandler for CsvHandler {
     async fn extract(&self, carrier: &CarrierData, params: &EmbedParams) -> Result<Vec<u8>> {
         check_format(carrier)?;
         let delim = delimiter(params)?;
+        // Validated for consistency; the extractor reads the threshold from
+        // the envelope.
+        min_digits(params)?;
         let raw = extract_encoded(&carrier.raw_data, delim)?;
         crate::codec::decode_payload(&raw, params)
     }
@@ -480,15 +665,24 @@ mod tests {
     }
 
     /// Non-numeric cells and the header identical; numeric cells within one
-    /// last-place unit; same shape.
+    /// last-place unit; same shape.  Uses the default threshold.
     fn assert_valid(orig: &[u8], stego: &[u8]) {
+        assert_valid_min(orig, stego, DEFAULT_MIN_DIGITS);
+    }
+
+    /// [`assert_valid`], plus: cells with fewer than `min` significant
+    /// digits are unchanged.
+    fn assert_valid_min(orig: &[u8], stego: &[u8], min: u8) {
         let (a, b) = (records(orig), records(stego));
         assert_eq!(a.len(), b.len());
         assert_eq!(a[0], b[0], "header changed");
         for (ra, rb) in a.iter().zip(&b) {
             assert_eq!(ra.len(), rb.len());
             for (ca, cb) in ra.iter().zip(rb) {
-                if carrier_digit(ca.as_bytes()).is_some() {
+                if let Some(off) = carrier_digit(ca.as_bytes()) {
+                    if significant_digits(&ca.as_bytes()[..=off]) < min {
+                        assert_eq!(ca, cb, "cell below the threshold changed");
+                    }
                     assert_eq!(ca.len(), cb.len());
                     let (x, y): (f64, f64) = (ca.parse().unwrap(), cb.parse().unwrap());
                     assert!((x - y).abs() <= ulp(ca) * 1.000001, "{ca} -> {cb}");
@@ -520,6 +714,207 @@ mod tests {
             "", "12.", " 12", "12 ", "nan", "1e", "1e+", "-", ".", "0x1F", "1.2.3", "1,5",
         ] {
             assert_eq!(carrier_digit(f.as_bytes()), None, "{f}");
+        }
+    }
+
+    fn sig(f: &str) -> u8 {
+        let off = carrier_digit(f.as_bytes()).unwrap();
+        significant_digits(&f.as_bytes()[..=off])
+    }
+
+    #[test]
+    fn significant_digit_count() {
+        for (f, n) in [
+            ("1e-5", 1),
+            ("3", 1),
+            ("0.7", 1),
+            ("-0.007", 1),
+            ("0", 1),
+            ("0.00", 1),
+            ("+0e3", 1),
+            ("0.70", 2),
+            ("12", 2),
+            ("00012", 2),
+            ("100", 3),
+            ("-3.140", 4),
+            (".05", 1),
+            ("6.02E+23", 3),
+            ("1.0e-5", 2),
+            ("123456789.0123456789", 19),
+        ] {
+            assert_eq!(sig(f), n, "{f}");
+        }
+        // Flipping the carrier digit never changes the count.
+        for f in ["0.01", "0.10", "1", "0", "10", "19", "0.000", "2.5e3"] {
+            let mut b = f.as_bytes().to_vec();
+            let off = carrier_digit(&b).unwrap();
+            b[off] ^= 1;
+            assert_eq!(significant_digits(&b[..=off]), sig(f), "{f}");
+        }
+    }
+
+    #[test]
+    fn min_digits_param() {
+        assert_eq!(min_digits(&params("")).unwrap(), DEFAULT_MIN_DIGITS);
+        for (v, want) in [
+            (serde_json::Value::from(1), Some(1)),
+            (serde_json::Value::from(3), Some(3)),
+            (serde_json::Value::from("2"), Some(2)),
+            (serde_json::Value::from(17), Some(17)),
+            (serde_json::Value::from(0), None),
+            (serde_json::Value::from(18), None),
+            (serde_json::Value::from(-1), None),
+            (serde_json::Value::from(1.5), None),
+            (serde_json::Value::from("two"), None),
+        ] {
+            let mut p = params("");
+            p.format_specific.insert(MIN_DIGITS_KEY.into(), v.clone());
+            assert_eq!(min_digits(&p).ok(), want, "{v}");
+        }
+    }
+
+    /// Rows mixing single-digit cells (`3`, `0.7`, `1e-5`, `0`) with
+    /// multi-digit ones.
+    fn mixed_csv(rows: usize) -> Vec<u8> {
+        let mut s = String::from("a,b,c,d,e,f\n");
+        for i in 0..rows {
+            s.push_str(&format!(
+                "{},0.{},{}e-5,0,{}.{:02},-0.{:03}\n",
+                i % 10,
+                i % 10,
+                i % 9 + 1,
+                i + 1,
+                i % 100,
+                (i * 7) % 1000 + 10
+            ));
+        }
+        s.into_bytes()
+    }
+
+    #[tokio::test]
+    async fn threshold_skips_single_digit_cells() {
+        let data = mixed_csv(500);
+        let h = CsvHandler::new();
+        for min in [1u8, 2, 3] {
+            for pw in ["", "pw"] {
+                let mut p = params(pw);
+                p.format_specific
+                    .insert(MIN_DIGITS_KEY.into(), serde_json::Value::from(min));
+                let mut c = carrier(&data);
+                h.embed(&mut c, b"threshold", &p).await.unwrap();
+                assert_valid_min(&data, &c.raw_data, min);
+                // Extraction needs no threshold (it is in the envelope).
+                assert_eq!(h.extract(&c, &params(pw)).await.unwrap(), b"threshold");
+                assert_eq!(h.extract(&c, &p).await.unwrap(), b"threshold");
+                assert!(h.verify_integrity(&c).unwrap());
+            }
+        }
+        // Default threshold: columns a-d (one significant digit) untouched.
+        let mut c = carrier(&data);
+        h.embed(&mut c, &[0x5a; 40], &params("")).await.unwrap();
+        let (a, b) = (records(&data), records(&c.raw_data));
+        assert!(a.iter().zip(&b).all(|(x, y)| x[..4] == y[..4]));
+        assert_ne!(a, b);
+        // Threshold 1 does use them.
+        let mut p = params("");
+        p.format_specific
+            .insert(MIN_DIGITS_KEY.into(), serde_json::Value::from(1));
+        let mut c = carrier(&data);
+        h.embed(&mut c, &[0x5a; 40], &p).await.unwrap();
+        let b = records(&c.raw_data);
+        assert!(a.iter().zip(&b).any(|(x, y)| x[..4] != y[..4]));
+        // A bad threshold is rejected on embed and extract.
+        let mut bad = params("");
+        bad.format_specific
+            .insert(MIN_DIGITS_KEY.into(), serde_json::Value::from(0));
+        assert!(h.embed(&mut carrier(&data), b"x", &bad).await.is_err());
+        assert!(h.extract(&c, &bad).await.is_err());
+    }
+
+    /// The layout from before the threshold existed (#97, also called the
+    /// v0.7.0-style envelope), written independently of `embed_encoded`: every
+    /// numeric cell, strategy byte 1.
+    fn embed_v070(data: &[u8], encoded: &[u8]) -> Vec<u8> {
+        let stream = envelope::build(b"CSVJ", 1, encoded).unwrap();
+        let mut out = data.to_vec();
+        let mut cells = CsvScanner::new(b',');
+        let mut base = 0;
+        let mut i = 0;
+        for seg in data.split_inclusive(|&b| b == b'\n') {
+            let (body, _) = split_eol(seg);
+            for c in cells.scan_line(body) {
+                if i < stream.len() * 8 {
+                    set_parity(&mut out[base + c.offset], envelope::bit(&stream, i));
+                    i += 1;
+                }
+            }
+            base += seg.len();
+        }
+        assert_eq!(i, stream.len() * 8, "carrier too small for the test");
+        out
+    }
+
+    #[tokio::test]
+    async fn v070_files_still_extract() {
+        let h = CsvHandler::new();
+        for data in [mixed_csv(500), sample_csv(400)] {
+            for pw in ["", "old secret"] {
+                let p = params(pw);
+                let encoded = crate::codec::encode_payload(b"made by v0.7.0", &p).unwrap();
+                let old = embed_v070(&data, &encoded);
+                assert_eq!(h.extract(&carrier(&old), &p).await.unwrap(), b"made by v0.7.0");
+                assert!(h.verify_integrity(&carrier(&old)).unwrap());
+                // Threshold 1 reproduces the v0.7.0 bytes exactly.
+                assert_eq!(embed_encoded(&data, &encoded, b',', 1).unwrap(), old);
+                // The default threshold does not.
+                assert_ne!(embed_encoded(&data, &encoded, b',', 2).unwrap(), old);
+            }
+        }
+    }
+
+    /// The threshold scan works on raw envelope bits only: it recovers an
+    /// arbitrary (non-codec) frame for every threshold, so `extract` runs the
+    /// codec decode (and its key derivation) exactly once, on the result.
+    #[test]
+    fn threshold_scan_needs_no_decode() {
+        let data = mixed_csv(300);
+        let frame: Vec<u8> = (0u8..20).map(|i| i.wrapping_mul(37) ^ 0xA5).collect();
+        for t in [1u8, 2, 3, 4] {
+            let stego = embed_encoded(&data, &frame, b',', t).unwrap();
+            assert_eq!(extract_encoded(&stego, b',').unwrap(), frame, "t={t}");
+            assert!(crate::codec::decode_payload(&frame, &params("")).is_err());
+        }
+    }
+
+    #[test]
+    fn capacity_per_threshold() {
+        let data = mixed_csv(300);
+        let info = CsvHandler.estimate_capacity(&carrier(&data)).unwrap();
+        let fi = &info.format_specific_info;
+        let by: Vec<usize> = fi["eligible_cells_by_min_significant_digits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as usize)
+            .collect();
+        assert_eq!(by.len(), usize::from(MAX_MIN_DIGITS));
+        assert_eq!(by[0], 300 * 6);
+        // Columns e and f only (`{i}.{:02}` and `-0.{:03}` with >= 10).
+        assert_eq!(by[1], 300 * 2);
+        assert_eq!(fi["eligible_cells"].as_u64().unwrap() as usize, by[1]);
+        assert_eq!(fi["min_significant_digits"], 2);
+        assert_eq!(info.recommended_bits, (by[1] - ENVELOPE_BITS) / 8 * 8);
+        // Each threshold's count is exactly its embed limit.
+        for t in [1u8, 2, 3, 4] {
+            let n = by[usize::from(t) - 1];
+            let frame = (n - ENVELOPE_BITS) / 8;
+            assert!(embed_encoded(&data, &vec![0; frame], b',', t).is_ok(), "t={t}");
+            match embed_encoded(&data, &vec![0; frame + 1], b',', t) {
+                Err(SteganoError::InsufficientCapacity { available, .. }) => {
+                    assert_eq!(available, n, "t={t}")
+                }
+                other => panic!("t={t}: {other:?}"),
+            }
         }
     }
 
@@ -661,7 +1056,8 @@ mod tests {
         assert!(s.scan_line(b"").is_empty());
         assert!(s.scan_line(b"\"a").is_empty()); // header record continues
         assert!(s.scan_line(b"b\",1").is_empty()); // still the header
-        assert_eq!(s.scan_line(b"12,x,3.5"), &[1, 7]);
-        assert_eq!(s.scan_line(b"\"q,\"\"1\"\"\",2"), &[10]);
+        let cell = |offset, sig| Cell { offset, sig };
+        assert_eq!(s.scan_line(b"12,x,3.5"), &[cell(1, 2), cell(7, 2)]);
+        assert_eq!(s.scan_line(b"\"q,\"\"1\"\"\",2"), &[cell(10, 1)]);
     }
 }
