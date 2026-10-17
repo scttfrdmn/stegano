@@ -1,9 +1,11 @@
 name: npm publish
 
 # Publishes the `stegano-wasm` npm package (WebAssembly bindings) when a
-# `v*` tag is pushed. Requires the NPM_TOKEN repository secret (an npm
-# automation or granular access token with publish rights for stegano-wasm).
-# See CONTRIBUTING.md, "Publishing to npm".
+# `v*` tag is pushed. Authenticates with npm trusted publishing (OIDC): no
+# stored token is needed once the package's Trusted Publisher is configured on
+# npmjs.com (user scttfrdmn, repo stegano, workflow npm-publish.yml). An
+# NPM_TOKEN secret is used only as a fallback, e.g. to bootstrap the first
+# publish. See CONTRIBUTING.md, "Publishing to npm".
 
 on:
   push:
@@ -17,7 +19,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing (OIDC); provenance when the repo is public
 
 concurrency:
   group: npm-publish-${{ github.ref }}
@@ -41,8 +43,14 @@ jobs:
           tool: wasm-pack
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1 (and Node >= 22.14).
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
 
       - name: Build and assemble pkg/
         run: ./scripts/build-wasm.sh
@@ -95,18 +103,12 @@ jobs:
       - name: Publish
         if: steps.exists.outputs.skip != 'true' && !inputs.dry_run
         env:
+          # Optional fallback; trusted publishing (OIDC) is tried first and
+          # needs no token. Provenance is generated automatically for public
+          # repositories and skipped for private ones.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          REPO_PRIVATE: ${{ github.event.repository.private }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::The NPM_TOKEN repository secret is not set. Add an npm automation (or granular, publish-capable) token under Settings → Secrets and variables → Actions, then re-run this workflow."
-            exit 1
+            echo "::notice::No NPM_TOKEN secret; publishing via npm trusted publishing (OIDC)"
           fi
-          # npm provenance attestations are only supported for public source
-          # repositories; publish without them while the repo is private.
-          if [ "$REPO_PRIVATE" = "true" ]; then
-            echo "::notice::Repository is private; publishing without --provenance"
-            npm publish "${{ steps.pack.outputs.tarball }}" --access public
-          else
-            npm publish "${{ steps.pack.outputs.tarball }}" --provenance --access public
-          fi
+          npm publish "${{ steps.pack.outputs.tarball }}" --access public
