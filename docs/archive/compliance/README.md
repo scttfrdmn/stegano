@@ -1,3 +1,5 @@
+> **Historical planning drafts only.** No certification, audit, or compliance status (SOC 2, ISO 27001, NIST, FedRAMP, FIPS 140-2 or otherwise) is held or implied.
+
 # Stegano Enterprise Compliance Framework
 
 This directory contains the comprehensive enterprise compliance framework for Stegano, establishing the foundation for SOC 2 Type II, ISO 27001, NIST Cybersecurity Framework, FedRAMP, and FIPS 140-2 compliance.
@@ -140,16 +142,16 @@ This directory contains the comprehensive enterprise compliance framework for St
 ## 📞 Contact Information
 
 **Program Owner**: Chief Information Security Officer  
-**Project Contact**: scttfrdmn@gmail.com  
+**Project Contact**: see [SECURITY.md](../../../SECURITY.md)  
 **Repository**: https://github.com/scttfrdmn/stegano  
 **Documentation**: https://github.com/scttfrdmn/stegano/tree/main/compliance  
 
 ## 🔗 Related Documentation
 
 ### Stegano Project Documentation
-- [Main README](../README.md) - Project overview
-- [Security Policy](../SECURITY.md) - Security practices
-- [Development Guidelines](../docs/archive/DEVELOPMENT_GUIDELINES.md) - Development standards
+- [Main README](../../../README.md) - Project overview
+- [Security Policy](../../../SECURITY.md) - Security practices
+- [Development Guidelines](../DEVELOPMENT_GUIDELINES.md) - Development standards
 
 ### Compliance References
 - [SOC 2 Trust Services Criteria](https://www.aicpa.org/content/dam/aicpa/interestareas/frc/assuranceadvisoryservices/downloadabledocuments/trust-services-criteria.pdf)

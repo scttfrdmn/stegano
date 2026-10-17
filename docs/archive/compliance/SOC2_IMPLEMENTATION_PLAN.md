@@ -475,5 +475,5 @@ This implementation plan provides a detailed roadmap for achieving SOC 2 Type II
 ---
 
 **Document Owner**: Stegano Compliance Team  
-**Contact**: scttfrdmn@gmail.com  
+**Contact**: see [SECURITY.md](../../../SECURITY.md)  
 **Next Review**: February 15, 2025

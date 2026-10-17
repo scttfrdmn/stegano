@@ -1,7 +1,4 @@
-//! Comprehensive Statistical Validation Showcase
-//!
-//! This example demonstrates the world-class statistical validation capabilities
-//! of Stegano, showcasing advanced steganalysis and performance analysis.
+//! Shows the full statistical validation suite (steganalysis tests, ROC/AUC, cross-validation).
 
 use std::time::Instant;
 use stegano::core::*;

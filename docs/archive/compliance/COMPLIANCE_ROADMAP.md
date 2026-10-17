@@ -403,5 +403,5 @@ This roadmap outlines Stegano's comprehensive enterprise compliance implementati
 
 **Document Owner**: Stegano Compliance Office  
 **Program Manager**: Chief Information Security Officer  
-**Contact**: scttfrdmn@gmail.com  
+**Contact**: see [SECURITY.md](../../../SECURITY.md)  
 **Next Review**: February 15, 2025

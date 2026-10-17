@@ -1,6 +1,4 @@
-//! GPU Acceleration Demo
-//!
-//! Demonstrates the GPU acceleration capabilities for steganography operations.
+//! Shows the experimental GPU accelerator (with CPU fallback); requires `--features experimental`.
 
 use std::collections::HashMap;
 use std::time::Instant;

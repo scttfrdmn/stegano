@@ -1,6 +1,4 @@
-//! Quick Statistical Validation Demo
-//!
-//! A fast demonstration of Stegano's statistical validation capabilities
+//! Shows a fast run of the statistical validation suite on synthetic carriers.
 
 use stegano::core::*;
 use stegano::validation::*;

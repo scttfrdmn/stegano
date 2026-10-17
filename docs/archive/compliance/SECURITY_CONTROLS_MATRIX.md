@@ -215,5 +215,5 @@ This security controls matrix maps Stegano's security controls to multiple compl
 ---
 
 **Document Owner**: Stegano Security Team  
-**Contact**: scttfrdmn@gmail.com  
+**Contact**: see [SECURITY.md](../../../SECURITY.md)  
 **Next Review**: April 15, 2025

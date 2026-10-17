@@ -346,4 +346,4 @@ This policy has been reviewed and approved by:
 
 **Document Classification**: Internal  
 **Next Review Date**: January 12, 2026  
-**Contact**: CISO Office - scttfrdmn@gmail.com
+**Contact**: see [SECURITY.md](../../../../SECURITY.md)
