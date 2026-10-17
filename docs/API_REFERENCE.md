@@ -1,6 +1,6 @@
 # API reference
 
-An overview of the public Rust API in v0.7.0 and of the language bindings.
+An overview of the public Rust API in v0.8.0 and of the language bindings.
 Run `cargo doc --open` for the complete, authoritative rustdoc. Format
 behaviour (strategy names, what changes in a file, capacity) is in
 [FORMATS.md](FORMATS.md). The payload byte layout is in

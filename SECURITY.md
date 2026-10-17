@@ -7,8 +7,8 @@ line and, where practical, backported to the previous one.
 
 | Version | Supported |
 | ------- | --------- |
+| 0.8.x   | Yes       |
 | 0.7.x   | Yes       |
-| 0.6.x   | Yes       |
 | < 0.6   | No. The wire format changed in 0.6.0, and older releases used weaker key derivation. |
 
 ## Reporting a vulnerability
