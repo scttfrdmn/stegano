@@ -164,14 +164,15 @@ pub enum CDataFormat {
     /// Raw signal: the bytes are treated as headerless mono 16-bit
     /// little-endian samples (no file structure is parsed).
     BinarySignal = 10,
-    /// CSV time series: treated as raw bytes exactly like `BinarySignal`
-    /// (the text is not parsed as CSV, so the output is not guaranteed to
-    /// remain valid CSV).
+    /// CSV: one bit per unquoted numeric cell in the parity of its last
+    /// digit; header, text cells, quotes and line endings are unchanged, so
+    /// the output stays valid CSV.
     CsvTimeseries = 11,
     /// Generic binary data (LSB of every byte). Also the result of format
     /// detection for unrecognised data.
     Binary = 12,
-    /// Plain text, handled by the same generic LSB handler as `Binary`.
+    /// Plain UTF-8 text: trailing spaces/tabs per line; the visible text is
+    /// unchanged.
     Text = 13,
     /// FITS astronomical image.
     Fits = 14,

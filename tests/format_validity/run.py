@@ -19,7 +19,8 @@ Usage::
     python3 tests/format_validity/run.py target/release/stegano --only wav --only fits
 
 External tools: Pillow, numpy, soundfile, astropy, Biopython, pydicom, pysam
-(see requirements.txt) plus the ``samtools`` and ``bcftools`` executables.
+(see requirements.txt), Python's ``csv`` module (CSV) and UTF-8 line comparison
+(plain text), plus the ``samtools`` and ``bcftools`` executables.
 ``bcftools`` is optional when pysam is available; ``samtools`` is required for
 the SAM/BAM carriers.
 """
@@ -31,6 +32,7 @@ import hashlib
 import io
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -726,6 +728,119 @@ def validate_dicom(orig: Path, out: Path, strategy: Optional[str]) -> Problems:
 DICOM_STRATEGIES = [None, "private", "metadata", "sequence", "pixel_lsb", "multi"]
 
 # --------------------------------------------------------------------------
+# CSV (Python csv module) and plain text
+# --------------------------------------------------------------------------
+
+
+# Same eligibility rule as src/handlers/csv.rs: unquoted plain decimal whose
+# mantissa ends in a digit.
+CSV_NUMERIC = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+
+
+def _ulp(cell: str) -> float:
+    """One unit in the last printed mantissa place of a numeric cell."""
+    m = re.match(r"([^eE]*)(?:[eE]([+-]?\d+))?\Z", cell)
+    mant, exp = m.group(1), int(m.group(2) or 0)
+    frac = len(mant.split(".", 1)[1]) if "." in mant else 0
+    return 10.0 ** (exp - frac)
+
+
+def gen_csv(p: Path) -> None:
+    # Header with a quoted name, quoted cells containing the delimiter, escaped
+    # quotes and a line break, negative and exponent numbers, CRLF endings and
+    # no final newline.
+    r = rng()
+    rows = ['time_s,"sensor, id",temp_c,flux,note']
+    for i in range(600):
+        note = ['"ok"', '"says ""hi"", twice"', '"two\r\nlines"', "plain", ""][i % 5]
+        rows.append(
+            f"{i * 0.05:.2f},S{i % 4},{r.normal(21, 3):.3f},{r.lognormal(-9, 2):.4e},{note}"
+        )
+    p.write_bytes("\r\n".join(rows).encode())
+
+
+def _csv_rows(path: Path) -> list[list[str]]:
+    import csv
+
+    with open(path, newline="", encoding="utf-8") as fh:
+        return list(csv.reader(fh, strict=True))
+
+
+def validate_csv(orig: Path, out: Path, strategy: Optional[str]) -> Problems:
+    pr = Problems()
+    a = _csv_rows(orig)
+    try:
+        b = _csv_rows(out)
+    except Exception as e:  # noqa: BLE001
+        pr.append(f"csv.reader failed: {type(e).__name__}: {e}")
+        return pr
+    pr.check(len(a) == len(b), f"row count {len(a)} -> {len(b)}")
+    pr.check(bool(a) and bool(b) and a[0] == b[0], "header row changed")
+    shape = sum(1 for x, y in zip(a, b) if len(x) != len(y))
+    pr.check(shape == 0, f"{shape} rows changed column count")
+    text_diff = num_bad = 0
+    for x, y in zip(a, b):
+        for cx, cy in zip(x, y):
+            if cx == cy:
+                continue
+            if not CSV_NUMERIC.match(cx):
+                text_diff += 1
+            elif not CSV_NUMERIC.match(cy) or len(cx) != len(cy) or \
+                    abs(float(cx) - float(cy)) > _ulp(cx) * (1 + 1e-9):
+                num_bad += 1
+    pr.check(text_diff == 0, f"{text_diff} non-numeric cells changed")
+    pr.check(num_bad == 0, f"{num_bad} numeric cells changed by more than one last-place unit")
+    ra, rb = orig.read_bytes(), out.read_bytes()
+    pr.check(ra.count(b"\r\n") == rb.count(b"\r\n"), "CRLF line terminators not preserved")
+    pr.check(ra.endswith(b"\n") == rb.endswith(b"\n"), "final-newline state changed")
+    pr.check(len(ra) == len(rb), f"file size {len(ra)} -> {len(rb)}")
+    return pr
+
+
+def _text_lines(eol: str) -> str:
+    r = rng()
+    words = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
+    lines = []
+    for i in range(300):
+        line = " ".join(r.choice(words, int(r.integers(0, 9))))
+        if i % 7 == 3:
+            line += "   "  # existing trailing spaces
+        if i % 11 == 5:
+            line += " \t"  # existing trailing tab
+        if i % 13 == 0:
+            line = "Ünïcödé — 日本語 ✓ " + line
+        lines.append(line)
+    return eol.join(lines) + eol
+
+
+def gen_text_lf(p: Path) -> None:
+    p.write_bytes(_text_lines("\n").encode())
+
+
+def gen_text_crlf(p: Path) -> None:
+    # CRLF and no final newline.
+    p.write_bytes(_text_lines("\r\n")[:-2].encode())
+
+
+def validate_text(orig: Path, out: Path, strategy: Optional[str]) -> Problems:
+    pr = Problems()
+    ra, rb = orig.read_bytes(), out.read_bytes()
+    try:
+        ta, tb = ra.decode("utf-8"), rb.decode("utf-8")
+    except UnicodeDecodeError as e:
+        pr.append(f"output is not UTF-8: {e}")
+        return pr
+    la, lb = ta.split("\n"), tb.split("\n")
+    pr.check(len(la) == len(lb), f"line count {len(la)} -> {len(lb)}")
+    diff = sum(1 for x, y in zip(la, lb) if x.rstrip() != y.rstrip())
+    pr.check(diff == 0, f"{diff} lines differ after rstrip")
+    pr.check(ra.count(b"\r\n") == rb.count(b"\r\n"), "CRLF line terminators not preserved")
+    pr.check(ra.endswith(b"\n") == rb.endswith(b"\n"), "final-newline state changed")
+    other = set(rb) - set(ra) - {ord(" "), ord("\t")}
+    pr.check(not other, f"new byte values introduced: {sorted(other)}")
+    return pr
+
+# --------------------------------------------------------------------------
 # Carrier matrix
 # --------------------------------------------------------------------------
 
@@ -750,6 +865,9 @@ CARRIERS: list[Carrier] = [
     Carrier("sam", "sam", "aln.sam", gen_sam, validate_sam, SAM_STRATEGIES),
     Carrier("bam", "bam", "aln.bam", gen_bam, validate_sam, SAM_STRATEGIES),
     Carrier("dicom-mono16", "dicom", "ct.dcm", gen_dicom, validate_dicom, DICOM_STRATEGIES),
+    Carrier("csv-crlf", "csv", "timeseries.csv", gen_csv, validate_csv, [None, "digit"]),
+    Carrier("text-lf", "text", "notes.txt", gen_text_lf, validate_text, [None, "whitespace"]),
+    Carrier("text-crlf", "text", "notes-crlf.txt", gen_text_crlf, validate_text, [None]),
 ]
 
 # Strategies that MUST be rejected for a given carrier.  Each must fail
@@ -764,6 +882,8 @@ EXPECTED_ERRORS: dict[str, dict[str, str]] = {
     "vcf": {"bogus": "unknown vcf strategy"},
     "sam": {"bogus": "unknown sam strategy"},
     "dicom-mono16": {"bogus": "unknown dicom strategy"},
+    "csv-crlf": {"bogus": "unknown csv strategy"},
+    "text-lf": {"bogus": "unknown text strategy"},
 }
 
 for _c in CARRIERS:

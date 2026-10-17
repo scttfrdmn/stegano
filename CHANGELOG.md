@@ -19,6 +19,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `comprehensive_validation` now calls `finalize()`, and the embedding path also stores the
   PoV, SPA and audio results in `steganalysis_results`. The CLI line is now
   `Detection-resistance score: N/10 (heuristic)`, or `n/a`.
+- The CLI's `--strategy` flag now applies to FITS files, mapping to `fits_strategy`
+  (`pixel_lsb` or `float_mantissa`), so float (`BITPIX` -32/-64) FITS data can be embedded
+  from the CLI with `--strategy float_mantissa`. Unknown values are rejected with an error
+  ([#95](https://github.com/scttfrdmn/stegano/issues/95)).
+- CSV (`.csv`, `DataFormat::CsvTimeseries`) and plain-text (`.txt`, `DataFormat::TEXT`) carriers
+  are no longer corrupted on embed ([#97](https://github.com/scttfrdmn/stegano/issues/97)).
+  CSV used to go to the signal handler as raw 16-bit samples, and text to the generic byte-LSB
+  handler, so visible characters changed (`,` became `-`). Both now have format-aware handlers:
+  - **CSV** (`handlers::csv`, `csv_strategy` = `digit`): RFC 4180 parsing (quoted fields with
+    embedded delimiters, quotes and line breaks; `csv_delimiter` overrides `,`). Each unquoted
+    numeric cell (`12`, `-3.140`, `1e-5`) carries one bit in the parity of its last mantissa
+    digit, so **numeric values change by at most one unit in their last printed place**. The
+    header row, non-numeric and quoted cells, delimiters, line endings and the final newline stay
+    byte-identical. Capacity is one bit per eligible cell. Streamable.
+  - **Text** (`handlers::text`, `text_strategy` = `whitespace`): `k` trailing spaces/tabs per
+    line (space = 0, tab = 1). Existing trailing whitespace on the lines used is normalised
+    first, so the extractor cannot desynchronise. `k` is chosen automatically (1..=64) or set
+    with `text_bits_per_line`. Every line is unchanged after stripping trailing whitespace, line
+    endings are kept and ASCII stays ASCII, but the payload is visible in editors that show
+    whitespace. Binary or non-UTF-8 input is rejected. Streaming embed needs a fixed
+    `text_bits_per_line`; streaming extract works for any `k`.
+  - The CLI `--strategy` now maps to `csv_strategy` / `text_strategy`. `BinarySignal` still uses
+    the signal handler, and `BINARY` still uses the generic handler. The signal handler now
+    rejects formats other than WAV and `BinarySignal`.
+  - `tests/format_validity` covers CSV (Python `csv` module) and text (lines equal after
+    `rstrip`).
 
 ### Security
 - Upgraded dependencies to clear Dependabot alerts
@@ -31,12 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     GHSA-cq8v-f236-94qc.
 - `pyproject.toml` no longer sets `PYO3_USE_ABI3_FORWARD_COMPATIBILITY`, because pyo3 0.29
   supports CPython up to 3.15.
-
-### Fixed
-- The CLI's `--strategy` flag now applies to FITS files, mapping to `fits_strategy`
-  (`pixel_lsb` or `float_mantissa`), so float (`BITPIX` -32/-64) FITS data can be embedded
-  from the CLI with `--strategy float_mantissa`. Unknown values are rejected with an error
-  ([#95](https://github.com/scttfrdmn/stegano/issues/95)).
 
 ### Changed
 - npm publishing uses npm trusted publishing (OIDC); `NPM_TOKEN` is only a fallback

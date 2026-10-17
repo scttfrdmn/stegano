@@ -322,15 +322,23 @@ fn test_cli_different_file_formats() {
     let test_cases = vec![
         ("test.wav", wav_header),
         ("test.bin", vec![0xDEu8; 8]),
-        ("test.txt", vec![0x48, 0x65, 0x6C, 0x6C, 0x6F]), // "Hello"
+        ("test.txt", b"Hello".to_vec()),
+        ("test.csv", b"t,v\n".to_vec()),
     ];
 
     for (filename, mut header) in test_cases {
         let carrier_path = temp_dir.path().join(filename);
         let payload_path = temp_dir.path().join("payload.txt");
 
-        // Create carrier with appropriate header + padding
-        header.extend(vec![0x80u8; 5000]); // Add padding for capacity
+        // Create carrier with appropriate header + padding.  Text and CSV
+        // carriers must be UTF-8 text, so they get text padding.
+        if filename.ends_with(".txt") {
+            header.extend(b"\nline of text".repeat(400));
+        } else if filename.ends_with(".csv") {
+            header.extend((0..1000).flat_map(|i| format!("{i},{}.5\n", i * 3).into_bytes()));
+        } else {
+            header.extend(vec![0x80u8; 5000]); // Add padding for capacity
+        }
         fs::write(&carrier_path, &header).unwrap();
         fs::write(&payload_path, "Test message").unwrap();
 

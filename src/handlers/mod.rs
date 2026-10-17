@@ -1,12 +1,15 @@
 //! Data format handlers for different scientific data types
 
+pub mod csv;
 pub mod dicom;
+pub(crate) mod envelope;
 pub mod fits;
 pub mod generic;
 pub mod genomics;
 pub mod imagery;
 pub mod sam_bam;
 pub mod signals;
+pub mod text;
 pub mod vcf;
 
 use crate::core::*;
@@ -60,7 +63,9 @@ impl HandlerRegistry {
                 Box::new(imagery::ImageryHandler::new()),     // 4
                 Box::new(signals::SignalHandler::new()),      // 5
                 Box::new(fits::FitsHandler::new()),           // 6
-                Box::new(generic::GenericHandler::new()),     // 7
+                Box::new(csv::CsvHandler::new()),             // 7
+                Box::new(text::TextHandler::new()),           // 8
+                Box::new(generic::GenericHandler::new()),     // 9 (last: detects anything)
             ],
         }
     }
@@ -84,14 +89,20 @@ impl HandlerRegistry {
             DataFormat::PNG | DataFormat::TIFF | DataFormat::MICROSCOPY => {
                 Some(&*self.handlers[4]) // ImageryHandler
             }
-            DataFormat::WAV | DataFormat::BinarySignal | DataFormat::CsvTimeseries => {
+            DataFormat::WAV | DataFormat::BinarySignal => {
                 Some(&*self.handlers[5]) // SignalHandler
             }
             DataFormat::FITS => {
                 Some(&*self.handlers[6]) // FitsHandler
             }
-            DataFormat::BINARY | DataFormat::TEXT => {
-                Some(&*self.handlers[7]) // GenericHandler
+            DataFormat::CsvTimeseries => {
+                Some(&*self.handlers[7]) // CsvHandler
+            }
+            DataFormat::TEXT => {
+                Some(&*self.handlers[8]) // TextHandler
+            }
+            DataFormat::BINARY => {
+                Some(&*self.handlers[9]) // GenericHandler
             }
         }
     }

@@ -126,6 +126,9 @@ noodles-sam = "0.92"
 noodles-bam = "0.97"
 noodles-bgzf = "0.52"
 
+# Independent RFC 4180 parser used to validate CsvHandler output
+csv = "1.3"
+
 [features]
 default = []
 # Unstable, unsupported modules (`gpu`, `ml`, `monitoring`). They are not used

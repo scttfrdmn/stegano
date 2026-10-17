@@ -127,6 +127,8 @@ pub fn strategy_key(format: &DataFormat) -> Option<&'static str> {
         DataFormat::WAV => "signal_strategy",
         DataFormat::FASTA | DataFormat::FASTQ => "genomics_strategy",
         DataFormat::FITS => "fits_strategy",
+        DataFormat::CsvTimeseries => "csv_strategy",
+        DataFormat::TEXT => "text_strategy",
         _ => return None,
     })
 }
@@ -474,6 +476,8 @@ mod tests {
         assert_eq!(strategy_key(&DataFormat::WAV), Some("signal_strategy"));
         assert_eq!(strategy_key(&DataFormat::FASTA), Some("genomics_strategy"));
         assert_eq!(strategy_key(&DataFormat::FITS), Some("fits_strategy"));
+        assert_eq!(strategy_key(&DataFormat::CsvTimeseries), Some("csv_strategy"));
+        assert_eq!(strategy_key(&DataFormat::TEXT), Some("text_strategy"));
         assert_eq!(strategy_key(&DataFormat::BINARY), None);
     }
 

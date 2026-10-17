@@ -78,11 +78,13 @@ use std::collections::HashMap;
 /// # Signal Formats
 /// - [`WAV`](DataFormat::WAV): Audio signals with various embedding techniques
 /// - [`BinarySignal`](DataFormat::BinarySignal): Raw signal data
-/// - [`CsvTimeseries`](DataFormat::CsvTimeseries): Time series data in CSV format
+/// - [`CsvTimeseries`](DataFormat::CsvTimeseries): CSV text; one bit per
+///   numeric cell in the parity of its last digit (see [`crate::handlers::csv`])
 ///
 /// # Generic Formats
 /// - [`BINARY`](DataFormat::BINARY): Generic binary data with LSB embedding
-/// - [`TEXT`](DataFormat::TEXT): Plain text, handled by the generic LSB handler
+/// - [`TEXT`](DataFormat::TEXT): Plain UTF-8 text; trailing-whitespace
+///   encoding, visible text unchanged (see [`crate::handlers::text`])
 ///
 /// # Examples
 ///

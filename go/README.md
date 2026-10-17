@@ -113,10 +113,10 @@ fmt.Println(stegano.Version()) // crate version, e.g. "0.7.0"
 | `FormatDICOM` | DICOM medical images |
 | `FormatWAV` | WAV audio |
 | `FormatBinarySignal` | Raw 16-bit little-endian samples |
-| `FormatCSVTimeseries` | CSV time series (treated as raw 16-bit samples) |
+| `FormatCSVTimeseries` | CSV (last-digit parity of numeric cells; stays valid CSV) |
 | `FormatFITS` | FITS astronomical images |
 | `FormatBinary` | Generic binary (fallback) |
-| `FormatText` | Plain text (generic LSB) |
+| `FormatText` | Plain UTF-8 text (trailing whitespace; visible text unchanged) |
 
 ## Options
 
