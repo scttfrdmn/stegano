@@ -46,7 +46,7 @@ fmt.Printf("Format: %s  Total: %d bits  Recommended: %d bits\n",
 fmt, err := stegano.DetectFormat(carrier)
 
 // Library version.
-fmt.Println(stegano.Version()) // crate version, e.g. "0.5.1"
+fmt.Println(stegano.Version()) // crate version, e.g. "0.6.0"
 ```
 
 ## Supported formats

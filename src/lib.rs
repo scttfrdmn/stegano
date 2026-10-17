@@ -9,7 +9,7 @@
 //! Stegano provides enterprise-grade steganographic embedding capabilities with advanced features:
 //!
 //! - **Multi-Format Support**: Specialized handlers for FASTA/FASTQ genomics data, TIFF/PNG imagery, and WAV/binary signals
-//! - **Advanced Security**: AES-256-GCM encryption with Blake3 key derivation and authenticated encryption
+//! - **Advanced Security**: AES-256-GCM / ChaCha20-Poly1305 authenticated encryption with Argon2id key derivation
 //! - **Biological Integrity**: FASTQ quality score embedding with preservation of biological data validity
 //!
 //! ## Quick Start
@@ -47,7 +47,7 @@
 //! ## Core Modules
 //!
 //! - [`handlers`]: Format-specific embedding and extraction implementations
-//! - [`crypto`]: Cryptographic layer with AES-GCM and Blake3
+//! - [`crypto`]: Cryptographic layer: Argon2id KDF and AES-256-GCM / ChaCha20-Poly1305 AEAD
 //! - [`core`]: Core types, traits, and data structures
 //! - `ffi`: Foreign Function Interface for C/C++ integration (native targets only)
 //!

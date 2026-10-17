@@ -270,7 +270,7 @@ enum SteganoErrorCode stegano_extract_v2(const uint8_t *carrier_data,
 void stegano_free(void *ptr);
 
 /*
- Get the library version string (the crate version, e.g. `"0.5.1"`).
+ Get the library version string (the crate version, e.g. `"0.6.0"`).
  Returns: static NUL-terminated string (caller must NOT free)
  */
 const char *stegano_version(void);
