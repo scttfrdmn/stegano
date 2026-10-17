@@ -364,6 +364,10 @@ impl TelemetryCollector {
         #[cfg(not(target_os = "linux"))]
         let current = peak;
 
+        // RSS can grow between getrusage() and reading /proc (other threads
+        // allocate meanwhile), so keep the invariant peak >= current.
+        let peak = peak.max(current);
+
         Ok((current, peak, ru.ru_minflt as u64))
     }
 
