@@ -210,9 +210,9 @@ async fn main() -> Result<()> {
     println!("🔍 Advanced steganalysis: Pixel pairs, Wavelets, Audio analysis");
     println!("📈 Performance analysis: ROC curves, Cross-validation");
     println!("🎯 Domain-specific validation for scientific data formats");
-    println!("📋 Comprehensive validation reports with publication-ready metrics");
+    println!("📋 Validation reports with per-test metrics");
 
-    println!("\n🎉 Stegano statistical validation: 11/10 excellence achieved!");
+    println!("\nValidation showcase complete.");
 
     Ok(())
 }
@@ -242,9 +242,9 @@ fn create_modified_image(width: usize, height: usize) -> Vec<u8> {
     data
 }
 
-/// Create test audio data
+/// Create one second of test audio (audio_steganalysis needs at least `sample_rate` samples)
 fn create_test_audio() -> Vec<f32> {
-    (0..1000)
+    (0..44_100)
         .map(|i| {
             let t = i as f32 / 44100.0;
             0.5 * (2.0 * std::f32::consts::PI * 440.0 * t).sin()

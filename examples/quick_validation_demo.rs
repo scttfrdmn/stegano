@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
     println!("   Loaded {} datasets: {:?}", datasets.len(), datasets);
 
     println!("\n🎉 All statistical validation tests completed successfully!");
-    println!("💪 Stegano statistical validation: World-class excellence!");
+    println!("Quick validation demo complete.");
 
     Ok(())
 }

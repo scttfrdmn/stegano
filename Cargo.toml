@@ -188,11 +188,6 @@ name = "signal_demo"
 path = "examples/signals/demo.rs"
 
 [[example]]
-name = "gpu_acceleration_demo"
-path = "examples/gpu_acceleration_demo.rs"
-required-features = ["experimental"]
-
-[[example]]
 name = "validation_showcase"
 path = "examples/validation_showcase.rs"
 
