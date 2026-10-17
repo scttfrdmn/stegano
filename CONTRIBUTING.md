@@ -189,6 +189,21 @@ Releases follow semantic versioning:
 - **Minor** (x.y.0): New features, backward compatible
 - **Patch** (x.y.z): Bug fixes, backward compatible
 
+### Tagging a release
+
+Every release pushes two tags on the same commit:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"        # Rust crate, CLI, npm package
+git tag -a go/vX.Y.Z -m "go/vX.Y.Z"  # Go module github.com/scttfrdmn/stegano/go
+git push origin vX.Y.Z go/vX.Y.Z
+```
+
+The Go module lives in `go/`, so the Go toolchain only sees versions tagged
+with the `go/` prefix; without that tag, `go get .../go@vX.Y.Z` fails.
+Before tagging, regenerate both headers (`include/stegano.h` and
+`go/stegano.h`, see `cbindgen.toml`) if the FFI changed.
+
 ### Publishing to npm
 
 The WebAssembly bindings are published to npm as
