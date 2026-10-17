@@ -96,9 +96,17 @@ jobs:
         if: steps.exists.outputs.skip != 'true' && !inputs.dry_run
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "::error::The NPM_TOKEN repository secret is not set. Add an npm automation (or granular, publish-capable) token under Settings → Secrets and variables → Actions, then re-run this workflow."
             exit 1
           fi
-          npm publish "${{ steps.pack.outputs.tarball }}" --provenance --access public
+          # npm provenance attestations are only supported for public source
+          # repositories; publish without them while the repo is private.
+          if [ "$REPO_PRIVATE" = "true" ]; then
+            echo "::notice::Repository is private; publishing without --provenance"
+            npm publish "${{ steps.pack.outputs.tarball }}" --access public
+          else
+            npm publish "${{ steps.pack.outputs.tarball }}" --provenance --access public
+          fi
