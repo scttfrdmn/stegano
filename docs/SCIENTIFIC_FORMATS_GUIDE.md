@@ -359,6 +359,8 @@ async fn dicom_compliance_check() -> Result<()> {
 
 SAM (Sequence Alignment/Map) and BAM (Binary Alignment/Map) formats store DNA/RNA sequence alignments. The handler preserves biological relationships and alignment quality while enabling data embedding.
 
+BAM output is BGZF-compressed by default; set `format_specific["bam_compression"]` to `"none"` for an uncompressed `BAM\1` stream (extraction auto-detects either).
+
 ### Embedding Strategies
 
 #### 1. Optional Fields

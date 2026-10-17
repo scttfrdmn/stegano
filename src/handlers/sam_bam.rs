@@ -6,8 +6,11 @@
 //!   that is not modified by an embedding is written back byte-identically.
 //! * **BAM** — BGZF-compressed binary (`1f 8b ...` with the `BC` extra
 //!   subfield).  Raw, uncompressed `BAM\1` streams are also accepted on
-//!   input; output is always BGZF (≤ 64 KiB blocks plus the standard 28-byte
-//!   EOF marker block), so `samtools` and other htslib tools can read it.
+//!   input.  Output is BGZF by default (≤ 64 KiB blocks plus the standard
+//!   28-byte EOF marker block), so `samtools` and other htslib tools can read
+//!   it; `format_specific["bam_compression"] = "none"` writes an uncompressed
+//!   `BAM\1` stream instead (`"bgzf"` selects the default explicitly).
+//!   Extraction auto-detects either form.
 //!
 //! Parsing is strict: a malformed line, record or BGZF block is an error, and
 //! records are never dropped.  All BAM length fields are validated against
@@ -697,8 +700,31 @@ fn parse_bam(data: &[u8]) -> Result<BamDoc> {
     }
 }
 
+/// Container compression for BAM output (`format_specific["bam_compression"]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum BamCompression {
+    /// BGZF blocks plus the EOF marker (htslib-compatible).
+    #[default]
+    Bgzf,
+    /// Uncompressed `BAM\1` stream: magic, l_text, text, n_ref, refs, records.
+    None,
+}
+
+fn bam_compression_from_params(params: &EmbedParams) -> Result<BamCompression> {
+    match params.format_specific.get("bam_compression") {
+        None => Ok(BamCompression::Bgzf),
+        Some(v) => match v.as_str() {
+            Some("bgzf") => Ok(BamCompression::Bgzf),
+            Some("none") => Ok(BamCompression::None),
+            _ => Err(SteganoError::InvalidParameter(format!(
+                "Unknown bam_compression {v}; expected bgzf|none"
+            ))),
+        },
+    }
+}
+
 impl BamDoc {
-    fn serialize(&self) -> Result<Vec<u8>> {
+    fn serialize(&self, compression: BamCompression) -> Result<Vec<u8>> {
         let mut raw = Vec::new();
         raw.extend_from_slice(&BAM_MAGIC);
         let l_text =
@@ -711,7 +737,10 @@ impl BamDoc {
             raw.extend_from_slice(&bs.to_le_bytes());
             raw.extend_from_slice(&r.data);
         }
-        bgzf_compress(&raw)
+        match compression {
+            BamCompression::Bgzf => bgzf_compress(&raw),
+            BamCompression::None => Ok(raw),
+        }
     }
 
     /// Header text lines (trailing NULs / `\r` stripped).
@@ -753,10 +782,11 @@ impl Doc {
         }
     }
 
-    fn serialize(&self) -> Result<Vec<u8>> {
+    /// `compression` applies to BAM only; SAM is always plain text.
+    fn serialize(&self, compression: BamCompression) -> Result<Vec<u8>> {
         match self {
             Doc::Sam(s) => Ok(s.serialize()),
-            Doc::Bam(b) => b.serialize(),
+            Doc::Bam(b) => b.serialize(compression),
         }
     }
 
@@ -1250,6 +1280,7 @@ impl DataHandler for SamBamHandler {
     ) -> Result<EmbedResult> {
         let start_time = Instant::now();
         let strategy = strategy_from_params(params)?;
+        let compression = bam_compression_from_params(params)?;
         let mut doc = Doc::parse(&carrier.format, &carrier.raw_data)?;
 
         let codec_start = Instant::now();
@@ -1258,7 +1289,7 @@ impl DataHandler for SamBamHandler {
 
         let used = Self::embed_doc(&mut doc, &codec, strategy)?;
         log::debug!("SAM/BAM: embedded {} bytes via {used:?}", payload.len());
-        carrier.raw_data = doc.serialize()?;
+        carrier.raw_data = doc.serialize(compression)?;
 
         Ok(EmbedResult {
             success: true,
@@ -1829,7 +1860,10 @@ mod tests {
             "test encoder agrees with noodles' reading of the SAM"
         );
         // Parse + serialise reproduces the raw BAM byte-exactly.
-        let again = parse_bam(&bam).unwrap().serialize().unwrap();
+        let again = parse_bam(&bam)
+            .unwrap()
+            .serialize(BamCompression::Bgzf)
+            .unwrap();
         assert_eq!(bgzf_decompress(&again).unwrap(), sam_to_raw_bam(&sam));
         assert_eq!(noodles_bgzf_inflate(&again), sam_to_raw_bam(&sam));
     }
@@ -1883,6 +1917,125 @@ mod tests {
                     assert!(recs.iter().any(|r| r.data().get(b"zs").is_some()));
                 }
             }
+        }
+    }
+
+    fn with_compression(mut p: EmbedParams, c: &str) -> EmbedParams {
+        p.format_specific.insert(
+            "bam_compression".into(),
+            serde_json::Value::String(c.into()),
+        );
+        p
+    }
+
+    /// noodles reader over an uncompressed `BAM\1` stream (no BGZF layer).
+    fn noodles_raw_bam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
+        let mut r = noodles_bam::io::Reader::from(data);
+        let header = r.read_header().expect("noodles raw BAM header");
+        let recs = r
+            .record_bufs(&header)
+            .collect::<std::io::Result<Vec<_>>>()
+            .expect("noodles raw BAM records");
+        check_records(&recs);
+        (header, recs)
+    }
+
+    #[tokio::test]
+    async fn bam_compression_none_roundtrip() {
+        let sam = sam_fixture(80);
+        let (_, orig_recs) = noodles_sam(&sam);
+        let orig_doc = parse_bam_raw(&sam_to_raw_bam(&sam)).unwrap();
+        let payload = b"raw BAM payload \x00\x01\xfe".to_vec();
+        for (input_name, input) in [("bgzf", bam_fixture(80)), ("raw", sam_to_raw_bam(&sam))] {
+            for s in ["auxiliary", "quality"] {
+                for key in [&b""[..], b"pw"] {
+                    let p = with_compression(params(Some(s), key, ECLevel::None), "none");
+                    let out = embed_extract(DataFormat::BAM, input.clone(), &payload, &p).await;
+                    let ctx = format!("{input_name}/{s}/key={}", !key.is_empty());
+                    assert!(out.starts_with(&BAM_MAGIC), "{ctx}: raw magic");
+                    assert!(!is_bgzf(&out), "{ctx}");
+
+                    // Exact raw layout: our own parser consumes it fully and
+                    // re-serialising uncompressed is byte-identical.
+                    let doc = parse_bam_raw(&out).unwrap();
+                    assert_eq!(doc.serialize(BamCompression::None).unwrap(), out, "{ctx}");
+                    assert_eq!(doc.text, orig_doc.text, "{ctx}: header text");
+                    assert_eq!(doc.refs, orig_doc.refs, "{ctx}: refs");
+                    assert_eq!(doc.records.len(), orig_doc.records.len(), "{ctx}");
+
+                    // Independent check with noodles.
+                    let (header, recs) = noodles_raw_bam(&out);
+                    assert_eq!(recs.len(), orig_recs.len(), "{ctx}: record count");
+                    assert_eq!(header.reference_sequences().len(), 2);
+                    for (ra, rb) in orig_recs.iter().zip(&recs) {
+                        assert_eq!(ra.name(), rb.name());
+                        assert_eq!(ra.flags(), rb.flags());
+                        assert_eq!(ra.reference_sequence_id(), rb.reference_sequence_id());
+                        assert_eq!(ra.alignment_start(), rb.alignment_start());
+                        assert_eq!(ra.mapping_quality(), rb.mapping_quality());
+                        assert_eq!(ra.cigar(), rb.cigar());
+                        assert_eq!(ra.sequence(), rb.sequence());
+                        let (a, b) = (ra.quality_scores().as_ref(), rb.quality_scores().as_ref());
+                        assert_eq!(a.len(), b.len());
+                        if s == "auxiliary" {
+                            assert_eq!(a, b);
+                        }
+                    }
+                    if s == "auxiliary" {
+                        assert!(recs.iter().any(|r| r.data().get(b"zs").is_some()));
+                    }
+
+                    // Wrong password fails when encrypted.
+                    if !key.is_empty() {
+                        let h = SamBamHandler::new();
+                        let c = CarrierData::new(DataFormat::BAM, out);
+                        assert!(h
+                            .extract(&c, &params(None, b"wrong", ECLevel::None))
+                            .await
+                            .is_err());
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bam_compression_bgzf_explicit_is_default_and_bad_value_errors() {
+        let payload = b"explicit bgzf";
+        for input in [bam_fixture(40), sam_to_raw_bam(&sam_fixture(40))] {
+            for s in ["auxiliary", "quality"] {
+                let base = params(Some(s), b"", ECLevel::None);
+                let dflt = embed_extract(DataFormat::BAM, input.clone(), payload, &base).await;
+                let expl = embed_extract(
+                    DataFormat::BAM,
+                    input.clone(),
+                    payload,
+                    &with_compression(base.clone(), "bgzf"),
+                )
+                .await;
+                // Raw input with default settings still yields valid BGZF.
+                assert!(is_bgzf(&dflt) && dflt.ends_with(&BGZF_EOF), "{s}");
+                noodles_bam(&dflt);
+                // Unencrypted encoding is deterministic: byte-identical output.
+                assert_eq!(dflt, expl, "{s}: explicit bgzf == default");
+            }
+        }
+
+        let h = SamBamHandler::new();
+        for bad in [
+            serde_json::Value::String("gzip".into()),
+            serde_json::Value::String("BGZF".into()),
+            serde_json::Value::String(String::new()),
+            serde_json::Value::Bool(false),
+        ] {
+            let mut p = params(Some("auxiliary"), b"", ECLevel::None);
+            p.format_specific
+                .insert("bam_compression".into(), bad.clone());
+            let mut c = CarrierData::new(DataFormat::BAM, bam_fixture(10));
+            let before = c.raw_data.clone();
+            let e = h.embed(&mut c, b"x", &p).await;
+            assert!(matches!(e, Err(SteganoError::InvalidParameter(_))), "{bad}");
+            assert_eq!(c.raw_data, before, "carrier untouched on error");
         }
     }
 
@@ -1978,7 +2131,7 @@ mod tests {
         // Non-UTF-8 read-name bytes are kept verbatim.
         let named = with(&|d| d[rs + 4 + 32] = 0xff).unwrap();
         assert_eq!(named.records[0].data[32], 0xff);
-        let rewritten = bgzf_decompress(&named.serialize().unwrap()).unwrap();
+        let rewritten = bgzf_decompress(&named.serialize(BamCompression::Bgzf).unwrap()).unwrap();
         assert_eq!(rewritten[rs + 4 + 32], 0xff);
         // huge l_text / n_ref
         assert!(with(&|d| d[4..8].copy_from_slice(&[0xff; 4])).is_err());
