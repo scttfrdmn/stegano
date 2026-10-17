@@ -18,6 +18,7 @@
 //! |--------|------------|
 //! | [`DataFormat::FASTQ`] | quality-score LSB (`genomics_strategy` = `quality`, `conservative`, `balanced`, `aggressive`, or absent) |
 //! | [`DataFormat::VCF`] | `vcf_strategy` = `info` (or absent), `id`, `quality`; extraction also reads `format`/`multi` files |
+//! | [`DataFormat::SAM`], [`DataFormat::BAM`] | `sam_strategy` = `auxiliary` or `quality` (BAM: BGZF or raw `BAM\1` input; `bam_compression` = `bgzf` (default) or `none`); extraction also reads `optional`/`comment`/`multi` files |
 //!
 //! Anything else returns [`SteganoError::InvalidParameter`]
 //! (`"<format>/<strategy> is not streamable; use the in-memory API"`); use
@@ -57,6 +58,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 mod fastq;
+mod sam;
 mod vcf;
 
 /// I/O buffer size used by [`embed_file`] / [`extract_file`].
@@ -118,6 +120,8 @@ fn handler_for(format: &DataFormat) -> Option<&'static dyn StreamHandler> {
     match format {
         DataFormat::FASTQ => Some(&fastq::FastqStream),
         DataFormat::VCF => Some(&vcf::VcfStream),
+        DataFormat::SAM => Some(&sam::SAM_STREAM),
+        DataFormat::BAM => Some(&sam::BAM_STREAM),
         _ => None,
     }
 }

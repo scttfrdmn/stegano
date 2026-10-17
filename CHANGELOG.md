@@ -43,6 +43,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `format` (alias `sample`) and `multi` need the whole file and return `InvalidParameter` for
   streaming embed. Peak RSS was about 7 MB when embedding a 1.09 GB VCF; `bcftools view` accepts
   the output.
+- SAM/BAM streaming ([#76](https://github.com/scttfrdmn/stegano/issues/76), part of
+  [#30](https://github.com/scttfrdmn/stegano/issues/30)): `stegano::stream` now handles
+  `DataFormat::SAM` (line by line; header lines pass through) and `DataFormat::BAM` (BGZF block
+  by block, records parsed across block boundaries, or raw `BAM\1` input) with `sam_strategy` =
+  `auxiliary` or `quality`. BAM output is re-blocked like the in-memory compressor and ends with
+  the BGZF EOF block, or is written raw with `bam_compression` = `none`. For the same encoded
+  payload the output is byte-identical to `SamBamHandler`'s, and each API reads the other's
+  output. Streaming extraction also reads files written with the in-memory `optional`,
+  `comment` and `multi` strategies, and stops once the envelope is complete. `optional`,
+  `comment` and `multi` embedding need the whole file and return `InvalidParameter` for
+  streaming. The `sam_bam` internals the stream reuses are now crate-visible helpers; the
+  in-memory behaviour is unchanged. Embedding 16 KiB into a 2.16 GB BAM peaked at about
+  69 MiB RSS (mostly Argon2); extraction read only the first 256 KiB. `samtools quickcheck`
+  and `samtools view -c` accept the output.
 
 ### Fixed
 - WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not

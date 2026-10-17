@@ -330,11 +330,7 @@ fn test_unsupported_format_and_strategy() {
         &DataFormat::FASTQ,
         &params(b"", Some("bogus"))
     ));
-    for f in [
-        DataFormat::FASTA,
-        DataFormat::PNG,
-        DataFormat::SAM,
-    ] {
+    for f in [DataFormat::FASTA, DataFormat::PNG, DataFormat::DICOM] {
         assert!(!is_streamable(&f, &p));
         let err = embed_stream(f.clone(), Cursor::new(b""), Vec::new(), b"x", &p).unwrap_err();
         match err {
