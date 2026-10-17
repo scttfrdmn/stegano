@@ -19,7 +19,7 @@
 //! | [`DataFormat::FASTQ`] | quality-score LSB (`genomics_strategy` = `quality`, `conservative`, `balanced`, `aggressive`, or absent) |
 //! | [`DataFormat::VCF`] | `vcf_strategy` = `info` (or absent), `id`, `quality`; extraction also reads `format`/`multi` files |
 //! | [`DataFormat::SAM`], [`DataFormat::BAM`] | `sam_strategy` = `auxiliary` or `quality` (BAM: BGZF or raw `BAM\1` input; `bam_compression` = `bgzf` (default) or `none`); extraction also reads `optional`/`comment`/`multi` files |
-//! | [`DataFormat::CsvTimeseries`] | last-digit parity (`csv_strategy` = `digit` or absent; `csv_delimiter` honoured on embed and extract) |
+//! | [`DataFormat::CsvTimeseries`] | last-digit parity (`csv_strategy` = `digit` or absent; `csv_delimiter` honoured on embed and extract; `csv_min_significant_digits` on embed, read from the envelope on extract) |
 //! | [`DataFormat::TEXT`] | trailing whitespace, embed only with a fixed `text_bits_per_line` (the automatic choice needs the line count up front); extraction works for any `k` |
 //! | [`DataFormat::FITS`] | sample LSB of the first suitable image HDU (`fits_strategy` = `pixel_lsb` (or absent) or `float_mantissa`); other HDUs, headers and padding pass through |
 //! | [`DataFormat::WAV`] | time-domain LSB only (`signal_strategy` = `timedomain`, or `StealthLevel::Low` with no `signal_strategy`); `frequency`/`phase`/`spread`/`echo` are in-memory only (channel-major bit order, whole-carrier self-verification), and stream extraction of such a payload returns the "not streamable" error |
