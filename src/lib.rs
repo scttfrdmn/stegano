@@ -14,8 +14,8 @@
 //!   an Argon2id-derived key. **Without a password the payload is stored in
 //!   plaintext.**
 //! - **Error correction**: optional Reed-Solomon coding of the payload.
-//! - **Streaming**: [`stream`] processes large FASTQ, VCF and SAM/BAM files
-//!   in constant memory.
+//! - **Streaming**: [`stream`] processes large FASTQ, VCF, SAM/BAM, CSV,
+//!   text, FITS and WAV files in constant memory.
 //!
 //! Embedded payloads are detectable by steganalysis. See the threat model in
 //! `SECURITY.md` before relying on this crate.

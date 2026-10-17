@@ -52,8 +52,8 @@ that suite.
 | [SAM / BAM](#sam-and-bam) | `SAM`, `BAM` | `sam_strategy` | `optional`, `auxiliary`, `quality`, `comment`, `multi` | `auxiliary`, `quality` |
 | [PNG / TIFF](#png-and-tiff) | `PNG`, `TIFF`, `MICROSCOPY` | `imagery_strategy` | from stealth; `lsb`, `adaptive`, `edge`, `dct` | no |
 | [DICOM](#dicom) | `DICOM` | `dicom_strategy` | `private`, `metadata`, `sequence`, `pixel_lsb`, `multi` | no |
-| [FITS](#fits) | `FITS` | `fits_strategy` | `pixel_lsb`, `float_mantissa` | no |
-| [WAV](#wav) | `WAV` | `signal_strategy` | from stealth; `timedomain`, `frequency`, `phase`, `spread`, `echo` | no |
+| [FITS](#fits) | `FITS` | `fits_strategy` | `pixel_lsb`, `float_mantissa` | yes, all |
+| [WAV](#wav) | `WAV` | `signal_strategy` | from stealth; `timedomain`, `frequency`, `phase`, `spread`, `echo` | `timedomain` |
 | [Raw signals](#raw-signals) | `BinarySignal` | `signal_strategy` | as WAV | no |
 | [CSV](#csv) | `CsvTimeseries` | `csv_strategy` | `digit` (last-digit parity of numeric cells) | yes |
 | [Plain text](#plain-text) | `TEXT` | `text_strategy` | `whitespace` (trailing spaces/tabs) | with a fixed `text_bits_per_line` |
@@ -298,7 +298,14 @@ data, and pixel-LSB statistics apply.
 untouched other HDUs and unchanged file size, on a multi-HDU int16 file
 (default strategy).
 
-**Streaming:** no.
+**Streaming:** yes, both strategies (`stream::fits`). Header blocks are read
+one 2880-byte block at a time and copied through; other HDUs, padding and
+trailing bytes are copied through; the target HDU's data is processed in
+180 KiB chunks. Output is byte-identical to the in-memory handler's.
+Extraction stops at the end of the payload. It takes the first integer or
+float image HDU (in file order) with a matching header, where the in-memory
+extractor prefers the integer HDU; the two differ only for a file with a
+payload in both.
 
 ## WAV
 
@@ -340,7 +347,17 @@ pure tones and on silence.
 channels, sample width, rate and subtype unchanged) on 16-bit mono, 16-bit
 stereo and 24-bit stereo files, all strategies.
 
-**Streaming:** no.
+**Streaming:** `timedomain` only (`stream::wav`). Chunks other than `data`
+are copied through, and the RIFF and chunk size fields stay valid because the
+file length does not change. `data` is processed in 256 KiB frame-aligned
+buffers, byte-identical to the in-memory handler. `frequency` and `phase`
+work per 1024-frame chunk, but their bit order is channel-major (all of
+channel 0, then channel 1), so a single pass cannot place the bits for
+multichannel audio. `spread` and `echo` have the same order and also
+self-verify against the whole quantised output before writing anything.
+These four are in-memory only. Stream extraction of a non-`timedomain`
+payload returns the "not streamable" error and the CLI falls back to the
+in-memory path. A `data` chunk before `fmt ` is in-memory only too.
 
 ## Raw signals
 
@@ -484,11 +501,13 @@ the bindings read the file into memory.
 | BAM (BGZF or raw `BAM\1` input; `bam_compression` honoured) | `auxiliary`, `quality` | yes, any strategy |
 | CSV (`csv_delimiter` honoured) | yes | yes |
 | Text | only with a fixed `text_bits_per_line` | yes, any `k` |
-| FASTA, PNG, TIFF, DICOM, FITS, WAV, raw signals, binary | no | no |
+| FITS | `pixel_lsb`, `float_mantissa` | yes, either strategy |
+| WAV | `timedomain` only | `timedomain` payloads; others return the "not streamable" error (the CLI falls back to in-memory) |
+| FASTA, PNG, TIFF, DICOM, raw signals, binary | no | no |
 
-Memory use is bounded by one record (FASTQ, VCF, SAM), one line (CSV, text)
-or one BGZF block plus
-the largest record (BAM), plus the encoded payload and Argon2id's 64 MiB.
+Memory use is bounded by one record (FASTQ, VCF, SAM), one line (CSV, text),
+one BGZF block plus the largest record (BAM), or one header block or
+180 KiB data chunk (FITS) or 256 KiB of frames (WAV), plus the encoded payload and Argon2id's 64 MiB.
 CHANGELOG 0.7.0 reports about 70 MB peak RSS when embedding into or
 extracting from 1–2 GB FASTQ, VCF and BAM files. Extraction stops reading once
 the payload frame is complete. Streaming output is byte-identical to the

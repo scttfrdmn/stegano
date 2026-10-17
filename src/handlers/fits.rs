@@ -52,22 +52,22 @@
 use super::DataHandler;
 use crate::codec;
 use crate::core::*;
+use crate::time::Instant;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::time::Instant;
 
 /// FITS block size in bytes.
-const BLOCK: usize = 2880;
+pub(crate) const BLOCK: usize = 2880;
 /// FITS header card size in bytes.
 const CARD: usize = 80;
 /// Steganographic header magic.
-const MAGIC: &[u8; 4] = b"FTSJ";
+pub(crate) const MAGIC: &[u8; 4] = b"FTSJ";
 /// Steganographic header version (matches codec wire format v2).
-const FORMAT_VERSION: u8 = 2;
+pub(crate) const FORMAT_VERSION: u8 = 2;
 /// Steganographic header length in bytes.
-const HEADER_LEN: usize = 10;
+pub(crate) const HEADER_LEN: usize = 10;
 /// Steganographic header length in carrier bits.
-const HEADER_BITS: usize = HEADER_LEN * 8;
+pub(crate) const HEADER_BITS: usize = HEADER_LEN * 8;
 /// Maximum `NAXIS` allowed by the FITS standard.
 const MAX_NAXIS: i64 = 999;
 /// `format_specific` key selecting the strategy.
@@ -78,7 +78,7 @@ pub struct FitsHandler;
 
 /// Embedding strategy (stored as the strategy byte of the header).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FitsStrategy {
+pub(crate) enum FitsStrategy {
     /// LSB of integer samples (BITPIX 8/16/32/64).
     PixelLsb = 0,
     /// Mantissa LSB of finite float samples (BITPIX -32/-64).
@@ -86,9 +86,9 @@ enum FitsStrategy {
 }
 
 impl FitsStrategy {
-    const ALL: [FitsStrategy; 2] = [FitsStrategy::PixelLsb, FitsStrategy::FloatMantissa];
+    pub(crate) const ALL: [FitsStrategy; 2] = [FitsStrategy::PixelLsb, FitsStrategy::FloatMantissa];
 
-    fn to_u8(self) -> u8 {
+    pub(crate) fn to_u8(self) -> u8 {
         self as u8
     }
 
@@ -109,158 +109,40 @@ impl FitsStrategy {
 
 /// One parsed Header-Data Unit.
 #[derive(Debug, Clone)]
-struct Hdu {
+pub(crate) struct Hdu {
     /// Offset of the first data byte (just past the header blocks).
-    data_start: usize,
-    /// End of the data unit including padding, clamped to the file length.
-    next_start: usize,
-    bitpix: i64,
+    pub(crate) data_start: usize,
+    /// End of the data unit including padding (the in-memory parser clamps
+    /// it to the file length).
+    pub(crate) next_start: usize,
+    /// Length of the data unit in bytes, excluding padding.
+    pub(crate) data_len: usize,
+    pub(crate) bitpix: i64,
     /// Number of samples in the pixel array (product of the NAXISn).
-    pixels: usize,
+    pub(crate) pixels: usize,
     pcount: i64,
     gcount: i64,
     /// Primary HDU (not random groups) or `XTENSION = 'IMAGE'`.
     is_image: bool,
     /// `BLANK` value (integer images only).
-    blank: Option<i64>,
+    pub(crate) blank: Option<i64>,
 }
 
 impl Hdu {
-    fn width(&self) -> usize {
+    pub(crate) fn width(&self) -> usize {
         // BITPIX is validated to be one of ±8, 16, 32, 64.
         (self.bitpix.unsigned_abs() / 8) as usize
     }
 
-    fn is_target(&self, strategy: FitsStrategy) -> bool {
-        self.is_image
-            && self.pixels > 0
-            && self.pcount == 0
-            && self.gcount == 1
-            && strategy.accepts(self.bitpix)
-    }
-}
-
-fn malformed(msg: impl std::fmt::Display) -> SteganoError {
-    SteganoError::InvalidParameter(format!("Malformed FITS file: {msg}"))
-}
-
-/// Parse the value field (columns 11-80) of a card: a quoted string is
-/// unquoted (with `''` → `'`), otherwise the text before any `/` comment.
-fn card_value(field: &str) -> String {
-    let s = field.trim_start();
-    if let Some(rest) = s.strip_prefix('\'') {
-        let mut out = String::new();
-        let mut chars = rest.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\'' {
-                if chars.peek() == Some(&'\'') {
-                    chars.next();
-                    out.push('\'');
-                } else {
-                    break;
-                }
-            } else {
-                out.push(c);
-            }
-        }
-        out.trim_end().to_string()
-    } else {
-        s.split('/').next().unwrap_or("").trim().to_string()
-    }
-}
-
-/// Parsed keyword/value pairs of one header (first occurrence wins).
-struct Cards {
-    first_keyword: String,
-    values: HashMap<String, String>,
-}
-
-impl Cards {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.values.get(key).map(String::as_str)
-    }
-
-    fn int(&self, key: &str) -> Result<Option<i64>> {
-        match self.get(key) {
-            None => Ok(None),
-            Some(v) => v
-                .parse::<i64>()
-                .map(Some)
-                .map_err(|_| malformed(format!("{key} value {v:?} is not an integer"))),
-        }
-    }
-
-    fn required_int(&self, key: &str) -> Result<i64> {
-        self.int(key)?
-            .ok_or_else(|| malformed(format!("missing required keyword {key}")))
-    }
-}
-
-impl FitsHandler {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Check FITS magic: first 8 bytes must be `SIMPLE  `.
-    fn is_fits(data: &[u8]) -> bool {
-        data.len() >= 8 && &data[..8] == b"SIMPLE  "
-    }
-
-    /// Read the header blocks starting at `start`. Returns the cards and the
-    /// offset just past the last header block.
-    fn read_cards(data: &[u8], start: usize) -> Result<(Cards, usize)> {
-        let mut values = HashMap::new();
-        let mut first_keyword = None;
-        let mut pos = start;
-        loop {
-            let block_end = pos
-                .checked_add(BLOCK)
-                .filter(|&e| e <= data.len())
-                .ok_or_else(|| malformed(format!("truncated header at offset {pos}")))?;
-            let mut found_end = false;
-            for card in data[pos..block_end].as_chunks::<CARD>().0 {
-                if !card.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
-                    return Err(malformed(format!(
-                        "non-ASCII header card in header at offset {start}"
-                    )));
-                }
-                // Checked ASCII above, so this cannot fail.
-                let text = std::str::from_utf8(card).map_err(malformed)?;
-                let keyword = text[..8].trim_end();
-                if first_keyword.is_none() {
-                    first_keyword = Some(keyword.to_string());
-                }
-                if keyword == "END" {
-                    if !text[8..].bytes().all(|b| b == b' ') {
-                        return Err(malformed("END card is not blank-padded"));
-                    }
-                    found_end = true;
-                    break;
-                }
-                if &text[8..10] == "= " && !keyword.is_empty() {
-                    values
-                        .entry(keyword.to_string())
-                        .or_insert_with(|| card_value(&text[10..]));
-                }
-            }
-            pos = block_end;
-            if found_end {
-                let first_keyword = first_keyword.unwrap_or_default();
-                return Ok((
-                    Cards {
-                        first_keyword,
-                        values,
-                    },
-                    pos,
-                ));
-            }
-        }
-    }
-
-    /// Parse one HDU whose header starts at `start`.
-    fn parse_hdu(data: &[u8], start: usize, primary: bool) -> Result<Hdu> {
-        let (cards, data_start) = Self::read_cards(data, start)?;
-
+    /// Build the HDU described by `cards` (header at offset `start`, data at
+    /// `data_start`).  `next_start` is the unclamped end of the padded data
+    /// unit; the caller checks the data against the file length.
+    pub(crate) fn from_cards(
+        cards: &Cards,
+        start: usize,
+        data_start: usize,
+        primary: bool,
+    ) -> Result<Hdu> {
         let mut random_groups = false;
         let is_image = if primary {
             if cards.first_keyword != "SIMPLE" || cards.get("SIMPLE") != Some("T") {
@@ -326,22 +208,15 @@ impl FitsHandler {
             .ok_or_else(overflow)?;
         let data_len = usize::try_from(data_len).map_err(|_| overflow())?;
         let pixels = usize::try_from(pixels).map_err(|_| overflow())?;
-
-        let data_end = data_start.checked_add(data_len).ok_or_else(overflow)?;
-        if data_end > data.len() {
-            return Err(malformed(format!(
-                "data unit at offset {data_start} declares {data_len} bytes but only {} remain",
-                data.len() - data_start
-            )));
-        }
-        let padded = data_len
+        let next_start = data_len
             .checked_next_multiple_of(BLOCK)
             .and_then(|p| data_start.checked_add(p))
             .ok_or_else(overflow)?;
 
         Ok(Hdu {
             data_start,
-            next_start: padded.min(data.len()),
+            next_start,
+            data_len,
             bitpix,
             pixels,
             pcount,
@@ -349,6 +224,189 @@ impl FitsHandler {
             is_image,
             blank,
         })
+    }
+
+    pub(crate) fn is_target(&self, strategy: FitsStrategy) -> bool {
+        self.is_image
+            && self.pixels > 0
+            && self.pcount == 0
+            && self.gcount == 1
+            && strategy.accepts(self.bitpix)
+    }
+}
+
+pub(crate) fn malformed(msg: impl std::fmt::Display) -> SteganoError {
+    SteganoError::InvalidParameter(format!("Malformed FITS file: {msg}"))
+}
+
+/// Parse the value field (columns 11-80) of a card: a quoted string is
+/// unquoted (with `''` → `'`), otherwise the text before any `/` comment.
+fn card_value(field: &str) -> String {
+    let s = field.trim_start();
+    if let Some(rest) = s.strip_prefix('\'') {
+        let mut out = String::new();
+        let mut chars = rest.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\'' {
+                if chars.peek() == Some(&'\'') {
+                    chars.next();
+                    out.push('\'');
+                } else {
+                    break;
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out.trim_end().to_string()
+    } else {
+        s.split('/').next().unwrap_or("").trim().to_string()
+    }
+}
+
+/// Parsed keyword/value pairs of one header (first occurrence wins).
+pub(crate) struct Cards {
+    first_keyword: String,
+    values: HashMap<String, String>,
+}
+
+impl Cards {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.values.get(key).map(String::as_str)
+    }
+
+    fn int(&self, key: &str) -> Result<Option<i64>> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(v) => v
+                .parse::<i64>()
+                .map(Some)
+                .map_err(|_| malformed(format!("{key} value {v:?} is not an integer"))),
+        }
+    }
+
+    fn required_int(&self, key: &str) -> Result<i64> {
+        self.int(key)?
+            .ok_or_else(|| malformed(format!("missing required keyword {key}")))
+    }
+}
+
+/// Incremental header parser: feed it one 2880-byte block at a time.
+pub(crate) struct CardReader {
+    start: usize,
+    values: HashMap<String, String>,
+    first_keyword: Option<String>,
+}
+
+impl CardReader {
+    /// Parser for the header starting at file offset `start`.
+    pub(crate) fn new(start: usize) -> Self {
+        Self {
+            start,
+            values: HashMap::new(),
+            first_keyword: None,
+        }
+    }
+
+    /// Parse one header block.  Returns `Ok(true)` if it contains the `END`
+    /// card (the header is then complete).
+    pub(crate) fn feed(&mut self, block: &[u8]) -> Result<bool> {
+        debug_assert_eq!(block.len(), BLOCK);
+        for card in block.as_chunks::<CARD>().0 {
+            if !card.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
+                return Err(malformed(format!(
+                    "non-ASCII header card in header at offset {}",
+                    self.start
+                )));
+            }
+            // Checked ASCII above, so this cannot fail.
+            let text = std::str::from_utf8(card).map_err(malformed)?;
+            let keyword = text[..8].trim_end();
+            if self.first_keyword.is_none() {
+                self.first_keyword = Some(keyword.to_string());
+            }
+            if keyword == "END" {
+                if !text[8..].bytes().all(|b| b == b' ') {
+                    return Err(malformed("END card is not blank-padded"));
+                }
+                return Ok(true);
+            }
+            if &text[8..10] == "= " && !keyword.is_empty() {
+                self.values
+                    .entry(keyword.to_string())
+                    .or_insert_with(|| card_value(&text[10..]));
+            }
+        }
+        Ok(false)
+    }
+
+    /// The parsed cards.
+    pub(crate) fn finish(self) -> Cards {
+        Cards {
+            first_keyword: self.first_keyword.unwrap_or_default(),
+            values: self.values,
+        }
+    }
+}
+
+/// Build the bit stream `FTSJ ‖ len u32 LE ‖ strategy ‖ version ‖ encoded`.
+pub(crate) fn build_stream(strategy: FitsStrategy, encoded: &[u8]) -> Result<Vec<u8>> {
+    let len_u32 = u32::try_from(encoded.len()).map_err(|_| {
+        SteganoError::InvalidParameter("payload too large for FITS header".to_string())
+    })?;
+    let mut stream = Vec::with_capacity(HEADER_LEN + encoded.len());
+    stream.extend_from_slice(MAGIC);
+    stream.extend_from_slice(&len_u32.to_le_bytes());
+    stream.push(strategy.to_u8());
+    stream.push(FORMAT_VERSION);
+    stream.extend_from_slice(encoded);
+    Ok(stream)
+}
+
+impl FitsHandler {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Check FITS magic: first 8 bytes must be `SIMPLE  `.
+    pub(crate) fn is_fits(data: &[u8]) -> bool {
+        data.len() >= 8 && &data[..8] == b"SIMPLE  "
+    }
+
+    /// Read the header blocks starting at `start`. Returns the cards and the
+    /// offset just past the last header block.
+    fn read_cards(data: &[u8], start: usize) -> Result<(Cards, usize)> {
+        let mut reader = CardReader::new(start);
+        let mut pos = start;
+        loop {
+            let block_end = pos
+                .checked_add(BLOCK)
+                .filter(|&e| e <= data.len())
+                .ok_or_else(|| malformed(format!("truncated header at offset {pos}")))?;
+            let found_end = reader.feed(&data[pos..block_end])?;
+            pos = block_end;
+            if found_end {
+                return Ok((reader.finish(), pos));
+            }
+        }
+    }
+
+    /// Parse one HDU whose header starts at `start`.
+    fn parse_hdu(data: &[u8], start: usize, primary: bool) -> Result<Hdu> {
+        let (cards, data_start) = Self::read_cards(data, start)?;
+        let mut hdu = Hdu::from_cards(&cards, start, data_start, primary)?;
+        let data_end = data_start
+            .checked_add(hdu.data_len)
+            .ok_or_else(|| malformed("data size overflows"))?;
+        if data_end > data.len() {
+            return Err(malformed(format!(
+                "data unit at offset {data_start} declares {} bytes but only {} remain",
+                hdu.data_len,
+                data.len() - data_start
+            )));
+        }
+        hdu.next_start = hdu.next_start.min(data.len());
+        Ok(hdu)
     }
 
     /// Parse and walk every HDU in the file.
@@ -366,7 +424,7 @@ impl FitsHandler {
         Ok(hdus)
     }
 
-    fn select_strategy(params: &EmbedParams) -> Result<FitsStrategy> {
+    pub(crate) fn select_strategy(params: &EmbedParams) -> Result<FitsStrategy> {
         match params.format_specific.get(STRATEGY_KEY) {
             None => Ok(FitsStrategy::PixelLsb),
             Some(v) => match v.as_str() {
@@ -388,14 +446,20 @@ impl FitsHandler {
         if let Some(h) = Self::target(hdus, strategy) {
             return Ok(h);
         }
-        Err(SteganoError::InvalidParameter(match strategy {
-            FitsStrategy::PixelLsb => match Self::target(hdus, FitsStrategy::FloatMantissa) {
-                Some(f) => format!(
-                    "FITS image data is floating point (BITPIX = {}); flipping raw byte LSBs \
-                     would corrupt it. Set format_specific[\"{STRATEGY_KEY}\"] = \
+        let float_bitpix = Self::target(hdus, FitsStrategy::FloatMantissa).map(|f| f.bitpix);
+        Err(Self::no_target(strategy, float_bitpix))
+    }
+
+    /// The error for a file without a target HDU for `strategy`;
+    /// `float_bitpix` is the BITPIX of the first float image HDU, if any.
+    pub(crate) fn no_target(strategy: FitsStrategy, float_bitpix: Option<i64>) -> SteganoError {
+        SteganoError::InvalidParameter(match strategy {
+            FitsStrategy::PixelLsb => match float_bitpix {
+                Some(bitpix) => format!(
+                    "FITS image data is floating point (BITPIX = {bitpix}); flipping raw byte \
+                     LSBs would corrupt it. Set format_specific[\"{STRATEGY_KEY}\"] = \
                      \"float_mantissa\" (CLI: --strategy float_mantissa) to embed in mantissa \
-                     LSBs (this alters scientific data)",
-                    f.bitpix
+                     LSBs (this alters scientific data)"
                 ),
                 None => "FITS file has no integer image HDU with pixel data".to_string(),
             },
@@ -404,11 +468,11 @@ impl FitsHandler {
                  (use the default pixel_lsb strategy for integer images)"
                     .to_string()
             }
-        }))
+        })
     }
 
     /// Whether a sample (big-endian bytes) may carry a bit.
-    fn usable(sample: &[u8], bitpix: i64, blank: Option<i64>) -> bool {
+    pub(crate) fn usable(sample: &[u8], bitpix: i64, blank: Option<i64>) -> bool {
         match bitpix {
             // Exponent all ones => NaN or Inf.
             -32 => !(sample[0] & 0x7F == 0x7F && sample[1] & 0x80 == 0x80),
@@ -480,6 +544,48 @@ impl FitsHandler {
         Some(Ok(
             u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize,
         ))
+    }
+
+    /// Write the header and the already codec-encoded `encoded` bytes into
+    /// `hdu`.  Returns the bit-stream length in bytes and in bits.
+    fn embed_in_hdu(
+        data: &mut [u8],
+        hdu: &Hdu,
+        strategy: FitsStrategy,
+        encoded: &[u8],
+    ) -> Result<(usize, usize)> {
+        let available = Self::capacity_bits(data, hdu);
+        let stream = build_stream(strategy, encoded)?;
+        let needed = stream
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| SteganoError::InvalidParameter("payload too large".to_string()))?;
+        if needed > available {
+            return Err(SteganoError::InsufficientCapacity { needed, available });
+        }
+
+        let positions: Vec<usize> = Self::slots(data, hdu).take(needed).collect();
+        let bits = stream
+            .iter()
+            .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1));
+        for (pos, bit) in positions.into_iter().zip(bits) {
+            data[pos] = (data[pos] & 0xFE) | bit;
+        }
+        Ok((stream.len(), needed))
+    }
+
+    /// In-memory embed of already codec-encoded bytes (the stream tests
+    /// compare this with the stream handler byte for byte).
+    #[cfg(test)]
+    pub(crate) fn embed_encoded(
+        data: &mut [u8],
+        encoded: &[u8],
+        params: &EmbedParams,
+    ) -> Result<()> {
+        let strategy = Self::select_strategy(params)?;
+        let hdus = Self::parse_hdus(data)?;
+        let hdu = Self::require_target(&hdus, strategy)?;
+        Self::embed_in_hdu(data, hdu, strategy, encoded).map(drop)
     }
 
     fn extract_with_strategy(
@@ -567,7 +673,6 @@ impl DataHandler for FitsHandler {
         let strategy = Self::select_strategy(params)?;
         let hdus = Self::parse_hdus(&carrier.raw_data)?;
         let hdu = Self::require_target(&hdus, strategy)?;
-        let available = Self::capacity_bits(&carrier.raw_data, hdu);
 
         let enc_start = Instant::now();
         let encoded = codec::encode_payload(payload, params)?;
@@ -576,32 +681,8 @@ impl DataHandler for FitsHandler {
         } else {
             (enc_start.elapsed().as_millis() as u64).max(1)
         };
-        let len_u32 = u32::try_from(encoded.len()).map_err(|_| {
-            SteganoError::InvalidParameter("payload too large for FITS header".to_string())
-        })?;
-
-        let mut stream = Vec::with_capacity(HEADER_LEN + encoded.len());
-        stream.extend_from_slice(MAGIC);
-        stream.extend_from_slice(&len_u32.to_le_bytes());
-        stream.push(strategy.to_u8());
-        stream.push(FORMAT_VERSION);
-        stream.extend_from_slice(&encoded);
-
-        let needed = stream
-            .len()
-            .checked_mul(8)
-            .ok_or_else(|| SteganoError::InvalidParameter("payload too large".to_string()))?;
-        if needed > available {
-            return Err(SteganoError::InsufficientCapacity { needed, available });
-        }
-
-        let positions: Vec<usize> = Self::slots(&carrier.raw_data, hdu).take(needed).collect();
-        let bits = stream
-            .iter()
-            .flat_map(|&byte| (0..8).map(move |i| (byte >> i) & 1));
-        for (pos, bit) in positions.into_iter().zip(bits) {
-            carrier.raw_data[pos] = (carrier.raw_data[pos] & 0xFE) | bit;
-        }
+        let (stream_len, needed) =
+            Self::embed_in_hdu(&mut carrier.raw_data, hdu, strategy, &encoded)?;
 
         Ok(EmbedResult::success(
             payload.len(),
@@ -609,7 +690,7 @@ impl DataHandler for FitsHandler {
                 embedding_time_ms: start.elapsed().as_millis() as u64,
                 encryption_time_ms,
                 gpu_acceleration_used: false,
-                memory_usage_bytes: stream.len() + needed * std::mem::size_of::<usize>(),
+                memory_usage_bytes: stream_len + needed * std::mem::size_of::<usize>(),
             },
         ))
     }
@@ -639,21 +720,21 @@ impl DataHandler for FitsHandler {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // ---- FITS builders ----
 
-    fn card(s: &str) -> String {
+    pub(crate) fn card(s: &str) -> String {
         assert!(s.len() <= CARD, "card too long: {s}");
         format!("{s:<80}")
     }
 
-    fn int_card(key: &str, v: impl std::fmt::Display) -> String {
+    pub(crate) fn int_card(key: &str, v: impl std::fmt::Display) -> String {
         card(&format!("{key:<8}= {v:>20}"))
     }
 
-    fn header(cards: &[String]) -> Vec<u8> {
+    pub(crate) fn header(cards: &[String]) -> Vec<u8> {
         let mut h: Vec<u8> = cards.iter().flat_map(|c| c.bytes()).collect();
         h.extend_from_slice(card("END").as_bytes());
         while !h.len().is_multiple_of(BLOCK) {
@@ -662,7 +743,7 @@ mod tests {
         h
     }
 
-    fn axis_cards(bitpix: i64, axes: &[usize]) -> Vec<String> {
+    pub(crate) fn axis_cards(bitpix: i64, axes: &[usize]) -> Vec<String> {
         let mut c = vec![int_card("BITPIX", bitpix), int_card("NAXIS", axes.len())];
         for (i, a) in axes.iter().enumerate() {
             c.push(int_card(&format!("NAXIS{}", i + 1), a));
@@ -670,7 +751,7 @@ mod tests {
         c
     }
 
-    fn primary_header(bitpix: i64, axes: &[usize], extra: &[String]) -> Vec<u8> {
+    pub(crate) fn primary_header(bitpix: i64, axes: &[usize], extra: &[String]) -> Vec<u8> {
         let mut c = vec![card(
             "SIMPLE  =                    T / conforms to FITS standard",
         )];
@@ -680,7 +761,7 @@ mod tests {
         header(&c)
     }
 
-    fn ext_header(xtension: &str, bitpix: i64, axes: &[usize], extra: &[String]) -> Vec<u8> {
+    pub(crate) fn ext_header(xtension: &str, bitpix: i64, axes: &[usize], extra: &[String]) -> Vec<u8> {
         let mut c = vec![card(&format!(
             "XTENSION= '{xtension:<8}'           / extension"
         ))];
@@ -691,7 +772,7 @@ mod tests {
         header(&c)
     }
 
-    fn padded(mut v: Vec<u8>) -> Vec<u8> {
+    pub(crate) fn padded(mut v: Vec<u8>) -> Vec<u8> {
         while !v.len().is_multiple_of(BLOCK) {
             v.push(0);
         }
@@ -699,7 +780,7 @@ mod tests {
     }
 
     /// Deterministic pseudo-random big-endian integer samples.
-    fn int_data(bitpix: i64, n: usize) -> Vec<u8> {
+    pub(crate) fn int_data(bitpix: i64, n: usize) -> Vec<u8> {
         let w = (bitpix / 8) as usize;
         let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut out = Vec::with_capacity(n * w);
@@ -713,7 +794,7 @@ mod tests {
     }
 
     /// Float samples, with NaN and ±Inf at every 7th position.
-    fn float_data(bitpix: i64, n: usize) -> Vec<u8> {
+    pub(crate) fn float_data(bitpix: i64, n: usize) -> Vec<u8> {
         let mut out = Vec::new();
         for i in 0..n {
             let v = match i % 7 {
@@ -761,7 +842,7 @@ mod tests {
     }
 
     /// Single primary image HDU.
-    fn simple_image(bitpix: i64, axes: &[usize], data: Vec<u8>) -> (Vec<u8>, usize) {
+    pub(crate) fn simple_image(bitpix: i64, axes: &[usize], data: Vec<u8>) -> (Vec<u8>, usize) {
         let mut f = primary_header(bitpix, axes, &[]);
         let start = f.len();
         f.extend(padded(data));
@@ -770,7 +851,7 @@ mod tests {
 
     /// Primary NAXIS=0, 16-bit IMAGE extension, BINTABLE extension.
     /// Returns (file, image data start, image data len).
-    fn multi_hdu() -> (Vec<u8>, usize, usize) {
+    pub(crate) fn multi_hdu() -> (Vec<u8>, usize, usize) {
         let mut f = primary_header(16, &[], &[card("OBJECT  = 'M31     '")]);
         f.extend(ext_header(
             "IMAGE",

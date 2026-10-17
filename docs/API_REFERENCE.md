@@ -216,8 +216,8 @@ assert!(!handler.verify_integrity(&carrier)?);
 
 ## Streaming (`stegano::stream`)
 
-Synchronous, bounded-memory embedding and extraction for FASTQ, VCF and
-SAM/BAM. The strategies that stream are listed in
+Synchronous, bounded-memory embedding and extraction for FASTQ, VCF,
+SAM/BAM, CSV, text, FITS and WAV (`timedomain`). The strategies that stream are listed in
 [FORMATS.md](FORMATS.md#streaming).
 
 | Function | |

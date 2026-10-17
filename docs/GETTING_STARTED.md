@@ -96,7 +96,7 @@ supply one, in this order of precedence:
 | `--strategy` | per format | Format-specific strategy. VCF: `info`, `quality`, `format`, `id`, `multi`. SAM/BAM: `optional`, `comment`, `quality`, `auxiliary`, `multi`. DICOM: `private`, `metadata`, `sequence`, `pixel_lsb`, `multi`. PNG/TIFF: `lsb`, `adaptive`, `edge`, `dct`. WAV: `timedomain`, `frequency`, `phase`, `spread`, `echo`. FASTQ: `conservative`, `balanced`, `aggressive`, `quality`. FASTA: `header`. FITS: `pixel_lsb`, `float_mantissa` (required for float data). Ignored (with a warning) for CSV, text and binary. |
 | `--cipher` | `aes256gcm` | `aes256gcm` or `chacha20`. Detected automatically on extract. |
 | `--validate` | off | Run the statistical checks described in [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md). Forces the in-memory path. |
-| `--no-stream` | off | Force the in-memory path. By default FASTQ, VCF (`info`, `id`, `quality`) and SAM/BAM (`auxiliary`, `quality`) are streamed with bounded memory. |
+| `--no-stream` | off | Force the in-memory path. By default FASTQ, VCF (`info`, `id`, `quality`), SAM/BAM (`auxiliary`, `quality`), CSV, text (fixed `text_bits_per_line`), FITS and WAV (`timedomain`) are streamed with bounded memory. |
 | `--gpu` | off | Sets `EmbedParams::use_gpu`. The embedding path does not use it. |
 
 `extract` takes `-i`, `-o`, the password options, `--ec-level`, `--strategy`,
@@ -166,8 +166,8 @@ can extract the other's output.
 
 ### Streaming API
 
-For FASTQ, VCF and SAM/BAM, `stegano::stream` processes the carrier one record
-at a time, so memory use does not grow with the file size. It is synchronous
+For FASTQ, VCF, SAM/BAM, CSV, text, FITS and WAV (`timedomain`),
+`stegano::stream` processes the carrier one record, line or block at a time, so memory use does not grow with the file size. It is synchronous
 and needs no async runtime.
 
 ```rust,no_run

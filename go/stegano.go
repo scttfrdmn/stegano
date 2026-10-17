@@ -572,7 +572,7 @@ func resolveFileFormat(path string, o options, op string) (Format, error) {
 
 // EmbedFile embeds payload into the carrier file inPath and writes the
 // result to outPath. There is no size limit on the carrier: streamable
-// formats and strategies (FASTQ, VCF info/id/quality, SAM/BAM auxiliary/quality) are streamed
+// formats and strategies (FASTQ, VCF info/id/quality, SAM/BAM auxiliary/quality, FITS, WAV timedomain, ...) are streamed
 // with constant memory, anything else is read into memory.
 //
 // outPath is written atomically (temporary file + rename), so on error it

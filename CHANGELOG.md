@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- FITS and WAV streaming ([#80](https://github.com/scttfrdmn/stegano/issues/80)).
+  `stegano::stream`, the CLI, `stegano_embed_file` and the bindings now process large
+  astronomy and audio files with bounded memory. The output is byte-identical to the
+  in-memory handlers' output for the same encoded payload, and each path reads the other's files.
+  - **FITS** (`stream::fits`, both `fits_strategy` values, `pixel_lsb` and `float_mantissa`):
+    headers are read one 2880-byte block at a time, parsed and validated with the same code as
+    the in-memory handler, and copied through. The target HDU's data is processed in 180 KiB
+    chunks (`BLANK`, NaN and Inf samples are skipped as before). Other HDUs, padding and trailing
+    bytes are copied unchanged.
+  - **WAV** (`stream::wav`, `signal_strategy = "timedomain"` or `--stealth low` only): non-`data`
+    chunks (`LIST` before or after the data, etc.) are copied through. The RIFF and chunk size
+    fields stay valid because the file length does not change. Samples are processed in 256 KiB
+    frame-aligned buffers, with the same PCM 8/16/24/32, extensible and float rules as in memory.
+    `frequency` and `phase` are not streamable: they use channel-major bit order across 1024-frame
+    FFT chunks, which a single pass cannot reproduce for multichannel audio. `spread` and `echo`
+    have the same order and also self-verify against the whole quantised output. Stream
+    extraction of a non-`timedomain` WAV payload returns the "not streamable" error, so the CLI
+    falls back to in-memory extraction.
+  - Measured with the release CLI on a 1.07 GB three-HDU FITS (empty primary, int16 IMAGE,
+    BINTABLE) and a 1.5 GB 16-bit stereo WAV with `LIST` chunks before and after `data`, with a
+    password: about 71 MB peak RSS for embed and extract (mostly Argon2id). Extraction read
+    256 KiB (FITS) and 512 KiB (WAV). The outputs pass astropy `verify('exception')` and open
+    in `wave`/soundfile with unchanged parameters.
+
 ### Fixed
 - `ValidationReport::overall_score` is now computed, so `stegano embed --validate` no longer
   always prints "Overall Score: 0/10" ([#96](https://github.com/scttfrdmn/stegano/issues/96)).

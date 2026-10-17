@@ -82,14 +82,15 @@ APIs (CLI `embed`/`extract`, `stegano::stream`, `stegano_embed_file`, Go
 | SAM, BAM | `sam_strategy` | `optional`, `auxiliary`, `quality`, `comment`, `multi`; BAM output also takes `bam_compression` = `bgzf` (default) or `none` | `auxiliary`, `quality` |
 | DICOM | `dicom_strategy` | `private`, `metadata`, `sequence`, `pixel_lsb`, `multi` | no |
 | PNG, TIFF | `imagery_strategy` | from stealth level, or `lsb`, `adaptive`, `edge`, `dct` | no |
-| WAV | `signal_strategy` | from stealth level, or `timedomain`, `frequency`, `phase`, `spread`, `echo` | no |
-| FITS | `fits_strategy` | `pixel_lsb` (integer data), `float_mantissa` (opt-in, float data) | no |
+| WAV | `signal_strategy` | from stealth level, or `timedomain`, `frequency`, `phase`, `spread`, `echo` | `timedomain` (or `--stealth low`) |
+| FITS | `fits_strategy` | `pixel_lsb` (integer data), `float_mantissa` (opt-in, float data) | yes |
 | CSV | `csv_strategy` | `digit` (parity of the last digit of each unquoted numeric cell; header and text cells untouched; `csv_delimiter` sets the delimiter) | yes |
 | Text | `text_strategy` | `whitespace` (k trailing spaces/tabs per line, k = 1..64 chosen automatically or set with `text_bits_per_line`) | with a fixed `text_bits_per_line` |
 | Binary | none | LSB of every byte | no |
 
 Streaming extraction reads any streamable format, whatever strategy the
-payload was embedded with. Without a strategy, PNG/TIFF, WAV and FASTQ choose
+payload was embedded with (WAV: `timedomain` payloads only; the CLI falls
+back to the in-memory path for the others). Without a strategy, PNG/TIFF, WAV and FASTQ choose
 one from the stealth level (`--stealth`, default `high`). For float FITS
 data, pass `--strategy float_mantissa` (or `fits_strategy` through the library
 or a binding). For channel layouts and capacity formulas, see [docs/FORMATS.md](docs/FORMATS.md).
@@ -186,8 +187,9 @@ status `2` is reserved for usage errors.
 the strategy are streamable (see the table above), the file is processed in
 constant memory and is never read whole. The output goes to a temporary file
 that is renamed into place only on success. `extract` streams any streamable
-format, whatever strategy the payload was embedded with, and stops as soon as
-the payload is complete. Everything else, and `--validate`, uses the
+format, whatever strategy the payload was embedded with (except WAV, where
+only `timedomain` payloads stream and the others fall back to the in-memory
+path), and stops as soon as the payload is complete. Everything else, and `--validate`, uses the
 in-memory path. `--no-stream` forces the in-memory path. Both paths produce
 interchangeable files, and the command prints which one it used.
 
