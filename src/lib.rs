@@ -1,16 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-//! # Scientific Data Steganography System
+//! # Stegano: steganography for scientific data files
 //!
-//! A high-performance, multi-format steganography library designed specifically for protecting
-//! scientific data including genomics, imagery, and signal data.
+//! Embeds a payload in scientific data files while keeping them valid for the
+//! standard tools of each format.
 //!
 //! ## Overview
 //!
-//! Stegano provides enterprise-grade steganographic embedding capabilities with advanced features:
+//! - **Formats**: FASTA, FASTQ, VCF, SAM and BAM (genomics); PNG, TIFF and
+//!   DICOM (imaging; `MICROSCOPY` is handled as PNG/TIFF); WAV, raw 16-bit
+//!   signals and CSV time series (signals); FITS (astronomy); generic
+//!   binary and text.
+//! - **Encryption**: with a password, AES-256-GCM or ChaCha20-Poly1305 with
+//!   an Argon2id-derived key. **Without a password the payload is stored in
+//!   plaintext.**
+//! - **Error correction**: optional Reed-Solomon coding of the payload.
+//! - **Streaming**: [`stream`] processes large FASTQ, VCF and SAM/BAM files
+//!   in constant memory.
 //!
-//! - **Multi-Format Support**: Specialized handlers for FASTA/FASTQ genomics data, TIFF/PNG imagery, and WAV/binary signals
-//! - **Advanced Security**: AES-256-GCM / ChaCha20-Poly1305 authenticated encryption with Argon2id key derivation
-//! - **Biological Integrity**: FASTQ quality score embedding with preservation of biological data validity
+//! Embedded payloads are detectable by steganalysis. See the threat model in
+//! `SECURITY.md` before relying on this crate.
 //!
 //! ## Quick Start
 //!

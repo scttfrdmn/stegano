@@ -36,7 +36,7 @@
 //! const info = stegano_estimate_capacity(carrier);
 //! console.log(`Format: ${info.format()}, Total bits: ${info.total_bits}`);
 //!
-//! console.log(stegano_version()); // crate version, e.g. '0.5.1'
+//! console.log(stegano_version()); // crate version, e.g. '0.7.0'
 //! ```
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -185,13 +185,14 @@ impl WasmCapacityInfo {
 /// # Arguments
 /// - `carrier`  — Carrier file bytes (PNG, FASTA, WAV, FITS, DICOM, …).
 /// - `payload`  — Secret bytes to embed.
-/// - `password` — Encryption password.  Empty string disables encryption.
+/// - `password` — Encryption password. An empty string disables encryption:
+///   the payload is then stored in plaintext.
 /// - `stealth`  — `"low"` | `"medium"` | `"high"` | `"maximum"` (`""` = shared default, `"high"`).
 /// - `ec_level` — `"none"` | `"low"` | `"medium"` | `"high"` | `"maximum"` (`""` = shared default, `"none"`).
+/// - `cipher`   — `"aes256gcm"` (default) | `"chacha20"`.
 ///
 /// The result may be longer than `carrier` (SAM, VCF, DICOM). Unknown
 /// option names reject the promise.
-/// - `cipher`   — `"aes256gcm"` (default) | `"chacha20"`.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn stegano_embed(

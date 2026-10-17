@@ -10,16 +10,48 @@
 #include <stdint.h>
 
 /*
- C-compatible error codes
+ C-compatible error codes returned by every exported function.
  */
 typedef enum SteganoErrorCode {
+  /*
+   The call succeeded.
+   */
   SteganoErrorCode_Success = 0,
+  /*
+   A null pointer, empty buffer, unknown format number, invalid UTF-8,
+   malformed JSON options, an unknown option value, or a format/strategy
+   combination the handler does not accept.
+   */
   SteganoErrorCode_InvalidParameter = 1,
+  /*
+   The carrier is too small for the encoded payload.
+   */
   SteganoErrorCode_InsufficientCapacity = 2,
+  /*
+   Encryption or decryption failed: wrong password, a password given for
+   an unencrypted payload (or none for an encrypted one), or the payload
+   or its header was modified (AEAD authentication failure).
+   */
   SteganoErrorCode_CryptographicFailure = 3,
+  /*
+   The handler cannot process this carrier (unsupported layout or
+   format).
+   */
   SteganoErrorCode_FormatNotSupported = 4,
+  /*
+   No valid stegano payload was found, or it is damaged beyond what the
+   error-correction level can repair.
+   */
   SteganoErrorCode_DataCorrupted = 5,
+  /*
+   Reserved. Maps `SteganoError::GpuError`, which only the experimental
+   GPU modules produce; the embedding functions exported here do not
+   use the GPU and do not return it.
+   */
   SteganoErrorCode_GpuError = 6,
+  /*
+   A file could not be read or written (path-based functions).
+   */
   SteganoErrorCode_IoError = 7,
   /*
    `stegano_embed` (v1) only: the embedded carrier has a different length
@@ -33,6 +65,10 @@ typedef enum SteganoErrorCode {
    library is built with `panic = "unwind"`).
    */
   SteganoErrorCode_Panic = 9,
+  /*
+   Any other failure (for example, the shared Tokio runtime could not be
+   created).
+   */
   SteganoErrorCode_Unknown = 999,
 } SteganoErrorCode;
 
@@ -44,40 +80,123 @@ typedef enum SteganoErrorCode {
  rather than causing undefined behaviour.
  */
 typedef enum CDataFormat {
+  /*
+   FASTA sequences (payload in a header-line suffix; not covert).
+   */
   CDataFormat_Fasta = 0,
+  /*
+   FASTQ reads (quality-score LSBs).
+   */
   CDataFormat_Fastq = 1,
+  /*
+   Variant Call Format.
+   */
   CDataFormat_Vcf = 2,
+  /*
+   SAM alignments (text).
+   */
   CDataFormat_Sam = 3,
+  /*
+   BAM alignments (BGZF or raw `BAM\1`).
+   */
   CDataFormat_Bam = 4,
+  /*
+   PNG image.
+   */
   CDataFormat_Png = 5,
+  /*
+   TIFF image.
+   */
   CDataFormat_Tiff = 6,
+  /*
+   Microscopy image: handled exactly like PNG/TIFF (the container is
+   detected from its magic bytes). No microscopy-specific container
+   (e.g. OME-TIFF stacks, multi-page TIFF) is supported.
+   */
   CDataFormat_Microscopy = 7,
+  /*
+   DICOM medical image.
+   */
   CDataFormat_Dicom = 8,
+  /*
+   RIFF/WAVE audio.
+   */
   CDataFormat_Wav = 9,
+  /*
+   Raw signal: the bytes are treated as headerless mono 16-bit
+   little-endian samples (no file structure is parsed).
+   */
   CDataFormat_BinarySignal = 10,
+  /*
+   CSV time series: treated as raw bytes exactly like `BinarySignal`
+   (the text is not parsed as CSV, so the output is not guaranteed to
+   remain valid CSV).
+   */
   CDataFormat_CsvTimeseries = 11,
+  /*
+   Generic binary data (LSB of every byte). Also the result of format
+   detection for unrecognised data.
+   */
   CDataFormat_Binary = 12,
+  /*
+   Plain text, handled by the same generic LSB handler as `Binary`.
+   */
   CDataFormat_Text = 13,
+  /*
+   FITS astronomical image.
+   */
   CDataFormat_Fits = 14,
 } CDataFormat;
 
 /*
- C-compatible capacity info structure
+ Capacity estimate written by `stegano_estimate_capacity`. Values larger
+ than `UINT32_MAX` are saturated.
  */
 typedef struct CCapacityInfo {
+  /*
+   Raw capacity of the carrier, in bits, including the handler's own
+   framing header.
+   */
   uint32_t total_bits;
+  /*
+   Bits the handler recommends for the encoded payload. The encoded
+   payload is larger than your data: it adds a 36-byte header, a 16-byte
+   tag when a password is used, and Reed-Solomon parity when error
+   correction is on (see `docs/WIRE_FORMAT.md`).
+   */
   uint32_t recommended_bits;
+  /*
+   `recommended_bits / total_bits` (0.0 when `total_bits` is 0).
+   */
   double steganographic_ratio;
 } CCapacityInfo;
 
 /*
- C-compatible embed result structure
+ Embed statistics written to the `result_out` parameter of the embed
+ functions. Values larger than `UINT32_MAX` are saturated.
  */
 typedef struct CEmbedResult {
+  /*
+   `true` when the payload was embedded (always `true` when the call
+   returns `Success`).
+   */
   bool success;
+  /*
+   Number of payload bytes embedded, as reported by the format handler.
+   */
   uint32_t bytes_embedded;
+  /*
+   `true` when the carrier bytes were changed.
+   */
   bool carrier_modified;
+  /*
+   Wall-clock time spent embedding, in milliseconds.
+   */
   uint32_t embedding_time_ms;
+  /*
+   Handler's rough estimate of the working memory used, in bytes (not a
+   measurement).
+   */
   uint32_t memory_usage_bytes;
 } CEmbedResult;
 
@@ -146,7 +265,8 @@ enum SteganoErrorCode stegano_estimate_capacity(const uint8_t *data,
  * `payload_data` - Pointer to payload data buffer
  * `payload_len` - Length of payload data buffer
  * `format` - Data format number (see `CDataFormat`)
- * `password` - Password for encryption (null for no encryption)
+ * `password` - Password for encryption (null or empty: no encryption,
+   the payload is stored in plaintext)
  * `result_out` - Pointer to output embed result
 
  # Returns
@@ -174,7 +294,8 @@ enum SteganoErrorCode stegano_embed(uint8_t *carrier_data,
  * `carrier_data` - Pointer to carrier data buffer
  * `carrier_len` - Length of carrier data buffer
  * `format` - Data format number (see `CDataFormat`)
- * `password` - Password for decryption (null for no encryption)
+ * `password` - Password for decryption (null or empty if the payload
+   was embedded without one)
  * `payload_out` - Receives a library-allocated payload buffer
  * `payload_len_out` - Receives the payload length
 
@@ -212,7 +333,8 @@ enum SteganoErrorCode stegano_extract(const uint8_t *carrier_data,
  - `"cipher"`: `aes256gcm` | `chacha20`
  - format strategy keys, passed through to the handler:
    `imagery_strategy`, `vcf_strategy`, `sam_strategy`, `dicom_strategy`,
-   `signal_strategy`, `genomics_strategy`
+   `signal_strategy`, `genomics_strategy`, `fits_strategy`, and other
+   handler keys such as `bam_compression`
 
  Pass NULL or `{}` for the shared defaults.
 
@@ -321,8 +443,14 @@ enum SteganoErrorCode stegano_extract_file(const char *path,
                                            size_t *output_len_out);
 
 /*
- Free a buffer returned by `stegano_extract`, `stegano_extract_v2`,
- `stegano_extract_file` or `stegano_embed_v2`. Passing NULL is a no-op.
+ Free a buffer that the library returned through a `uint8_t **`
+ out-parameter (`stegano_extract`, `stegano_extract_v2`,
+ `stegano_extract_file`, `stegano_embed_v2`). Passing NULL is a no-op.
+
+ Every such buffer must be released exactly once with this function, not
+ with your own allocator's `free` (the library may use a different C
+ runtime, e.g. on Windows). Do not pass the string from `stegano_version`,
+ which is static.
 
  # Arguments
  * `ptr` - Pointer to memory to free

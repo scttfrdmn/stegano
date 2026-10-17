@@ -1,208 +1,236 @@
 # Contributing to Stegano
 
-Thank you for your interest in contributing to the Stegano scientific data steganography system! This document provides guidelines for contributing to the project.
+Thanks for your interest in contributing. This file describes how the project
+is built, tested and released.
 
-## Code of Conduct
+## Code of conduct
 
-This project adheres to a standard of respectful, inclusive collaboration. Please be courteous and professional in all interactions.
+Be courteous and constructive in all interactions.
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
-- Rust 1.70+ with Cargo
-- Git
-- (Optional) NVIDIA GPU with CUDA for GPU acceleration features
 
-### Development Environment Setup
+- Rust stable with Cargo (CI uses the latest stable toolchain)
+- Git
+- Optional, for the bindings: Go 1.22+, Python 3.8+ with
+  [maturin](https://www.maturin.rs/), Node.js 22 and
+  [wasm-pack](https://rustwasm.github.io/wasm-pack/), and
+  [cbindgen](https://github.com/mozilla/cbindgen) 0.29.4 for the C header
+
+### Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/stegano.git
+git clone https://github.com/scttfrdmn/stegano.git
 cd stegano
 
-# Build the project
 cargo build
+cargo test --all-targets
+cargo test --doc
 
-# Run tests
-cargo test
-
-# Run examples
+# Registered examples
+cargo build --examples
 cargo run --example basic_demo
 ```
 
-## Development Guidelines
+## What CI checks
 
-### Quality Standards (MANDATORY)
-- **Overall Coverage**: ≥ 85%
-- **Individual Files**: ≥ 80%
-- **Security Modules**: ≥ 95% (crypto, handlers, core)
-- **Zero Clippy Warnings**: All code must pass `cargo clippy -- -D warnings`
-- **Proper Formatting**: All code must pass `cargo fmt --check`
+`.github/workflows/ci.yml` runs on every pull request and on `main`. These
+jobs must pass:
 
-### Code Style
-- Follow standard Rust formatting (`cargo fmt`)
-- Use `cargo clippy` for linting with zero warnings
-- Add documentation for public APIs (100% coverage required)
-- Include unit tests for new functionality
-- Use conventional commit format for commit messages
+| Job | Command |
+|-----|---------|
+| test (Linux, macOS) | `cargo test --all-targets` and `cargo test --doc` |
+| clippy (Linux, macOS) | `cargo clippy --all-targets -- -D warnings` |
+| experimental features | `cargo test` and `cargo clippy -- -D warnings` with `--all-targets --features experimental` |
+| wasm32 check | `cargo check --target wasm32-unknown-unknown --no-default-features --features wasm` |
+| npm package | `./scripts/build-wasm.sh` and `node npm/test/run.mjs` |
+| go (Linux, macOS) | `cargo build --release`, then `go test ./...` in `go/` |
+| format validity | `python tests/format_validity/run.py target/release/stegano` |
+| C header up to date | regenerates both headers with cbindgen and fails on any diff |
 
-### Commit Messages
-- Use clear, descriptive commit messages
-- Include scope and type (feat, fix, docs, etc.)
-- Reference issues when applicable
+The `fmt` job (`cargo fmt --all -- --check`) runs too but is **not blocking**
+yet (`continue-on-error`), until the codebase has had a formatting pass.
+Please run `cargo fmt` on the files you change anyway.
 
-Example:
+No code-coverage threshold is enforced. New behaviour should come with
+tests, and bug fixes with a regression test where practical.
+
+## Guidelines
+
+### Code
+
+- `cargo clippy --all-targets -- -D warnings` must be clean.
+- Document new public items. Not every existing public item has docs yet;
+  `RUSTDOCFLAGS="-W missing_docs" cargo doc --no-deps` lists the gaps.
+  `cargo doc --no-deps` itself must build without warnings.
+- Do not change the wire format ([docs/WIRE_FORMAT.md](docs/WIRE_FORMAT.md))
+  without a version bump of the format and a changelog entry.
+- Handlers must keep their output valid for the format's standard tools. If
+  you add or change a strategy, add a case to the format-validity suite.
+
+### Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) with a
+scope where it helps, and reference issues:
+
 ```
-feat(crypto): add ChaCha20-Poly1305 encryption support
-
-- Implement ChaCha20-Poly1305 as alternative to AES-GCM
-- Add performance benchmarks comparing algorithms
-- Update API to support algorithm selection
+feat(vcf): stream the quality strategy
 
 Closes #123
 ```
 
-### Testing
-- Write unit tests for new functionality
-- Add integration tests for new handlers
-- Include performance benchmarks when relevant
-- Ensure all tests pass before submitting PRs
-
 ### Documentation
-- Update README.md for significant changes
-- Add inline documentation for new APIs
-- Include examples for new features
 
-## Adding New Format Support
+- Update [README.md](README.md) and the relevant file in [docs/](docs/README.md)
+  for user-visible changes. For a new format or strategy, update
+  [docs/FORMATS.md](docs/FORMATS.md).
+- Add an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 
-To add support for a new data format:
+## The `experimental` feature
 
-1. **Create Handler Module**
-   ```rust
-   // src/handlers/your_format.rs
-   use crate::core::*;
-   use super::DataHandler;
-   use async_trait::async_trait;
-
-   pub struct YourFormatHandler;
-
-   #[async_trait]
-   impl DataHandler for YourFormatHandler {
-       // Implement required methods
-   }
-   ```
-
-2. **Add Format Detection**
-   - Implement magic byte detection
-   - Add format to `DataFormat` enum
-   - Update format registry
-
-3. **Implement Embedding Strategy**
-   - Design format-specific embedding
-   - Implement capacity estimation
-   - Add integrity verification
-
-4. **Create Tests and Examples**
-   - Add unit tests
-   - Create integration tests
-   - Provide usage examples
-
-5. **Update Documentation**
-   - Add to supported formats list
-   - Include API documentation
-   - Provide migration guide if needed
-
-## GPU Acceleration
-
-When contributing GPU acceleration features:
-
-1. **WGSL Compute Shaders**
-   - Use WGPU for cross-platform compatibility
-   - Place shaders in `gpu_kernels/wgsl/`
-   - Include performance benchmarks
-
-2. **CUDA Kernels**
-   - Implement for NVIDIA-specific optimization
-   - Place in `gpu_kernels/cuda/`
-   - Ensure fallback to CPU implementation
-
-3. **Performance**
-   - Benchmark against CPU implementations
-   - Document performance characteristics
-   - Include memory usage analysis
-
-## Security Considerations
-
-When working on cryptographic or security features:
-
-- Use established cryptographic libraries
-- Implement constant-time operations
-- Include security tests and fuzzing
-- Document threat model and assumptions
-- Follow secure coding practices
-
-## Pull Request Process
-
-1. **Before Submitting**
-   - Ensure all tests pass
-   - Verify code coverage ≥ 85% (`cargo tarpaulin --fail-under 85`)
-   - Run `cargo fmt` and `cargo clippy -- -D warnings`
-   - Run security audit (`cargo audit`)
-   - Update documentation
-   - Add/update tests as needed
-   - Ensure pre-commit hooks pass (`pre-commit run --all-files`)
-
-2. **PR Description**
-   - Clearly describe the changes
-   - Reference related issues
-   - Include testing instructions
-   - Note any breaking changes
-
-3. **Review Process**
-   - Address reviewer feedback
-   - Keep commits focused and logical
-   - Rebase when requested
-
-## Issue Reporting
-
-When reporting bugs or requesting features:
-
-### Bug Reports
-Include:
-- Rust version and OS
-- Steps to reproduce
-- Expected vs actual behavior
-- Relevant code examples
-- Error messages/logs
-
-### Feature Requests
-Include:
-- Use case description
-- Proposed API design
-- Implementation considerations
-- Performance implications
-
-## Release Process
-
-Releases follow semantic versioning:
-- **Major** (x.0.0): Breaking API changes
-- **Minor** (x.y.0): New features, backward compatible
-- **Patch** (x.y.z): Bug fixes, backward compatible
-
-### Tagging a release
-
-Every release pushes two tags on the same commit:
+The `gpu`, `ml` and `monitoring` modules are compiled only with the
+off-by-default `experimental` feature. The `gpu` (wgpu), `metal` and `cuda`
+features imply it. These modules are not used by the embedding pipeline, are
+unsupported, and may change or be removed in any release. CI builds,
+tests and lints them (`--features experimental`) so they keep compiling.
+The GPU backends are not exercised in CI. Do not make the embedding path
+depend on them.
 
 ```bash
-git tag -a vX.Y.Z -m "vX.Y.Z"        # Rust crate, CLI, npm package
-git tag -a go/vX.Y.Z -m "go/vX.Y.Z"  # Go module github.com/scttfrdmn/stegano/go
-git push origin vX.Y.Z go/vX.Y.Z
+cargo test --all-targets --features experimental
+cargo clippy --all-targets --features experimental -- -D warnings
 ```
 
-The Go module lives in `go/`, so the Go toolchain only sees versions tagged
-with the `go/` prefix; without that tag, `go get .../go@vX.Y.Z` fails.
-Before tagging, regenerate both headers (`include/stegano.h` and
-`go/stegano.h`, see `cbindgen.toml`) if the FFI changed.
+## Building the bindings
+
+### C header
+
+The C ABI is defined in `src/ffi.rs`. The header is generated by cbindgen and
+checked in twice: `include/stegano.h`, and `go/stegano.h` inside the Go
+module. After changing any exported signature, type or doc comment in
+`src/ffi.rs`, regenerate both with the pinned cbindgen version:
+
+```bash
+cargo install cbindgen --version 0.29.4 --locked
+cbindgen --config cbindgen.toml --output include/stegano.h src/ffi.rs
+cbindgen --config cbindgen.toml --output go/stegano.h src/ffi.rs
+```
+
+Do not edit the headers by hand. The "C header up to date" CI job fails if
+they differ from the generated output.
+
+### Go
+
+```bash
+cargo build --release
+cd go
+CGO_LDFLAGS="-L$(pwd)/../target/release" \
+  LD_LIBRARY_PATH="$(pwd)/../target/release" \
+  DYLD_LIBRARY_PATH="$(pwd)/../target/release" \
+  go test ./...
+```
+
+See [go/README.md](go/README.md) for using the module from another project.
+
+### Python
+
+`pyproject.toml` builds the extension with maturin and enables the `python`
+feature (pyo3, abi3 for Python 3.8+):
+
+```bash
+pip install maturin
+maturin develop --release        # build and install into the current venv
+maturin build --release          # build a wheel into target/wheels/
+python -c "import stegano; print(stegano.version())"
+```
+
+On a Python newer than the pinned pyo3 release supports (for example 3.14
+with pyo3 0.22), set `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
+
+### WebAssembly / npm
+
+```bash
+./scripts/build-wasm.sh        # assemble pkg/ (web + node builds, needs wasm-pack)
+node npm/test/run.mjs          # pack pkg/ and run the smoke tests
+npm pack --dry-run ./pkg       # list the tarball contents
+```
+
+The package metadata template is `npm/package.template.json`, and the
+package README is [npm/README.md](npm/README.md).
+
+## Format-validity suite
+
+`tests/format_validity/run.py` generates realistic carriers for every format
+the CLI supports, embeds and extracts a random payload with each applicable
+`--strategy`, checks that the payload round-trips exactly, and validates the
+output with an independent tool. It also checks that the documented error
+cases fail cleanly. CI runs it in the "format validity" job.
+
+To run it locally you need `samtools` and `bcftools` on `PATH` (`bcftools` is
+optional when pysam is installed) and the Python packages in
+`tests/format_validity/requirements.txt`:
+
+```bash
+cargo build --release --bin stegano
+python -m pip install -r tests/format_validity/requirements.txt
+python tests/format_validity/run.py target/release/stegano
+python tests/format_validity/run.py target/release/stegano --only wav --only fits
+```
+
+## Adding a new format
+
+1. Add the variant to `DataFormat` (`src/core.rs`) and, if it should be
+   reachable from C/Go, to `CDataFormat` in `src/ffi.rs` (then regenerate the
+   headers).
+2. Implement `DataHandler` in a new `src/handlers/<format>.rs`. Document the
+   strategies and their `format_specific` key in the module's `//!` docs.
+   Route the payload through `crate::codec::encode_payload` /
+   `decode_payload`.
+3. Register the handler in `src/handlers/mod.rs`, and add extension and
+   magic-byte detection and the strategy key in `src/carrier.rs`.
+4. Add unit tests, a case in `tests/format_validity/run.py`, and
+   documentation in [docs/FORMATS.md](docs/FORMATS.md).
+5. If the format can be processed record by record, consider a streaming
+   implementation in `src/stream/`.
+
+## Pull requests
+
+Before you open a pull request:
+
+- run `cargo test --all-targets`, `cargo test --doc` and
+  `cargo clippy --all-targets -- -D warnings`;
+- regenerate the headers if `src/ffi.rs` changed;
+- update the docs and the changelog.
+
+In the description, explain the change and how you tested it, link the
+issue, and call out breaking changes. Report security problems privately as
+described in [SECURITY.md](SECURITY.md), not in a public issue or PR.
+
+## Releases
+
+Releases follow semantic versioning. Before 1.0, a minor version may contain
+breaking changes; these are listed in the changelog.
+
+1. Bump `version` in `Cargo.toml` (and `Cargo.lock`), move the
+   `[Unreleased]` changelog entries under the new version, and update the
+   version references in `README.md`, `go/README.md` and the docs.
+2. Regenerate both C headers if the FFI changed.
+3. Merge to `main` with CI green.
+4. Tag the merge commit twice and push both tags:
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"        # Rust crate, CLI, npm package
+   git tag -a go/vX.Y.Z -m "go/vX.Y.Z"  # Go module github.com/scttfrdmn/stegano/go
+   git push origin vX.Y.Z go/vX.Y.Z
+   ```
+
+   The Go module lives in `go/`, so the Go toolchain only sees versions
+   tagged with the `go/` prefix. Without that tag, `go get .../go@vX.Y.Z`
+   fails.
+5. Create the GitHub release from the `vX.Y.Z` tag with the changelog
+   section as its notes. Pushing the tag also publishes the npm package (see
+   below).
 
 ### Publishing to npm
 
@@ -254,32 +282,9 @@ node npm/test/run.mjs          # pack + smoke tests
 npm pack --dry-run ./pkg       # list the tarball contents
 ```
 
-## Architecture Guidelines
+## Questions and issues
 
-### Core Principles
-- **Modularity**: Keep components loosely coupled
-- **Performance**: Optimize for scientific data workflows
-- **Security**: Prioritize data protection and integrity
-- **Extensibility**: Design for easy format addition
-
-### Design Patterns
-- Use traits for extensible interfaces
-- Implement async patterns for I/O operations
-- Apply RAII for resource management
-- Follow Rust ownership patterns
-
-## Questions and Support
-
-- **General Questions**: Open a GitHub discussion
-- **Bug Reports**: Create a GitHub issue
-- **Security Issues**: Contact maintainers privately
-- **Feature Requests**: Create a GitHub issue with enhancement label
-
-## Recognition
-
-Contributors will be recognized in:
-- Project README.md
-- Release notes
-- Git commit history
-
-Thank you for contributing to the advancement of scientific data protection!
+- Bugs and feature requests: open a GitHub issue. For bugs, include the
+  version, OS, the command or code, and (if possible) a small carrier file
+  that reproduces the problem.
+- Security issues: see [SECURITY.md](SECURITY.md).

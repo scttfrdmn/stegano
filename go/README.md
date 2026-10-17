@@ -24,8 +24,6 @@ LIBDIR="$(pwd)/target/release"
 
 # 2. In your project, add the module.
 cd /path/to/your/project
-# The repository is private: let Go fetch it directly with your git credentials.
-export GOPRIVATE=github.com/scttfrdmn/stegano
 go get github.com/scttfrdmn/stegano/go@v0.7.0   # or @<commit-sha>
 
 # 3. Point cgo at the library for building, and the loader for running.
@@ -66,7 +64,8 @@ cd go && go test ./...
 ```go
 import stegano "github.com/scttfrdmn/stegano/go"
 
-// Embed a secret payload. Format is auto-detected from magic bytes.
+// Embed a payload. The format is auto-detected from magic bytes.
+// Without WithPassword the payload is stored in plaintext (not encrypted).
 modified, err := stegano.Embed(carrier, []byte("secret message"),
     stegano.WithPassword("encryption-key"))
 
@@ -92,7 +91,8 @@ err = stegano.EmbedFile("aln.bam", "aln.stego.bam", payload,
     stegano.WithFormatSpecific("bam_compression", "none"))
 
 // Detect format only.
-fmt, err := stegano.DetectFormat(carrier)
+format, err := stegano.DetectFormat(carrier)
+fmt.Println(format) // e.g. "PNG"
 
 // Library version.
 fmt.Println(stegano.Version()) // crate version, e.g. "0.7.0"
@@ -109,22 +109,26 @@ fmt.Println(stegano.Version()) // crate version, e.g. "0.7.0"
 | `FormatBAM` | BAM (binary SAM) |
 | `FormatPNG` | PNG images |
 | `FormatTIFF` | TIFF images |
+| `FormatMicroscopy` | Microscopy images (handled as PNG/TIFF) |
 | `FormatDICOM` | DICOM medical images |
 | `FormatWAV` | WAV audio |
+| `FormatBinarySignal` | Raw 16-bit little-endian samples |
+| `FormatCSVTimeseries` | CSV time series (treated as raw 16-bit samples) |
 | `FormatFITS` | FITS astronomical images |
 | `FormatBinary` | Generic binary (fallback) |
+| `FormatText` | Plain text (generic LSB) |
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `WithPassword(string)` | Encryption password. Empty = no encryption. |
+| `WithPassword(string)` | Encryption password. Empty or omitted = no encryption: the payload is stored in plaintext. |
 | `WithFormat(Format)` | Override auto-detected format. |
 | `WithStrategy(string)` | Format-specific strategy, sent under the key the handler reads. PNG/TIFF (`imagery_strategy`): `lsb\|adaptive\|edge\|dct`. VCF (`vcf_strategy`): `info\|quality\|format\|id\|multi`. SAM/BAM (`sam_strategy`): `optional\|comment\|quality\|auxiliary\|multi`. DICOM (`dicom_strategy`): `private\|metadata\|sequence\|pixel_lsb\|multi`. WAV (`signal_strategy`): `timedomain\|frequency\|phase\|spread\|echo`. FASTA/FASTQ: `genomics_strategy`. Other formats return `ErrInvalidParameter`. Pass the same strategy to `Extract`. |
 | `WithCipher(string)` | Encryption cipher: `aes256gcm` (default) or `chacha20`. Requires `WithPassword`; auto-detected on `Extract`. |
 | `WithStealth(string)` | `low\|medium\|high\|maximum` (default `high`). |
 | `WithECLevel(string)` | Reed-Solomon level `none\|low\|medium\|high\|maximum` (default `none`). Without a password, `Extract` needs a non-`none` level too if one was used for `Embed`. |
-| `WithFormatSpecific(key string, value any)` | Raw `format_specific` key passed to the handler, e.g. `("bam_compression", "none")` or `("sam_strategy", "auxiliary")`. `value` must be JSON-encodable. Typed options (`WithStrategy`, `WithCipher`, ...) win for the same key. |
+| `WithFormatSpecific(key string, value any)` | Raw `format_specific` key passed to the handler, e.g. `("bam_compression", "none")`, `("sam_strategy", "auxiliary")` or, for FITS float data, `("fits_strategy", "float_mantissa")`. `value` must be JSON-encodable. Typed options (`WithStrategy`, `WithCipher`, ...) win for the same key. |
 
 `EmbedFile` and `ExtractFile` take the same options. Without `WithFormat` they
 detect the format from the file name, then from the file's first 4 KiB.

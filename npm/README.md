@@ -79,7 +79,7 @@ SAM, VCF and DICOM carriers.
 
 | Argument   | Values                                                      | Default (`''`) |
 |------------|-------------------------------------------------------------|----------------|
-| `password` | any string; `''` embeds **without encryption**              | none           |
+| `password` | any string; `''` embeds **without encryption** (plaintext)  | none           |
 | `stealth`  | `'low'` \| `'medium'` \| `'high'` \| `'maximum'`            | `'high'`       |
 | `ec_level` | `'none'` \| `'low'` \| `'medium'` \| `'high'` \| `'maximum'`| `'none'`       |
 | `cipher`   | `'aes256gcm'` \| `'chacha20'`                               | `'aes256gcm'`  |
@@ -87,7 +87,8 @@ SAM, VCF and DICOM carriers.
 ### `stegano_extract(carrier, password, ec_level, cipher): Promise<Uint8Array>`
 
 Returns the embedded payload. It rejects if no payload is present, the
-password is wrong or the data was tampered with (authenticated encryption).
+password is wrong, or the data of an encrypted payload was tampered with
+(authenticated encryption; payloads without a password have no such check).
 The cipher is detected from the payload header automatically. `ec_level`
 matters only for payloads embedded **without** a password: if error
 correction was used at embed time, pass any value other than `'none'` (the
@@ -143,9 +144,12 @@ To keep a UI responsive, run them in a Web Worker.
 
 ## Security
 
-When the password is empty, the payload is hidden but **not encrypted**. See
-[SECURITY.md](https://github.com/scttfrdmn/stegano/blob/main/SECURITY.md)
-before you rely on stegano for confidentiality.
+When the password is empty, the payload is **not encrypted**: it is stored in
+plaintext inside the carrier. With or without a password, the embedding is
+detectable by steganalysis and by its plaintext marker; encryption protects
+the content, not the fact that a payload is present. See the
+[threat model](https://github.com/scttfrdmn/stegano/blob/main/SECURITY.md#threat-model-and-limitations)
+before you rely on stegano.
 
 ## License
 
