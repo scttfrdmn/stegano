@@ -77,6 +77,7 @@ pub enum Commands {
         /// DICOM: private|metadata|sequence|pixel_lsb|multi
         /// PNG/TIFF: lsb|adaptive|edge|dct
         /// WAV: timedomain|frequency|phase|spread|echo
+        /// FITS: pixel_lsb|float_mantissa (float_mantissa is required for float data)
         #[arg(long)]
         strategy: Option<String>,
         /// Encryption cipher (aes256gcm, chacha20). Auto-detected on extract.
@@ -110,6 +111,7 @@ pub enum Commands {
         /// SAM/BAM: optional|comment|quality|auxiliary|multi
         /// DICOM: private|metadata|sequence|pixel_lsb|multi
         /// WAV: timedomain|frequency|phase|spread|echo (auto-detected)
+        /// FITS: pixel_lsb|float_mantissa (auto-detected)
         #[arg(long)]
         strategy: Option<String>,
         /// Force the in-memory code path. By default streamable carriers

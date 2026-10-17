@@ -82,19 +82,22 @@ pub async fn handle_embed(
 
     let embedder = SteganoEmbedder::new();
     let capacity = embedder.estimate_capacity(&carrier)?;
-    println!(
-        "📊 Available capacity: {} bits ({} bytes)",
-        capacity.recommended_bits,
-        capacity.recommended_bits / 8
-    );
+    // `None`: the handler reports the precise error itself (e.g. float FITS
+    // data without the `float_mantissa` opt-in).
+    if let Some(available) = usable_capacity_bits(&carrier.format, &capacity, &params) {
+        println!(
+            "📊 Available capacity: {available} bits ({} bytes)",
+            available / 8
+        );
 
-    // Both values in bits, matching the `InsufficientCapacity` message.
-    let needed_bits = payload_data.len().saturating_mul(8);
-    if needed_bits > capacity.recommended_bits {
-        return Err(SteganoError::InsufficientCapacity {
-            needed: needed_bits,
-            available: capacity.recommended_bits,
-        });
+        // Both values in bits, matching the `InsufficientCapacity` message.
+        let needed_bits = payload_data.len().saturating_mul(8);
+        if needed_bits > available {
+            return Err(SteganoError::InsufficientCapacity {
+                needed: needed_bits,
+                available,
+            });
+        }
     }
 
     let result = embedder.embed(&mut carrier, &payload_data, &params).await?;
@@ -513,6 +516,44 @@ fn parse_ec_level(s: &str) -> Result<ECLevel> {
     })
 }
 
+/// Capacity (in bits) available to the strategy selected in `params`.
+///
+/// `estimate_capacity` reports the default strategy only. For FITS, the
+/// opt-in `float_mantissa` capacity is in `format_specific_info`. Returns
+/// `None` when the CLI should not pre-check and leave the error to the
+/// handler: a float-only FITS file without the opt-in, or `float_mantissa`
+/// on a file with no float image.
+fn usable_capacity_bits(
+    format: &DataFormat,
+    capacity: &CapacityInfo,
+    params: &EmbedParams,
+) -> Option<usize> {
+    if *format != DataFormat::FITS {
+        return Some(capacity.recommended_bits);
+    }
+    let info = &capacity.format_specific_info;
+    let float_bits = info
+        .get("float_mantissa_capacity_bits")
+        .and_then(serde_json::Value::as_u64);
+    let float_opt_in = params
+        .format_specific
+        .get("fits_strategy")
+        .and_then(serde_json::Value::as_str)
+        == Some("float_mantissa");
+    if float_opt_in {
+        let overhead_bits = info
+            .get("overhead_bytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            .saturating_mul(8);
+        return float_bits.map(|b| b.saturating_sub(overhead_bits) as usize);
+    }
+    if capacity.total_bits == 0 && float_bits.is_some() {
+        return None;
+    }
+    Some(capacity.recommended_bits)
+}
+
 /// Insert the strategy string into `params.format_specific` under the key
 /// the handler for `format` reads (see [`carrier::strategy_key`]). Formats
 /// without a selectable strategy are ignored with a warning.
@@ -671,6 +712,7 @@ mod tests {
             (DataFormat::WAV, "frequency", "signal_strategy"),
             (DataFormat::FASTA, "codon", "genomics_strategy"),
             (DataFormat::FASTQ, "quality", "genomics_strategy"),
+            (DataFormat::FITS, "float_mantissa", "fits_strategy"),
         ];
         for (format, strategy, key) in cases {
             let mut p = make_params();
@@ -706,6 +748,29 @@ mod tests {
         assert_eq!(
             strategy_of(&p, "imagery_strategy").as_deref(),
             Some("adaptive")
+        );
+    }
+
+    // ---- usable_capacity_bits ----
+
+    #[test]
+    fn test_usable_capacity_bits_fits_float() {
+        let mut cap = CapacityInfo::new(0, 0);
+        cap.format_specific_info
+            .insert("float_mantissa_capacity_bits".into(), 1000.into());
+        cap.format_specific_info
+            .insert("overhead_bytes".into(), 10.into());
+        let mut p = make_params();
+        // No opt-in on a float-only file: leave the error to the handler.
+        assert_eq!(usable_capacity_bits(&DataFormat::FITS, &cap, &p), None);
+        apply_strategy(&mut p, &DataFormat::FITS, "float_mantissa");
+        assert_eq!(usable_capacity_bits(&DataFormat::FITS, &cap, &p), Some(920));
+        // Other formats use the reported capacity.
+        assert_eq!(usable_capacity_bits(&DataFormat::PNG, &cap, &p), Some(0));
+        let int_cap = CapacityInfo::new(800, 720);
+        assert_eq!(
+            usable_capacity_bits(&DataFormat::FITS, &int_cap, &make_params()),
+            Some(720)
         );
     }
 }

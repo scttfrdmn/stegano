@@ -269,7 +269,7 @@ apply defaults the same way.
 | `DEFAULT_STEALTH_LEVEL`, `DEFAULT_EC_LEVEL`, `DEFAULT_CIPHER_KIND` (+ `_NAME` strings) | |
 | `params_from_names(password, stealth, ec_level, cipher)` | As used by Python/WASM. |
 | `parse_stealth_level`, `parse_ec_level`, `parse_cipher` | Case-insensitive name parsers. |
-| `strategy_key(&DataFormat) -> Option<&str>` | The `format_specific` key for a format's strategy (`None` for FITS, CSV, text, binary). |
+| `strategy_key(&DataFormat) -> Option<&str>` | The `format_specific` key for a format's strategy (`None` for CSV, text, binary). |
 
 ## Lower-level modules
 

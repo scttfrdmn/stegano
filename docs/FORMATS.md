@@ -276,8 +276,7 @@ HDUs are walked. The payload goes into the first image HDU (primary or
 `XTENSION = 'IMAGE'`, `PCOUNT = 0`, `GCOUNT = 1`, at least one pixel) whose
 `BITPIX` suits the strategy.
 
-**Strategies** (`fits_strategy`; library and bindings only, because the CLI
-ignores `--strategy` for FITS):
+**Strategies** (`fits_strategy`; CLI `--strategy`):
 
 | Value (aliases) | Data | What changes |
 |-----------------|------|--------------|

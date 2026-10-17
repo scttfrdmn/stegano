@@ -83,10 +83,9 @@ APIs (CLI `embed`/`extract`, `stegano::stream`, `stegano_embed_file`, Go
 
 Streaming extraction reads any streamable format, whatever strategy the
 payload was embedded with. Without a strategy, PNG/TIFF, WAV and FASTQ choose
-one from the stealth level (`--stealth`, default `high`). The CLI's
-`--strategy` does not cover FITS. To select `float_mantissa`, pass
-`fits_strategy` through the library or a binding. For channel layouts and
-capacity formulas, see [docs/FORMATS.md](docs/FORMATS.md).
+one from the stealth level (`--stealth`, default `high`). For float FITS
+data, pass `--strategy float_mantissa` (or `fits_strategy` through the library
+or a binding). For channel layouts and capacity formulas, see [docs/FORMATS.md](docs/FORMATS.md).
 
 ## Building
 
