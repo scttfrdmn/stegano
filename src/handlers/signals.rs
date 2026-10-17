@@ -990,20 +990,24 @@ impl SignalHandler {
         Self
     }
 
-    fn select_strategy(params: &EmbedParams) -> SignalEmbedStrategy {
-        let over = params
-            .format_specific
-            .get("signal_strategy")
-            .and_then(|v| v.as_str())
-            .and_then(|s| match s.to_lowercase().as_str() {
-                "timedomain" | "timedomainlsb" | "lsb" => Some(SignalEmbedStrategy::TimeDomainLSB),
-                "frequency" | "frequencydomain" => Some(SignalEmbedStrategy::FrequencyDomain),
-                "phase" | "phasemodulation" => Some(SignalEmbedStrategy::PhaseModulation),
-                "spread" | "spreadspectrum" => Some(SignalEmbedStrategy::SpreadSpectrum),
-                "echo" | "echohiding" | "echo_hiding" => Some(SignalEmbedStrategy::EchoHiding),
-                _ => None,
-            });
-        over.unwrap_or(match params.stealth_level {
+    fn select_strategy(params: &EmbedParams) -> Result<SignalEmbedStrategy> {
+        if let Some(v) = params.format_specific.get("signal_strategy") {
+            let name = v.as_str().ok_or_else(|| {
+                SteganoError::InvalidParameter("signal_strategy must be a string".to_string())
+            })?;
+            return match name.to_lowercase().as_str() {
+                "timedomain" | "timedomainlsb" | "lsb" => Ok(SignalEmbedStrategy::TimeDomainLSB),
+                "frequency" | "frequencydomain" => Ok(SignalEmbedStrategy::FrequencyDomain),
+                "phase" | "phasemodulation" => Ok(SignalEmbedStrategy::PhaseModulation),
+                "spread" | "spreadspectrum" => Ok(SignalEmbedStrategy::SpreadSpectrum),
+                "echo" | "echohiding" | "echo_hiding" => Ok(SignalEmbedStrategy::EchoHiding),
+                other => Err(SteganoError::InvalidParameter(format!(
+                    "Unknown signal_strategy '{other}' \
+                     (expected timedomain|frequency|phase|spread|echo)"
+                ))),
+            };
+        }
+        Ok(match params.stealth_level {
             StealthLevel::Low => SignalEmbedStrategy::TimeDomainLSB,
             StealthLevel::Medium => SignalEmbedStrategy::FrequencyDomain,
             StealthLevel::High => SignalEmbedStrategy::PhaseModulation,
@@ -1192,7 +1196,7 @@ impl DataHandler for SignalHandler {
         payload: &[u8],
         params: &EmbedParams,
     ) -> Result<EmbedResult> {
-        let strategy = Self::select_strategy(params);
+        let strategy = Self::select_strategy(params)?;
         self.embed_with_strategy(carrier, payload, params, strategy)
             .await
     }
@@ -1647,5 +1651,24 @@ mod tests {
             assert_eq!(SignalEmbedStrategy::from_u8(s.to_u8()), Some(s));
         }
         assert_eq!(SignalEmbedStrategy::from_u8(9), None);
+    }
+
+    #[test]
+    fn test_unknown_signal_strategy_rejected() {
+        let mut params = EmbedParams::new(Vec::new());
+        params
+            .format_specific
+            .insert("signal_strategy".to_string(), serde_json::json!("bogus"));
+        assert!(matches!(
+            SignalHandler::select_strategy(&params),
+            Err(SteganoError::InvalidParameter(_))
+        ));
+        params
+            .format_specific
+            .insert("signal_strategy".to_string(), serde_json::json!("ECHO"));
+        assert_eq!(
+            SignalHandler::select_strategy(&params).unwrap(),
+            SignalEmbedStrategy::EchoHiding
+        );
     }
 }
