@@ -106,12 +106,51 @@ Points to keep in mind when reading this report:
   compressed TIFF) the file bytes are compressed data, not pixel values or
   records, so these scores say little about sample-level detectability.
   Decode the samples yourself and call the detectors directly.
-- **`overall_score` is not computed.** It stays 0 (the CLI prints it as
-  `0/10`). Read the individual results.
+- **`overall_score` covers PoV and SPA only.** See
+  [Detection-resistance score](#detection-resistance-score) below.
 - **The classical section is not filled in here.** The `Display` dashboard
   and `summary()` read `classical_results`, which only
   `StatisticalValidationSuite::comprehensive_validation` populates. For a
   report from `SteganoEmbedder` they show placeholder values.
+
+## Detection-resistance score
+
+`ValidationReport::finalize()` sets `overall_score` (an `Option<f64>` in
+`[0, 10]`) from the two LSB-replacement detectors in `steganalysis_results`,
+using `stegano::validation::detection_resistance_score`. Both the embedding
+path and `comprehensive_validation` call it. Each detector that ran gives a
+suspicion in `[0, 1]`:
+
+- pairs of values: 1 if it flags the carrier (`embedding_detected`), else 0;
+- SPA: its estimated embedding rate (`pixel_pair_analysis.embedding_probability`).
+
+```text
+score = 10 × (1 − mean suspicion)
+```
+
+10 means neither detector flags the carrier and SPA estimates no embedding.
+The score falls as detectors flag it and as SPA's rate estimate rises, and is
+0 when PoV flags it and SPA estimates a 100% rate. `overall_score()` rounds it
+to an integer `0..=10`. The CLI (`embed --validate`) prints it as
+`Detection-resistance score: N/10`. When neither detector ran (for example,
+`comprehensive_validation` on `DataFormat::BINARY`, which runs no PoV/SPA) the
+score is `None` and the CLI prints `n/a`.
+
+The score is a heuristic, not a security guarantee:
+
+- It covers only two classical detectors of LSB *replacement*. It says nothing
+  about RS analysis, calibrated or machine-learned steganalysis, or embedding
+  that does not replace LSBs.
+- PoV misses about 5% of fully embedded carriers, because its p-value is
+  roughly uniform under the stego hypothesis. A fully embedded carrier can
+  therefore score around 5 (SPA alone) instead of around 0.
+- PoV also flags covers whose histogram is already smooth at the 1-LSB scale,
+  so such a cover can score low with nothing embedded.
+- On compressed containers the detectors see compressed bytes (see above).
+
+In the unit tests, three contrast-stretched synthetic 128×128 covers score
+10.0, 10.0 and 9.89. The same covers with 100% sequential LSB replacement score
+0.06, 5.46 (the PoV miss) and 0.00.
 
 ## Full suite
 

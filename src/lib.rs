@@ -45,7 +45,9 @@
 //!     
 //!     println!("Embedded {} bytes", result.bytes_embedded);
 //!     if let Some(report) = result.validation_report {
-//!         println!("Validation score: {}/10", report.overall_score());
+//!         if let Some(score) = report.overall_score() {
+//!             println!("Detection-resistance score: {score}/10");
+//!         }
 //!     }
 //!
 //!     Ok(())

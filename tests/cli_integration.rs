@@ -910,3 +910,64 @@ fn test_cli_fits_integer_pixel_lsb() {
     );
     assert_eq!(stego.len(), carrier.len());
 }
+
+/// Parse `N` from "Detection-resistance score: N/10" in embed output.
+fn detection_score(stdout: &str) -> u8 {
+    let line = stdout
+        .lines()
+        .find(|l| l.contains("Detection-resistance score:"))
+        .unwrap_or_else(|| panic!("no score line in:\n{stdout}"));
+    let after = line.split("score:").nth(1).unwrap().trim();
+    after
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap_or_else(|_| panic!("score not computed: {line}"))
+}
+
+#[test]
+fn test_cli_embed_validate_reports_computed_score() {
+    let dir = TempDir::new().unwrap();
+    let payload = dir.path().join("secret.txt");
+    fs::write(&payload, "validation score test").unwrap();
+
+    // Clean-looking carrier: only even byte values, so every (2k, 2k+1) pair
+    // is maximally unbalanced and pairs-of-values does not flag it; the short
+    // payload only touches a small prefix.
+    let even: Vec<u8> = (0..20_000u32)
+        .map(|i| ((i * 37 % 251) as u8) & !1)
+        .collect();
+    // LSB-saturated carrier: every byte value equally often (a permutation
+    // of 0..=255 repeated), the pair-equalised histogram full LSB replacement
+    // produces, so pairs-of-values flags it.
+    let saturated: Vec<u8> = (0..20_000u32).map(|i| (i * 167 % 256) as u8).collect();
+
+    let (mut scores, mut outputs) = (Vec::new(), Vec::new());
+    for (name, data) in [("even.bin", &even), ("saturated.bin", &saturated)] {
+        let carrier = dir.path().join(name);
+        let output = dir.path().join(format!("out-{name}"));
+        fs::write(&carrier, data).unwrap();
+        let mut args = embed_args(
+            carrier.to_str().unwrap(),
+            payload.to_str().unwrap(),
+            output.to_str().unwrap(),
+        );
+        args.push("--validate");
+        let out = run_stegano(&args, &[("STEGANO_PASSWORD", "pw")]);
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            out.status.success(),
+            "embed --validate failed: {}\n{stdout}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!stdout.contains("Overall Score: 0/10"), "{stdout}");
+        scores.push(detection_score(&stdout));
+        outputs.push(stdout);
+    }
+    assert_eq!(
+        scores,
+        vec![10, 0],
+        "clean vs LSB-saturated carrier: {outputs:#?}"
+    );
+}

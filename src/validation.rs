@@ -1684,6 +1684,7 @@ impl StatisticalValidationSuite {
         // Domain-specific validation
         report.domain_results = self.run_domain_validation(original, stego, format)?;
 
+        report.finalize();
         Ok(report)
     }
 
@@ -2023,12 +2024,56 @@ impl StatisticalValidationSuite {
     }
 }
 
+/// Detection-resistance score in `[0, 10]` from the LSB-replacement detectors.
+///
+/// Each detector that ran contributes a *suspicion* in `[0, 1]`:
+///
+/// * pairs-of-values ([`AdvancedSteganalysis::pairs_of_values_test`]):
+///   `1` if it flags the carrier (`embedding_detected`), else `0`;
+/// * Sample Pairs Analysis ([`AdvancedSteganalysis::pixel_pair_analysis`]):
+///   its estimated embedding rate (`embedding_probability`, clamped to `[0, 1]`).
+///
+/// `score = 10 × (1 − mean suspicion)`. So 10 means no detector flags the
+/// carrier and SPA estimates no embedding; the score falls as detectors flag
+/// it and as SPA's rate estimate rises, reaching 0 when PoV flags it and SPA
+/// estimates a 100% rate. Returns `None` when neither detector ran.
+///
+/// This is a heuristic summary of two classical detectors of LSB
+/// *replacement* only. It is not a security guarantee: a high score says
+/// nothing about other detectors (RS, calibrated or machine-learned
+/// steganalysis) or about non-LSB embedding, and on compressed containers
+/// the detectors see compressed bytes, not samples.
+pub fn detection_resistance_score(
+    pairs_of_values: Option<&PairsOfValuesResult>,
+    sample_pairs: Option<&PixelPairAnalysisResult>,
+) -> Option<f64> {
+    let suspicions: Vec<f64> = [
+        pairs_of_values.map(|p| if p.embedding_detected { 1.0 } else { 0.0 }),
+        sample_pairs.map(|s| {
+            if s.embedding_probability.is_finite() {
+                s.embedding_probability.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if suspicions.is_empty() {
+        return None;
+    }
+    let mean = suspicions.iter().sum::<f64>() / suspicions.len() as f64;
+    Some(10.0 * (1.0 - mean))
+}
+
 /// Lightweight summary of a validation run
 #[derive(Debug, Clone)]
 pub struct ValidationSummary {
     pub tests_run: usize,
     pub passed: usize,
-    pub overall_score: f64,
+    /// See [`ValidationReport::overall_score`].
+    pub overall_score: Option<f64>,
     pub status: String,
 }
 
@@ -2039,7 +2084,11 @@ pub struct ValidationReport {
     pub steganalysis_results: SteganalysisResults,
     pub performance_results: PerformanceResults,
     pub domain_results: DomainResults,
-    pub overall_score: f64,
+    /// Detection-resistance score in `[0, 10]`, set by [`Self::finalize`] from
+    /// the LSB detectors in [`Self::steganalysis_results`]; `None` when neither
+    /// detector ran. See [`detection_resistance_score`] for the formula.
+    #[serde(default)]
+    pub overall_score: Option<f64>,
     pub recommendations: Vec<String>,
     pub test_results: std::collections::HashMap<String, serde_json::Value>,
     pub is_complete: bool,
@@ -2135,7 +2184,7 @@ impl ValidationReport {
             steganalysis_results: SteganalysisResults::default(),
             performance_results: PerformanceResults::default(),
             domain_results: DomainResults::default(),
-            overall_score: 0.0,
+            overall_score: None,
             recommendations: vec![],
             test_results: std::collections::HashMap::new(),
             is_complete: false,
@@ -2146,12 +2195,21 @@ impl ValidationReport {
         self.test_results.insert(name, value);
     }
 
+    /// Mark the report complete and compute [`Self::overall_score`] from
+    /// [`Self::steganalysis_results`] (see [`detection_resistance_score`]).
     pub fn finalize(&mut self) {
+        self.overall_score = detection_resistance_score(
+            self.steganalysis_results.pairs_of_values.as_ref(),
+            self.steganalysis_results.pixel_pair_analysis.as_ref(),
+        );
         self.is_complete = true;
     }
 
-    pub fn overall_score(&self) -> u8 {
-        self.overall_score as u8
+    /// Detection-resistance score rounded to an integer `0..=10`, or `None`
+    /// when no LSB detector applied to the carrier. A heuristic, not a security
+    /// guarantee: see [`detection_resistance_score`].
+    pub fn overall_score(&self) -> Option<u8> {
+        self.overall_score.map(|s| s.round().clamp(0.0, 10.0) as u8)
     }
 
     pub fn test_results(&self) -> &std::collections::HashMap<String, serde_json::Value> {
@@ -2529,7 +2587,9 @@ mod tests {
             .comprehensive_validation(&original, &stego, &DataFormat::BINARY)
             .unwrap();
         assert!(result.classical_results.ks_test.p_value >= 0.0);
-        assert!(result.overall_score >= 0.0);
+        // No LSB detector runs for BINARY, so there is no score.
+        assert!(result.is_complete);
+        assert_eq!(result.overall_score, None);
     }
 
     #[test]
@@ -2798,6 +2858,71 @@ mod tests {
         assert!((ct.chi_square_critical_value(10, 0.95) - 18.307).abs() < 1e-3);
         assert!((ct.chi_square_critical_value(255, 0.95) - 293.248).abs() < 1e-2);
         assert!((ct.chi_square_critical_value(10, 0.90) - 15.987).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_detection_resistance_score_formula() {
+        let pov = |detected| PairsOfValuesResult {
+            chi_square_statistic: 0.0,
+            degrees_of_freedom: 10,
+            embedding_probability: 0.5,
+            pairs_used: 10,
+            embedding_detected: detected,
+        };
+        let spa = |rate| PixelPairAnalysisResult {
+            lsb_embedding_detected: false,
+            embedding_probability: rate,
+            affected_pairs: 0,
+            chi_square_statistic: 0.0,
+            p_value: 1.0,
+            confidence: 0.0,
+        };
+        assert_eq!(detection_resistance_score(None, None), None);
+        assert_eq!(
+            detection_resistance_score(Some(&pov(false)), None),
+            Some(10.0)
+        );
+        assert_eq!(
+            detection_resistance_score(Some(&pov(true)), None),
+            Some(0.0)
+        );
+        assert_eq!(
+            detection_resistance_score(None, Some(&spa(0.25))),
+            Some(7.5)
+        );
+        assert_eq!(
+            detection_resistance_score(Some(&pov(true)), Some(&spa(0.5))),
+            Some(2.5)
+        );
+        assert_eq!(
+            detection_resistance_score(Some(&pov(false)), Some(&spa(f64::NAN))),
+            Some(5.0)
+        );
+    }
+
+    #[test]
+    fn test_overall_score_separates_cover_from_full_embedding() {
+        let suite = StatisticalValidationSuite::new();
+        for seed in [3u64, 7, 11] {
+            let cover = stretched_image(128, 128, seed);
+            let stego = sequential_lsb_embed(&cover, 1.0, seed + 1000);
+            let clean = suite
+                .comprehensive_validation(&cover, &cover, &DataFormat::PNG)
+                .unwrap();
+            let full = suite
+                .comprehensive_validation(&cover, &stego, &DataFormat::PNG)
+                .unwrap();
+            let (c, f) = (clean.overall_score.unwrap(), full.overall_score.unwrap());
+            println!("seed {seed}: clean cover score {c:.2}, 100% LSB score {f:.2}");
+            assert!(c >= 9.0, "clean cover score {c}");
+            // SPA estimates ~100% here; PoV misses ~5% of full embeddings
+            // (its p-value is ~Uniform(0, 1) under the stego hypothesis), which
+            // leaves the score near 5 instead of near 0 (seed 7).
+            assert!(f <= 6.0, "fully embedded score {f}");
+            assert!(c - f >= 4.0, "clean {c} vs embedded {f}");
+            assert_eq!(clean.overall_score(), Some(c.round() as u8));
+            assert_eq!(clean.summary().overall_score, Some(c));
+        }
     }
 
     #[test]
