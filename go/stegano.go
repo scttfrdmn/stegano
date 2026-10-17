@@ -30,6 +30,10 @@
 //	// Extract it back.
 //	payload, err := stegano.Extract(modified, stegano.WithPassword("key"))
 //
+//	// Work on files directly (streamed for FASTQ, VCF, ... with no size limit).
+//	err = stegano.EmbedFile("reads.fastq", "reads.stego.fastq", []byte("secret"))
+//	payload, err = stegano.ExtractFile("reads.stego.fastq")
+//
 //	// Inspect capacity before embedding.
 //	info, err := stegano.EstimateCapacity(carrier)
 //	fmt.Printf("Format: %s, Total bits: %d\n", info.Format, info.TotalBits)
@@ -199,6 +203,8 @@ type options struct {
 	cipher   string  // encryption cipher override (e.g. "chacha20")
 	stealth  string  // stealth level override
 	ecLevel  string  // error-correction level override
+
+	formatSpecific map[string]any // raw format_specific keys (WithFormatSpecific)
 }
 
 // Option configures an Embed or Extract call.
@@ -251,6 +257,23 @@ func WithStealth(level string) Option {
 // (the actual level is read from the payload).
 func WithECLevel(level string) Option {
 	return func(o *options) { o.ecLevel = level }
+}
+
+// WithFormatSpecific passes an arbitrary format_specific key/value to the
+// Rust handler, e.g. WithFormatSpecific("bam_compression", "none") or
+// WithFormatSpecific("sam_strategy", "auxiliary"). value must be
+// JSON-encodable (string, number, bool, ...). It is merged into the JSON
+// options of Embed, Extract, EmbedFile and ExtractFile; the typed options
+// (WithStrategy, WithCipher, WithStealth, WithECLevel) take precedence over
+// a WithFormatSpecific entry for the same key. Calling it again with the
+// same key replaces the earlier value.
+func WithFormatSpecific(key string, value any) Option {
+	return func(o *options) {
+		if o.formatSpecific == nil {
+			o.formatSpecific = map[string]any{}
+		}
+		o.formatSpecific[key] = value
+	}
 }
 
 func applyOptions(opts []Option) options {
@@ -324,7 +347,10 @@ func takeBuffer(p *C.uint8_t, n C.uint32_t) []byte {
 
 // optionsJSON builds the JSON options object for the v2 FFI functions.
 func optionsJSON(o options, format Format) (string, error) {
-	m := map[string]string{}
+	m := map[string]any{}
+	for k, v := range o.formatSpecific {
+		m[k] = v
+	}
 	if o.strategy != "" {
 		key := strategyKey(format)
 		if key == "" {
@@ -349,7 +375,10 @@ func optionsJSON(o options, format Format) (string, error) {
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return "", err
+		return "", &Error{
+			Code:    ErrInvalidParameter,
+			Message: fmt.Sprintf("options are not JSON-encodable: %v", err),
+		}
 	}
 	return string(b), nil
 }
@@ -518,6 +547,127 @@ func Extract(carrier []byte, opts ...Option) ([]byte, error) {
 	result := takeBuffer(payloadPtr, payloadLen)
 	if len(result) == 0 {
 		return nil, &Error{Code: ErrDataCorrupted, Message: "Extract: no payload found"}
+	}
+	return result, nil
+}
+
+// resolveFileFormat returns the WithFormat override or detects the format
+// of the file at path (extension, then the first 4 KiB).
+func resolveFileFormat(path string, o options, op string) (Format, error) {
+	if o.format != nil {
+		return *o.format, nil
+	}
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	var fmtOut C.uint32_t
+	code := C.stegano_detect_file_format(cPath, &fmtOut)
+	if code != C.SteganoErrorCode_Success {
+		return FormatBinary, codeToError(code, op)
+	}
+	return Format(fmtOut), nil
+}
+
+// EmbedFile embeds payload into the carrier file inPath and writes the
+// result to outPath. There is no size limit on the carrier: streamable
+// formats and strategies (FASTQ, VCF info/id/quality, ...) are streamed
+// with constant memory, anything else is read into memory.
+//
+// outPath is written atomically (temporary file + rename), so on error it
+// is left untouched; inPath and outPath may be the same file. Format is
+// detected from the file name and its first bytes unless WithFormat is
+// specified.
+func EmbedFile(inPath, outPath string, payload []byte, opts ...Option) error {
+	if inPath == "" || outPath == "" {
+		return &Error{Code: ErrInvalidParameter, Message: "EmbedFile: empty path"}
+	}
+	if len(payload) == 0 {
+		return &Error{Code: ErrInvalidParameter, Message: "EmbedFile: payload is empty"}
+	}
+	o := applyOptions(opts)
+
+	format, err := resolveFileFormat(inPath, o, "EmbedFile")
+	if err != nil {
+		return err
+	}
+	jsonStr, err := optionsJSON(o, format)
+	if err != nil {
+		return err
+	}
+
+	cIn := C.CString(inPath)
+	defer C.free(unsafe.Pointer(cIn))
+	cOut := C.CString(outPath)
+	defer C.free(unsafe.Pointer(cOut))
+	cPassword, freePassword := cString(o.password)
+	defer freePassword()
+	cJSON, freeJSON := cString(jsonStr)
+	defer freeJSON()
+
+	code := C.stegano_embed_file(
+		cIn,
+		cOut,
+		bytesPtr(payload),
+		C.size_t(len(payload)),
+		C.uint32_t(format),
+		cPassword,
+		cJSON,
+		nil,
+	)
+	if code != C.SteganoErrorCode_Success {
+		return codeToError(code, "EmbedFile")
+	}
+	return nil
+}
+
+// ExtractFile extracts the embedded payload from the carrier file at path.
+// Streamable formats are streamed and reading stops as soon as the payload
+// is complete; anything else is read into memory. Format is detected from
+// the file name and its first bytes unless WithFormat is specified.
+func ExtractFile(path string, opts ...Option) ([]byte, error) {
+	if path == "" {
+		return nil, &Error{Code: ErrInvalidParameter, Message: "ExtractFile: empty path"}
+	}
+	o := applyOptions(opts)
+
+	format, err := resolveFileFormat(path, o, "ExtractFile")
+	if err != nil {
+		return nil, err
+	}
+	jsonStr, err := optionsJSON(o, format)
+	if err != nil {
+		return nil, err
+	}
+
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	cPassword, freePassword := cString(o.password)
+	defer freePassword()
+	cJSON, freeJSON := cString(jsonStr)
+	defer freeJSON()
+
+	var payloadPtr *C.uint8_t
+	var payloadLen C.size_t
+	code := C.stegano_extract_file(
+		cPath,
+		C.uint32_t(format),
+		cPassword,
+		cJSON,
+		&payloadPtr,
+		&payloadLen,
+	)
+	if code != C.SteganoErrorCode_Success {
+		return nil, codeToError(code, "ExtractFile")
+	}
+	if payloadPtr == nil {
+		return nil, &Error{Code: ErrDataCorrupted, Message: "ExtractFile: no payload found"}
+	}
+	defer C.stegano_free(unsafe.Pointer(payloadPtr))
+	if uint64(payloadLen) > math.MaxInt32 {
+		return nil, &Error{Code: ErrInvalidParameter, Message: "ExtractFile: payload too large"}
+	}
+	result := C.GoBytes(unsafe.Pointer(payloadPtr), C.int(payloadLen))
+	if len(result) == 0 {
+		return nil, &Error{Code: ErrDataCorrupted, Message: "ExtractFile: no payload found"}
 	}
 	return result, nil
 }

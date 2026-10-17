@@ -596,3 +596,199 @@ fn test_cli_rejects_unknown_stealth() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("unknown stealth level"));
 }
+
+// ---------------------------------------------------------------------------
+// Streaming vs. in-memory paths (#78)
+// ---------------------------------------------------------------------------
+
+fn fastq_carrier(records: usize) -> Vec<u8> {
+    let mut s = String::new();
+    for i in 0..records {
+        s.push_str(&format!(
+            "@read{i} 1:N:0:ACGT\nACGTACGTACGTACGTACGTACGTACGTAC\n+\nIIIIIFFFFF::::,,,,IIIIIFFFFF::\n"
+        ));
+    }
+    s.into_bytes()
+}
+
+fn vcf_carrier(records: usize) -> Vec<u8> {
+    let mut s = String::from(
+        "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000000000>\n\
+         ##INFO=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n\
+         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n",
+    );
+    for i in 0..records {
+        s.push_str(&format!(
+            "chr1\t{}\t.\tA\tG\t50\tPASS\tDP={}\n",
+            100 + i * 10,
+            10 + i % 30
+        ));
+    }
+    s.into_bytes()
+}
+
+/// Run `stegano` and assert success, returning stdout.
+fn run_ok(args: &[&str]) -> String {
+    let out = run_stegano(args, &[]);
+    assert!(
+        out.status.success(),
+        "stegano {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Embed + extract `carrier` (named `name`) with the given extra flags and
+/// return (embed stdout, extract stdout, stego file bytes).
+fn cli_roundtrip(
+    dir: &TempDir,
+    name: &str,
+    carrier: &[u8],
+    embed_extra: &[&str],
+    extract_extra: &[&str],
+) -> (String, String, Vec<u8>) {
+    let input = dir.path().join(name);
+    let payload = dir.path().join("payload.txt");
+    let stego = dir.path().join(format!("stego-{name}"));
+    let extracted = dir.path().join(format!("extracted-{name}.txt"));
+    fs::write(&input, carrier).unwrap();
+    fs::write(&payload, "streamed secret").unwrap();
+
+    let mut args = embed_args(
+        input.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+    args.extend(["--password", "pw"]);
+    args.extend(embed_extra);
+    let embed_out = run_ok(&args);
+
+    let mut args = vec![
+        "extract",
+        "-i",
+        stego.to_str().unwrap(),
+        "-o",
+        extracted.to_str().unwrap(),
+        "--password",
+        "pw",
+    ];
+    args.extend(extract_extra);
+    let extract_out = run_ok(&args);
+    assert_eq!(fs::read_to_string(&extracted).unwrap(), "streamed secret");
+    (embed_out, extract_out, fs::read(&stego).unwrap())
+}
+
+#[test]
+fn test_cli_fastq_streaming_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let (embed_out, extract_out, _) =
+        cli_roundtrip(&dir, "reads.fastq", &fastq_carrier(400), &[], &[]);
+    assert!(embed_out.contains("Streaming FASTQ"), "{embed_out}");
+    assert!(extract_out.contains("Streaming FASTQ"), "{extract_out}");
+
+    // No extension: detected from the magic bytes of the file head.
+    let (embed_out, _, _) = cli_roundtrip(&dir, "reads.dat", &fastq_carrier(400), &[], &[]);
+    assert!(embed_out.contains("Streaming FASTQ"), "{embed_out}");
+}
+
+#[test]
+fn test_cli_vcf_streaming_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let (embed_out, extract_out, _) = cli_roundtrip(&dir, "calls.vcf", &vcf_carrier(300), &[], &[]);
+    assert!(embed_out.contains("Streaming VCF"), "{embed_out}");
+    assert!(extract_out.contains("Streaming VCF"), "{extract_out}");
+
+    // A streamable explicit strategy streams; the extract side auto-detects.
+    let (embed_out, _, _) = cli_roundtrip(
+        &dir,
+        "calls-id.vcf",
+        &vcf_carrier(300),
+        &["--strategy", "id"],
+        &["--strategy", "id"],
+    );
+    assert!(embed_out.contains("Streaming VCF"), "{embed_out}");
+
+    // A non-streamable strategy falls back to the in-memory path on embed;
+    // streaming extract still reads it.
+    let (embed_out, extract_out, _) = cli_roundtrip(
+        &dir,
+        "calls-fmt.vcf",
+        &vcf_carrier(300),
+        &["--strategy", "multi"],
+        &[],
+    );
+    assert!(embed_out.contains("In-memory"), "{embed_out}");
+    assert!(extract_out.contains("Streaming VCF"), "{extract_out}");
+}
+
+#[test]
+fn test_cli_no_stream_interoperates_with_streaming() {
+    let dir = TempDir::new().unwrap();
+    for (name, carrier) in [("a.fastq", fastq_carrier(400)), ("b.vcf", vcf_carrier(300))] {
+        // In-memory embed, streaming extract.
+        let (embed_out, extract_out, _) =
+            cli_roundtrip(&dir, name, &carrier, &["--no-stream"], &[]);
+        assert!(embed_out.contains("--no-stream"), "{embed_out}");
+        assert!(extract_out.contains("Streaming"), "{extract_out}");
+
+        // Streaming embed, in-memory extract.
+        let (embed_out, extract_out, _) =
+            cli_roundtrip(&dir, name, &carrier, &[], &["--no-stream"]);
+        assert!(embed_out.contains("Streaming"), "{embed_out}");
+        assert!(extract_out.contains("In-memory"), "{extract_out}");
+    }
+}
+
+#[test]
+fn test_cli_streaming_capacity_error_leaves_no_output() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("small.fastq");
+    let payload = dir.path().join("big.txt");
+    let stego = dir.path().join("out.fastq");
+    fs::write(&input, fastq_carrier(2)).unwrap();
+    fs::write(&payload, "A".repeat(4000)).unwrap();
+    let out = run_stegano(
+        &embed_args(
+            input.to_str().unwrap(),
+            payload.to_str().unwrap(),
+            stego.to_str().unwrap(),
+        ),
+        &[],
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("capacity"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !stego.exists(),
+        "a failed streaming embed must not leave output"
+    );
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn test_cli_png_uses_in_memory_path() {
+    let (w, h) = (64u32, 64u32);
+    let mut png_bytes = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png_bytes, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().unwrap();
+        let data: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let (x, y) = (i % w, i / w);
+                [(x * 7) as u8, (y * 5) as u8, (x ^ y) as u8, 255]
+            })
+            .collect();
+        writer.write_image_data(&data).unwrap();
+    }
+    let dir = TempDir::new().unwrap();
+    let (embed_out, extract_out, _) =
+        cli_roundtrip(&dir, "image.png", &png_bytes, &["--stealth", "low"], &[]);
+    assert!(embed_out.contains("In-memory"), "{embed_out}");
+    assert!(!embed_out.contains("Streaming"), "{embed_out}");
+    assert!(extract_out.contains("In-memory"), "{extract_out}");
+}

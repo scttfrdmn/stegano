@@ -96,6 +96,15 @@ Useful `embed` options:
 `embed`, you must pass the same one to `extract`. Run `stegano <command> --help`
 for the full list of options.
 
+`embed` and `extract` stream large carriers automatically. When the format
+(taken from the extension, or from the magic bytes of the first few KiB) and
+strategy are streamable, such as FASTQ or VCF `info`/`id`/`quality`, the file
+is processed in constant memory and is never read whole. Extraction stops as
+soon as the payload is complete. The output is written to a temporary file and
+renamed into place only on success. Everything else, and `--validate`, uses the
+in-memory path. Pass `--no-stream` to force the in-memory path. Both paths
+produce interchangeable files, and the command prints which one it used.
+
 ## Library quick start
 
 ```rust,no_run

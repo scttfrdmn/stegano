@@ -78,6 +78,18 @@ info, err := stegano.EstimateCapacity(carrier)
 fmt.Printf("Format: %s  Total: %d bits  Recommended: %d bits\n",
     info.Format, info.TotalBits, info.RecommendedBits)
 
+// Work on files directly. No size limit: FASTQ, VCF (info/id/quality), ...
+// are streamed with constant memory; other formats are read into memory.
+// outPath is written atomically and left untouched on error.
+err = stegano.EmbedFile("reads.fastq", "reads.stego.fastq", []byte("secret"),
+    stegano.WithPassword("encryption-key"))
+payload, err = stegano.ExtractFile("reads.stego.fastq",
+    stegano.WithPassword("encryption-key"))
+
+// Pass any handler option through, e.g. uncompressed BAM output.
+err = stegano.EmbedFile("aln.bam", "aln.stego.bam", payload,
+    stegano.WithFormatSpecific("bam_compression", "none"))
+
 // Detect format only.
 fmt, err := stegano.DetectFormat(carrier)
 
@@ -111,6 +123,10 @@ fmt.Println(stegano.Version()) // crate version, e.g. "0.6.0"
 | `WithCipher(string)` | Encryption cipher: `aes256gcm` (default) or `chacha20`. Requires `WithPassword`; auto-detected on `Extract`. |
 | `WithStealth(string)` | `low\|medium\|high\|maximum` (default `high`). |
 | `WithECLevel(string)` | Reed-Solomon level `none\|low\|medium\|high\|maximum` (default `none`). Without a password, `Extract` needs a non-`none` level too if one was used for `Embed`. |
+| `WithFormatSpecific(key string, value any)` | Raw `format_specific` key passed to the handler, e.g. `("bam_compression", "none")` or `("sam_strategy", "auxiliary")`. `value` must be JSON-encodable. Typed options (`WithStrategy`, `WithCipher`, ...) win for the same key. |
+
+`EmbedFile` and `ExtractFile` take the same options. Without `WithFormat` they
+detect the format from the file name, then from the file's first 4 KiB.
 
 ## Error handling
 

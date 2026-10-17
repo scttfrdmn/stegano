@@ -82,6 +82,10 @@ pub enum Commands {
         /// Encryption cipher (aes256gcm, chacha20). Auto-detected on extract.
         #[arg(long, default_value = DEFAULT_CIPHER_NAME)]
         cipher: String,
+        /// Force the in-memory code path. By default streamable carriers
+        /// (FASTQ, VCF info/id/quality, ...) are streamed with constant memory.
+        #[arg(long)]
+        no_stream: bool,
     },
     /// Extract secret data from carrier file
     Extract {
@@ -108,6 +112,10 @@ pub enum Commands {
         /// WAV: timedomain|frequency|phase|spread|echo (auto-detected)
         #[arg(long)]
         strategy: Option<String>,
+        /// Force the in-memory code path. By default streamable carriers
+        /// (FASTQ, VCF info/id/quality, ...) are streamed with constant memory.
+        #[arg(long)]
+        no_stream: bool,
     },
     /// Analyze carrier capacity
     Analyze {
@@ -131,3 +139,4 @@ pub enum Commands {
 }
 
 pub mod commands;
+pub mod files;

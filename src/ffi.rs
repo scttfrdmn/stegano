@@ -19,6 +19,12 @@
 //!   `"cipher"`) and pass format-specific keys through to the handlers
 //!   (e.g. `"sam_strategy"`).
 //!
+//! * `stegano_embed_file` / `stegano_extract_file` work on file paths and
+//!   have no 32-bit size limit: streamable formats/strategies (see
+//!   [`crate::stream::is_streamable`]) are streamed with constant memory,
+//!   anything else is read into memory. Embedded output is written
+//!   atomically (temporary file + rename).
+//!
 //! # Panics
 //!
 //! Every exported function body runs inside [`std::panic::catch_unwind`]; a
@@ -36,6 +42,7 @@
 //! would panic), the work is run on a short-lived helper thread instead.
 
 use crate::carrier::{self, carrier_from_bytes};
+use crate::cli::files;
 use crate::core::*;
 use crate::handlers::HandlerRegistry;
 use std::collections::HashMap;
@@ -43,6 +50,7 @@ use std::ffi::CStr;
 use std::future::Future;
 use std::os::raw::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
 use std::ptr;
 use std::slice;
 use std::sync::OnceLock;
@@ -281,16 +289,61 @@ fn build_params(
     Ok(params)
 }
 
+/// Read a required NUL-terminated file path (null or empty is rejected).
+///
+/// On Unix the bytes are used as-is (paths need not be UTF-8); elsewhere
+/// the path must be valid UTF-8.
+///
+/// # Safety
+/// `path` must be null or a valid NUL-terminated C string.
+unsafe fn read_path(path: *const c_char) -> FfiResult<PathBuf> {
+    if path.is_null() {
+        return Err(SteganoErrorCode::InvalidParameter);
+    }
+    let bytes = unsafe { CStr::from_ptr(path) }.to_bytes();
+    if bytes.is_empty() {
+        return Err(SteganoErrorCode::InvalidParameter);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        std::str::from_utf8(bytes)
+            .map(PathBuf::from)
+            .map_err(|_| SteganoErrorCode::InvalidParameter)
+    }
+}
+
+/// Borrow a payload buffer of `len` (`size_t`) bytes, rejecting null
+/// pointers, empty buffers and lengths `slice::from_raw_parts` disallows.
+///
+/// # Safety
+/// `ptr` must be valid for reads of `len` bytes for the lifetime `'a`.
+unsafe fn input_slice_sized<'a>(ptr: *const u8, len: usize) -> FfiResult<&'a [u8]> {
+    if ptr.is_null() || len == 0 || len > isize::MAX as usize {
+        return Err(SteganoErrorCode::InvalidParameter);
+    }
+    Ok(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
 /// Copy `data` into a fresh `malloc` buffer (released with `stegano_free`).
 fn alloc_output(data: &[u8]) -> FfiResult<(*mut u8, u32)> {
     let len = u32::try_from(data.len()).map_err(|_| SteganoErrorCode::InvalidParameter)?;
+    Ok((alloc_output_sized(data)?, len))
+}
+
+/// Copy `data` into a fresh `malloc` buffer of any size.
+fn alloc_output_sized(data: &[u8]) -> FfiResult<*mut u8> {
     // malloc(0) may return NULL; always allocate at least one byte.
     let p = unsafe { libc::malloc(data.len().max(1)) as *mut u8 };
     if p.is_null() {
         return Err(SteganoErrorCode::Unknown);
     }
     unsafe { ptr::copy_nonoverlapping(data.as_ptr(), p, data.len()) };
-    Ok((p, len))
+    Ok(p)
 }
 
 fn sat_u32(v: impl TryInto<u32>) -> u32 {
@@ -637,8 +690,145 @@ pub unsafe extern "C" fn stegano_extract_v2(
     })
 }
 
-/// Free a buffer returned by `stegano_extract`, `stegano_extract_v2` or
-/// `stegano_embed_v2`. Passing NULL is a no-op.
+/// Detect the format of the file at `path` without reading all of it: the
+/// file extension first, then the first 4 KiB (magic bytes, then handler
+/// probing). Unrecognised files are reported as `CDataFormat_Binary`.
+///
+/// # Safety
+/// `path` must be a valid NUL-terminated C string and `format_out` must
+/// point to a writable `uint32_t`.
+#[no_mangle]
+pub unsafe extern "C" fn stegano_detect_file_format(
+    path: *const c_char,
+    format_out: *mut u32,
+) -> SteganoErrorCode {
+    guard(|| {
+        into_code((|| {
+            if format_out.is_null() {
+                return Err(SteganoErrorCode::InvalidParameter);
+            }
+            let path = unsafe { read_path(path) }?;
+            let format = files::detect_file_format(&path).map_err(|e| to_c_error(&e))?;
+            unsafe { *format_out = to_c_format(&format) as u32 };
+            Ok(())
+        })())
+    })
+}
+
+/// Embed a payload into the carrier file `in_path`, writing the result to
+/// `out_path` (path-based; no 32-bit limit on the carrier size).
+///
+/// Streamable format/strategy pairs (e.g. FASTQ, VCF `info`/`id`/`quality`)
+/// are streamed with constant memory; anything else is read into memory.
+/// The output is written to a temporary file in `out_path`'s directory and
+/// renamed over `out_path` only on success, so on error `out_path` is left
+/// untouched. `in_path` and `out_path` may be the same file.
+///
+/// `format_specific_json` accepts the same keys as `stegano_embed_v2`
+/// (plus any handler key, e.g. `"bam_compression"`). `result_out` may be
+/// NULL.
+///
+/// # Safety
+/// - `in_path` and `out_path` must be valid NUL-terminated C strings
+/// - `payload_data` must point to at least `payload_len` readable bytes
+/// - `password` and `format_specific_json` must each be null or a valid
+///   NUL-terminated C string
+/// - `result_out` must be null or point to a writable `CEmbedResult`
+#[no_mangle]
+pub unsafe extern "C" fn stegano_embed_file(
+    in_path: *const c_char,
+    out_path: *const c_char,
+    payload_data: *const u8,
+    payload_len: usize,
+    format: u32,
+    password: *const c_char,
+    format_specific_json: *const c_char,
+    result_out: *mut CEmbedResult,
+) -> SteganoErrorCode {
+    guard(|| {
+        into_code((|| {
+            let in_path = unsafe { read_path(in_path) }?;
+            let out_path = unsafe { read_path(out_path) }?;
+            let payload = unsafe { input_slice_sized(payload_data, payload_len) }?;
+            let format = format_from_u32(format).ok_or(SteganoErrorCode::InvalidParameter)?;
+            let options = unsafe { read_options(format_specific_json) }?;
+            let params = build_params(unsafe { read_password(password) }, options)?;
+            let (result, _mode) = run_blocking(files::embed_path(
+                Some(format),
+                &in_path,
+                &out_path,
+                payload,
+                &params,
+                true,
+            ))?
+            .map_err(|e| to_c_error(&e))?;
+            if !result_out.is_null() {
+                unsafe {
+                    *result_out = CEmbedResult {
+                        success: result.success,
+                        bytes_embedded: sat_u32(result.bytes_embedded),
+                        carrier_modified: result.carrier_modified,
+                        embedding_time_ms: sat_u32(result.performance_stats.embedding_time_ms),
+                        memory_usage_bytes: sat_u32(result.performance_stats.memory_usage_bytes),
+                    };
+                }
+            }
+            Ok(())
+        })())
+    })
+}
+
+/// Extract the payload from the carrier file at `path` (path-based; no
+/// 32-bit limit on the carrier size).
+///
+/// Streamable formats are streamed, stopping as soon as the payload is
+/// complete; anything else is read into memory. On success `*output_out`
+/// receives a library-allocated buffer (free it with `stegano_free`) and
+/// `*output_len_out` its length. `format_specific_json` is as for
+/// `stegano_extract_v2`.
+///
+/// # Safety
+/// - `path` must be a valid NUL-terminated C string
+/// - `password` and `format_specific_json` must each be null or a valid
+///   NUL-terminated C string
+/// - `output_out` and `output_len_out` must be valid writable pointers
+#[no_mangle]
+pub unsafe extern "C" fn stegano_extract_file(
+    path: *const c_char,
+    format: u32,
+    password: *const c_char,
+    format_specific_json: *const c_char,
+    output_out: *mut *mut u8,
+    output_len_out: *mut usize,
+) -> SteganoErrorCode {
+    guard(|| {
+        into_code((|| {
+            if output_out.is_null() || output_len_out.is_null() {
+                return Err(SteganoErrorCode::InvalidParameter);
+            }
+            unsafe {
+                *output_out = ptr::null_mut();
+                *output_len_out = 0;
+            }
+            let path = unsafe { read_path(path) }?;
+            let format = format_from_u32(format).ok_or(SteganoErrorCode::InvalidParameter)?;
+            let options = unsafe { read_options(format_specific_json) }?;
+            let params = build_params(unsafe { read_password(password) }, options)?;
+            let (payload, _mode) =
+                run_blocking(files::extract_path(Some(format), &path, &params, true))?
+                    .map_err(|e| to_c_error(&e))?;
+            let p = alloc_output_sized(&payload)?;
+            unsafe {
+                *output_out = p;
+                *output_len_out = payload.len();
+            }
+            Ok(())
+        })())
+    })
+}
+
+/// Free a buffer returned by `stegano_extract`, `stegano_extract_v2`,
+/// `stegano_extract_file` or `stegano_embed_v2`. Passing NULL is a no-op.
 ///
 /// # Arguments
 /// * `ptr` - Pointer to memory to free
@@ -976,6 +1166,141 @@ mod tests {
         assert!(result.success);
         let got = unsafe { extract_v2(&carrier, BINARY, None, None) }.unwrap();
         assert_eq!(got, payload);
+    }
+
+    fn fastq_carrier(records: usize) -> Vec<u8> {
+        let mut s = String::new();
+        for i in 0..records {
+            s.push_str(&format!("@r{i}\nACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIII\n"));
+        }
+        s.into_bytes()
+    }
+
+    fn cpath(p: &std::path::Path) -> CString {
+        CString::new(p.to_str().unwrap()).unwrap()
+    }
+
+    unsafe fn embed_file(
+        input: &std::path::Path,
+        output: &std::path::Path,
+        payload: &[u8],
+        format: u32,
+        json: Option<&str>,
+    ) -> SteganoErrorCode {
+        let js = json.map(|j| CString::new(j).unwrap());
+        unsafe {
+            stegano_embed_file(
+                cpath(input).as_ptr(),
+                cpath(output).as_ptr(),
+                payload.as_ptr(),
+                payload.len(),
+                format,
+                c"pw".as_ptr(),
+                js.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
+                ptr::null_mut(),
+            )
+        }
+    }
+
+    unsafe fn extract_file(path: &std::path::Path, format: u32) -> FfiResult<Vec<u8>> {
+        let mut out: *mut u8 = ptr::null_mut();
+        let mut out_len: usize = 0;
+        let code = unsafe {
+            stegano_extract_file(
+                cpath(path).as_ptr(),
+                format,
+                c"pw".as_ptr(),
+                ptr::null(),
+                &mut out,
+                &mut out_len,
+            )
+        };
+        if code != SteganoErrorCode::Success {
+            return Err(code);
+        }
+        let v = unsafe { slice::from_raw_parts(out, out_len) }.to_vec();
+        unsafe { stegano_free(out as *mut c_void) };
+        Ok(v)
+    }
+
+    #[test]
+    fn test_file_roundtrip_streamed_and_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            ("in.fastq", fastq_carrier(300), CDataFormat::Fastq as u32),
+            ("in.sam", sam_carrier(200), SAM),
+            ("in.bin", binary_carrier(8192), BINARY),
+        ];
+        for (name, data, format) in cases {
+            let input = dir.path().join(name);
+            let output = dir.path().join(format!("out-{name}"));
+            fs_write(&input, &data);
+            let code = unsafe { embed_file(&input, &output, b"file payload", format, None) };
+            assert_eq!(code, SteganoErrorCode::Success, "{name}");
+            let got = unsafe { extract_file(&output, format) }.unwrap();
+            assert_eq!(got, b"file payload", "{name}");
+        }
+    }
+
+    fn fs_write(p: &std::path::Path, data: &[u8]) {
+        std::fs::write(p, data).unwrap();
+    }
+
+    #[test]
+    fn test_file_errors_leave_output_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("small.fastq");
+        let output = dir.path().join("out.fastq");
+        fs_write(&input, &fastq_carrier(2));
+        fs_write(&output, b"keep me");
+        let code = unsafe { embed_file(&input, &output, &[7u8; 4000], 1, None) };
+        assert_eq!(code, SteganoErrorCode::InsufficientCapacity);
+        assert_eq!(std::fs::read(&output).unwrap(), b"keep me");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+
+        let missing = dir.path().join("missing.fastq");
+        assert_eq!(
+            unsafe { embed_file(&missing, &output, b"x", 1, None) },
+            SteganoErrorCode::IoError
+        );
+        assert_eq!(
+            unsafe { embed_file(&input, &output, b"x", 99, None) },
+            SteganoErrorCode::InvalidParameter
+        );
+        assert_eq!(
+            unsafe { embed_file(&input, &output, b"x", 1, Some("[1]")) },
+            SteganoErrorCode::InvalidParameter
+        );
+        let code = unsafe {
+            stegano_embed_file(
+                ptr::null(),
+                cpath(&output).as_ptr(),
+                b"x".as_ptr(),
+                1,
+                1,
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(code, SteganoErrorCode::InvalidParameter);
+        assert_eq!(
+            unsafe { extract_file(&missing, 1) },
+            Err(SteganoErrorCode::IoError)
+        );
+    }
+
+    #[test]
+    fn test_detect_file_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("reads.dat");
+        fs_write(&p, &fastq_carrier(3));
+        let mut fmt = 99u32;
+        let code = unsafe { stegano_detect_file_format(cpath(&p).as_ptr(), &mut fmt) };
+        assert_eq!(code, SteganoErrorCode::Success);
+        assert_eq!(fmt, CDataFormat::Fastq as u32);
+        let code = unsafe { stegano_detect_file_format(ptr::null(), &mut fmt) };
+        assert_eq!(code, SteganoErrorCode::InvalidParameter);
     }
 
     #[tokio::test]

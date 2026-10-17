@@ -57,6 +57,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-memory behaviour is unchanged. Embedding 16 KiB into a 2.16 GB BAM peaked at about
   69 MiB RSS (mostly Argon2); extraction read only the first 256 KiB. `samtools quickcheck`
   and `samtools view -c` accept the output.
+- Streaming in the CLI, C FFI, Go and Python ([#78](https://github.com/scttfrdmn/stegano/issues/78),
+  part of [#30](https://github.com/scttfrdmn/stegano/issues/30)). Each call checks
+  `stream::is_streamable`, so any format registered with `stegano::stream` is picked up
+  automatically.
+  - CLI: `embed` and `extract` stream when the format and strategy allow it. The format comes from
+    the extension, or from the magic bytes of the first 4 KiB, so the file is never read whole.
+    `--no-stream` forces the in-memory path, and `--validate` also uses it. The command prints
+    which path it used. Output files are now always written atomically.
+  - C FFI: new `stegano_embed_file(in_path, out_path, payload, payload_len, format, password,
+    format_specific_json, result_out)`, `stegano_extract_file(path, format, password,
+    format_specific_json, output_out, output_len_out)` and
+    `stegano_detect_file_format(path, format_out)`. They take paths, use `size_t` lengths and
+    have no 32-bit size limit. They stream when possible and otherwise read the file into memory.
+    Embedding writes to a temporary file and renames it over the output only on success.
+  - Go: `EmbedFile(inPath, outPath, payload, opts...)`, `ExtractFile(path, opts...)`, and
+    `WithFormatSpecific(key, value)`. `WithFormatSpecific` merges any handler key, such as
+    `bam_compression`, into the options JSON for every call.
+  - Python: `embed_file(in_path, out_path, payload, password=None, ..., format_specific=None)`
+    returns `{"bytes_embedded", "streamed"}`. `extract_file(path, password=None, ...,
+    format_specific=None)` is the extract counterpart. Both release the GIL. `embed`/`extract`
+    (module and `Stegano` class) also accept `format_specific: dict | None`.
 
 ### Fixed
 - WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not

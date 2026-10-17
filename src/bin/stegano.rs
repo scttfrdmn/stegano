@@ -22,6 +22,7 @@ async fn main() {
             ec_level,
             strategy,
             cipher,
+            no_stream,
         } => {
             if let Err(e) = stegano::cli::commands::handle_embed(
                 &input,
@@ -34,6 +35,7 @@ async fn main() {
                 &ec_level,
                 strategy.as_deref(),
                 &cipher,
+                no_stream,
             )
             .await
             {
@@ -48,6 +50,7 @@ async fn main() {
             gpu,
             ec_level,
             strategy,
+            no_stream,
         } => {
             if let Err(e) = stegano::cli::commands::handle_extract(
                 &input,
@@ -56,6 +59,7 @@ async fn main() {
                 gpu,
                 &ec_level,
                 strategy.as_deref(),
+                no_stream,
             )
             .await
             {
