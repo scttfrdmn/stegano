@@ -353,7 +353,7 @@ print_usage() {
     echo ""
     print_info "Documentation:"
     echo "  docs/README.md                       # Documentation index"
-    echo "  docs/guides/getting-started.md       # Getting started guide"
+    echo "  docs/GETTING_STARTED.md              # Getting started guide"
     echo "  docs/archive/DEVELOPMENT_STRATEGY.md # Development workflow (historical)"
     echo "  docs/archive/ROADMAP_0_2_0.md        # Implementation roadmap (historical)"
 }
