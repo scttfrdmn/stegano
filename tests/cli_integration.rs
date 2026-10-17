@@ -824,3 +824,89 @@ fn test_cli_png_uses_in_memory_path() {
     assert!(!embed_out.contains("Streaming"), "{embed_out}");
     assert!(extract_out.contains("In-memory"), "{extract_out}");
 }
+
+// ---------------------------------------------------------------------------
+// FITS --strategy (#95)
+// ---------------------------------------------------------------------------
+
+/// A single-HDU FITS file with a 1-D image of `n` samples at `bitpix`.
+fn fits_carrier(bitpix: i64, n: usize) -> Vec<u8> {
+    let cards = [
+        "SIMPLE  =                    T".to_string(),
+        format!("BITPIX  = {bitpix:>20}"),
+        format!("NAXIS   = {:>20}", 1),
+        format!("NAXIS1  = {n:>20}"),
+        "END".to_string(),
+    ];
+    let mut f: Vec<u8> = cards
+        .iter()
+        .flat_map(|c| format!("{c:<80}").into_bytes())
+        .collect();
+    f.resize(f.len().div_ceil(2880) * 2880, b' ');
+    for i in 0..n {
+        if bitpix == -32 {
+            f.extend_from_slice(&(1.0f32 + i as f32 * 0.37).to_be_bytes());
+        } else {
+            f.extend_from_slice(&((i as i16).wrapping_mul(97)).to_be_bytes());
+        }
+    }
+    f.resize(f.len().div_ceil(2880) * 2880, 0);
+    f
+}
+
+#[test]
+fn test_cli_fits_float_requires_strategy() {
+    let dir = TempDir::new().unwrap();
+    let carrier = fits_carrier(-32, 4000);
+
+    let input = dir.path().join("float.fits");
+    let payload = dir.path().join("payload.txt");
+    let stego = dir.path().join("stego-default.fits");
+    fs::write(&input, &carrier).unwrap();
+    fs::write(&payload, "secret").unwrap();
+    let mut args = embed_args(
+        input.to_str().unwrap(),
+        payload.to_str().unwrap(),
+        stego.to_str().unwrap(),
+    );
+    args.extend(["--password", "pw"]);
+    let out = run_stegano(&args, &[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "float FITS embed without opt-in succeeded"
+    );
+    assert!(stderr.contains("floating point"), "{stderr}");
+    assert!(stderr.contains("float_mantissa"), "{stderr}");
+
+    // An unknown strategy is a clear error.
+    args.extend(["--strategy", "bogus"]);
+    let out = run_stegano(&args, &[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("Unknown fits_strategy"), "{stderr}");
+
+    let (_, _, stego) = cli_roundtrip(
+        &dir,
+        "float.fits",
+        &carrier,
+        &["--strategy", "float_mantissa"],
+        &[],
+    );
+    assert_eq!(stego.len(), carrier.len());
+    assert_ne!(stego, carrier);
+}
+
+#[test]
+fn test_cli_fits_integer_pixel_lsb() {
+    let dir = TempDir::new().unwrap();
+    let carrier = fits_carrier(16, 4000);
+    let (_, _, stego) = cli_roundtrip(
+        &dir,
+        "int.fits",
+        &carrier,
+        &["--strategy", "pixel_lsb"],
+        &["--strategy", "pixel_lsb"],
+    );
+    assert_eq!(stego.len(), carrier.len());
+}

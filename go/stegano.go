@@ -136,6 +136,8 @@ func strategyKey(format Format) string {
 		return "signal_strategy"
 	case FormatFASTA, FormatFASTQ:
 		return "genomics_strategy"
+	case FormatFITS:
+		return "fits_strategy"
 	default:
 		return ""
 	}
@@ -231,6 +233,7 @@ func WithFormat(format Format) Option {
 //   - DICOM (dicom_strategy):      "private", "metadata", "sequence", "pixel_lsb", "multi"
 //   - WAV (signal_strategy):       "timedomain", "frequency", "phase", "spread", "echo"
 //   - FASTA/FASTQ (genomics_strategy)
+//   - FITS (fits_strategy):        "pixel_lsb", "float_mantissa"
 //
 // Using WithStrategy with any other format returns ErrInvalidParameter.
 // Pass the same strategy to Extract.

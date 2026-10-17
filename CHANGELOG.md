@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyproject.toml` no longer sets `PYO3_USE_ABI3_FORWARD_COMPATIBILITY`, because pyo3 0.29
   supports CPython up to 3.15.
 
+### Fixed
+- The CLI's `--strategy` flag now applies to FITS files, mapping to `fits_strategy`
+  (`pixel_lsb` or `float_mantissa`), so float (`BITPIX` -32/-64) FITS data can be embedded
+  from the CLI with `--strategy float_mantissa`. Unknown values are rejected with an error
+  ([#95](https://github.com/scttfrdmn/stegano/issues/95)).
+
 ### Changed
 - npm publishing uses npm trusted publishing (OIDC); `NPM_TOKEN` is only a fallback
   ([#89](https://github.com/scttfrdmn/stegano/pull/89)). The workflow publishes the packed

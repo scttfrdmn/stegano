@@ -393,7 +393,8 @@ impl FitsHandler {
                 Some(f) => format!(
                     "FITS image data is floating point (BITPIX = {}); flipping raw byte LSBs \
                      would corrupt it. Set format_specific[\"{STRATEGY_KEY}\"] = \
-                     \"float_mantissa\" to embed in mantissa LSBs (this alters scientific data)",
+                     \"float_mantissa\" (CLI: --strategy float_mantissa) to embed in mantissa \
+                     LSBs (this alters scientific data)",
                     f.bitpix
                 ),
                 None => "FITS file has no integer image HDU with pixel data".to_string(),

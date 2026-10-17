@@ -126,6 +126,7 @@ pub fn strategy_key(format: &DataFormat) -> Option<&'static str> {
         DataFormat::DICOM => "dicom_strategy",
         DataFormat::WAV => "signal_strategy",
         DataFormat::FASTA | DataFormat::FASTQ => "genomics_strategy",
+        DataFormat::FITS => "fits_strategy",
         _ => return None,
     })
 }
@@ -472,6 +473,7 @@ mod tests {
         assert_eq!(strategy_key(&DataFormat::DICOM), Some("dicom_strategy"));
         assert_eq!(strategy_key(&DataFormat::WAV), Some("signal_strategy"));
         assert_eq!(strategy_key(&DataFormat::FASTA), Some("genomics_strategy"));
+        assert_eq!(strategy_key(&DataFormat::FITS), Some("fits_strategy"));
         assert_eq!(strategy_key(&DataFormat::BINARY), None);
     }
 
