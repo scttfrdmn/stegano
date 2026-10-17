@@ -84,7 +84,8 @@ pub enum Commands {
         #[arg(long, default_value = DEFAULT_CIPHER_NAME)]
         cipher: String,
         /// Force the in-memory code path. By default streamable carriers
-        /// (FASTQ, VCF info/id/quality, SAM/BAM auxiliary/quality) are streamed.
+        /// (FASTQ, VCF info/id/quality, SAM/BAM auxiliary/quality, CSV, FITS,
+        /// WAV timedomain) are streamed.
         #[arg(long)]
         no_stream: bool,
     },
@@ -115,7 +116,8 @@ pub enum Commands {
         #[arg(long)]
         strategy: Option<String>,
         /// Force the in-memory code path. By default streamable carriers
-        /// (FASTQ, VCF info/id/quality, SAM/BAM auxiliary/quality) are streamed.
+        /// (FASTQ, VCF info/id/quality, SAM/BAM auxiliary/quality, CSV, FITS,
+        /// WAV timedomain) are streamed.
         #[arg(long)]
         no_stream: bool,
     },

@@ -1,4 +1,4 @@
-//! Streaming embed/extract for very large carriers (multi-GB FASTQ, ...).
+//! Streaming embed/extract for very large carriers (multi-GB FASTQ, FITS, WAV, ...).
 //!
 //! Payloads are small and carriers are large, so only the **carrier** is
 //! streamed.  The payload is encoded once, in memory, with
@@ -21,6 +21,8 @@
 //! | [`DataFormat::SAM`], [`DataFormat::BAM`] | `sam_strategy` = `auxiliary` or `quality` (BAM: BGZF or raw `BAM\1` input; `bam_compression` = `bgzf` (default) or `none`); extraction also reads `optional`/`comment`/`multi` files |
 //! | [`DataFormat::CsvTimeseries`] | last-digit parity (`csv_strategy` = `digit` or absent; `csv_delimiter` honoured on embed and extract) |
 //! | [`DataFormat::TEXT`] | trailing whitespace, embed only with a fixed `text_bits_per_line` (the automatic choice needs the line count up front); extraction works for any `k` |
+//! | [`DataFormat::FITS`] | sample LSB of the first suitable image HDU (`fits_strategy` = `pixel_lsb` (or absent) or `float_mantissa`); other HDUs, headers and padding pass through |
+//! | [`DataFormat::WAV`] | time-domain LSB only (`signal_strategy` = `timedomain`, or `StealthLevel::Low` with no `signal_strategy`); `frequency`/`phase`/`spread`/`echo` are in-memory only (channel-major bit order, whole-carrier self-verification), and stream extraction of such a payload returns the "not streamable" error |
 //!
 //! Anything else returns [`SteganoError::InvalidParameter`]
 //! (`"<format>/<strategy> is not streamable; use the in-memory API"`); use
@@ -59,11 +61,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+mod binary;
 mod csv;
 mod fastq;
+mod fits;
 mod sam;
 mod text;
 mod vcf;
+mod wav;
 
 /// I/O buffer size used by [`embed_file`] / [`extract_file`].
 const FILE_BUF: usize = 256 * 1024;
@@ -129,6 +134,8 @@ fn handler_for(format: &DataFormat) -> Option<&'static dyn StreamHandler> {
         DataFormat::BAM => Some(&sam::BAM_STREAM),
         DataFormat::CsvTimeseries => Some(&csv::CsvStream),
         DataFormat::TEXT => Some(&text::TextStream),
+        DataFormat::FITS => Some(&fits::FitsStream),
+        DataFormat::WAV => Some(&wav::WavStream),
         _ => None,
     }
 }
@@ -311,5 +318,7 @@ pub fn extract_file<P: AsRef<Path>>(
     extract_stream(format, reader, params)
 }
 
+#[cfg(test)]
+mod binary_tests;
 #[cfg(test)]
 mod tests;

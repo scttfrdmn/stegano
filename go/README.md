@@ -78,8 +78,8 @@ info, err := stegano.EstimateCapacity(carrier)
 fmt.Printf("Format: %s  Total: %d bits  Recommended: %d bits\n",
     info.Format, info.TotalBits, info.RecommendedBits)
 
-// Work on files directly. No size limit: FASTQ, VCF (info/id/quality) and SAM/BAM
-// (auxiliary/quality) are streamed in constant memory; others are read whole.
+// Work on files directly. No size limit: FASTQ, VCF (info/id/quality), SAM/BAM
+// (auxiliary/quality), CSV, FITS and WAV (timedomain) are streamed in constant memory; others are read whole.
 // outPath is written atomically and left untouched on error.
 err = stegano.EmbedFile("reads.fastq", "reads.stego.fastq", []byte("secret"),
     stegano.WithPassword("encryption-key"))

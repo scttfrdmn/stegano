@@ -70,18 +70,18 @@
 use super::DataHandler;
 use crate::codec;
 use crate::core::*;
+use crate::time::Instant;
 use async_trait::async_trait;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
-use crate::time::Instant;
 
 /// Magic bytes that open every embedded header.
-const MAGIC: &[u8; 4] = b"SGSJ";
+pub(crate) const MAGIC: &[u8; 4] = b"SGSJ";
 /// Header length in bytes: magic(4) + length(4) + strategy(1) + version(1).
-const HEADER_LEN: usize = 10;
-const HEADER_BITS: usize = HEADER_LEN * 8;
+pub(crate) const HEADER_LEN: usize = 10;
+pub(crate) const HEADER_BITS: usize = HEADER_LEN * 8;
 /// Wire-format version stored in header byte 9 (2 = codec pipeline).
-const FORMAT_VERSION: u8 = 2;
+pub(crate) const FORMAT_VERSION: u8 = 2;
 
 /// Default sample rate for raw (headerless) carriers without `sampling_rate`.
 const DEFAULT_RAW_RATE: u32 = 44_100;
@@ -188,7 +188,7 @@ impl SignalEmbedStrategy {
         SignalEmbedStrategy::EchoHiding,
     ];
 
-    fn to_u8(self) -> u8 {
+    pub(crate) fn to_u8(self) -> u8 {
         match self {
             SignalEmbedStrategy::TimeDomainLSB => 0,
             SignalEmbedStrategy::FrequencyDomain => 1,
@@ -234,9 +234,22 @@ impl SampleKind {
     }
 }
 
+/// Bytes of a `fmt ` chunk that [`SignalLayout::parse_fmt`] reads.
+pub(crate) const FMT_PREFIX: usize = 40;
+
+/// The parsed `fmt ` chunk of a WAV file.
+#[derive(Debug, Clone)]
+pub(crate) struct WavFmt {
+    pub(crate) channels: usize,
+    pub(crate) sample_rate: u32,
+    /// Bytes per frame (`channels × bytes per sample`).
+    pub(crate) block_align: usize,
+    kind: SampleKind,
+}
+
 /// Where the samples live inside the carrier bytes and how to read them.
 #[derive(Debug, Clone)]
-struct SignalLayout {
+pub(crate) struct SignalLayout {
     data_offset: usize,
     /// Length in bytes of the sample region. Always a multiple of the frame size.
     data_len: usize,
@@ -249,7 +262,7 @@ fn le_u16(d: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([d[at], d[at + 1]])
 }
 
-fn le_u32(d: &[u8], at: usize) -> u32 {
+pub(crate) fn le_u32(d: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]])
 }
 
@@ -327,9 +340,39 @@ impl SignalLayout {
 
         let (fmt_at, fmt_len) = fmt.ok_or_else(|| invalid("WAV file has no fmt chunk"))?;
         let (data_at, data_len) = data.ok_or_else(|| invalid("WAV file has no data chunk"))?;
-        if fmt_len < 16 {
+        let fmt = Self::parse_fmt(&d[fmt_at..fmt_at + fmt_len.min(FMT_PREFIX)], fmt_len)?;
+
+        let layout = Self {
+            data_offset: data_at,
+            data_len: data_len - data_len % fmt.block_align,
+            channels: fmt.channels,
+            sample_rate: fmt.sample_rate,
+            kind: fmt.kind,
+        };
+        layout.check_finite(d)?;
+        Ok(layout)
+    }
+
+    /// Layout of a standalone buffer of `data_len` sample bytes in format
+    /// `fmt` (used by the stream handler, one buffer at a time).
+    pub(crate) fn for_buffer(fmt: &WavFmt, data_len: usize) -> Self {
+        Self {
+            data_offset: 0,
+            data_len,
+            channels: fmt.channels,
+            sample_rate: fmt.sample_rate,
+            kind: fmt.kind,
+        }
+    }
+
+    /// Parse a `fmt ` chunk.  `body` holds its first `min(fmt_len, 40)`
+    /// bytes; `fmt_len` is the declared chunk size.
+    pub(crate) fn parse_fmt(body: &[u8], fmt_len: usize) -> Result<WavFmt> {
+        if fmt_len < 16 || body.len() < 16 {
             return Err(invalid("WAV fmt chunk is too short"));
         }
+        let d = body;
+        let fmt_at = 0;
 
         let mut format_tag = le_u16(d, fmt_at);
         let channels = le_u16(d, fmt_at + 2) as usize;
@@ -339,7 +382,7 @@ impl SignalLayout {
         let mut valid_bits = bits;
 
         if format_tag == 0xFFFE {
-            if fmt_len < 40 {
+            if fmt_len < 40 || body.len() < 40 {
                 return Err(invalid("WAVE_FORMAT_EXTENSIBLE fmt chunk is too short"));
             }
             let vb = le_u16(d, fmt_at + 18) as u32;
@@ -391,18 +434,15 @@ impl SignalLayout {
             }
         };
 
-        let layout = Self {
-            data_offset: data_at,
-            data_len: data_len - data_len % block_align,
+        Ok(WavFmt {
             channels,
             sample_rate,
+            block_align,
             kind,
-        };
-        layout.check_finite(d)?;
-        Ok(layout)
+        })
     }
 
-    fn check_finite(&self, d: &[u8]) -> Result<()> {
+    pub(crate) fn check_finite(&self, d: &[u8]) -> Result<()> {
         if matches!(self.kind, SampleKind::F32 | SampleKind::F64) {
             for i in 0..self.num_samples() {
                 if !self.read_units(d, i).is_finite() {
@@ -415,7 +455,7 @@ impl SignalLayout {
         Ok(())
     }
 
-    fn num_samples(&self) -> usize {
+    pub(crate) fn num_samples(&self) -> usize {
         self.data_len / self.kind.bytes()
     }
 
@@ -518,7 +558,7 @@ impl SignalLayout {
         }
     }
 
-    fn read_lsb(&self, d: &[u8], i: usize) -> u8 {
+    pub(crate) fn read_lsb(&self, d: &[u8], i: usize) -> u8 {
         let a = self.at(i);
         match self.kind {
             SampleKind::F32 | SampleKind::F64 => d[a] & 1,
@@ -526,7 +566,7 @@ impl SignalLayout {
         }
     }
 
-    fn write_lsb(&self, d: &mut [u8], i: usize, bit: u8) {
+    pub(crate) fn write_lsb(&self, d: &mut [u8], i: usize, bit: u8) {
         let a = self.at(i);
         match self.kind {
             // Little-endian: the mantissa LSB is bit 0 of the first byte.
@@ -968,6 +1008,19 @@ fn embed_echo(layout: &SignalLayout, out: &mut [u8], bits: &[u8], seed: u64) -> 
     Ok(())
 }
 
+/// Build the bit stream `SGSJ ‖ len u32 LE ‖ strategy ‖ version ‖ encoded`.
+pub(crate) fn build_stream(strategy: SignalEmbedStrategy, encoded: &[u8]) -> Result<Vec<u8>> {
+    let len_u32 =
+        u32::try_from(encoded.len()).map_err(|_| invalid("payload too large for signal header"))?;
+    let mut stream = Vec::with_capacity(HEADER_LEN + encoded.len());
+    stream.extend_from_slice(MAGIC);
+    stream.extend_from_slice(&len_u32.to_le_bytes());
+    stream.push(strategy.to_u8());
+    stream.push(FORMAT_VERSION);
+    stream.extend_from_slice(encoded);
+    Ok(stream)
+}
+
 fn bits_of(bytes: &[u8]) -> Vec<u8> {
     bytes
         .iter()
@@ -992,7 +1045,7 @@ impl SignalHandler {
         Self
     }
 
-    fn select_strategy(params: &EmbedParams) -> Result<SignalEmbedStrategy> {
+    pub(crate) fn select_strategy(params: &EmbedParams) -> Result<SignalEmbedStrategy> {
         if let Some(v) = params.format_specific.get("signal_strategy") {
             let name = v.as_str().ok_or_else(|| {
                 SteganoError::InvalidParameter("signal_strategy must be a string".to_string())
@@ -1037,6 +1090,65 @@ impl SignalHandler {
         info
     }
 
+    /// Embed already codec-encoded bytes with `strategy`, including the
+    /// self-verification, and return the new carrier bytes.
+    fn embed_encoded_bytes(
+        layout: &SignalLayout,
+        data: &[u8],
+        encoded: &[u8],
+        params: &EmbedParams,
+        strategy: SignalEmbedStrategy,
+    ) -> Result<Vec<u8>> {
+        let stream = build_stream(strategy, encoded)?;
+
+        let needed = stream
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| invalid("payload too large"))?;
+        let available = layout.capacity_bits(strategy);
+        if needed > available {
+            return Err(SteganoError::InsufficientCapacity { needed, available });
+        }
+        let bits = bits_of(&stream);
+        let seed = pn_seed(&params.encryption_key);
+
+        let mut out = data.to_vec();
+        match strategy {
+            SignalEmbedStrategy::TimeDomainLSB => embed_lsb(layout, &mut out, &bits),
+            SignalEmbedStrategy::FrequencyDomain | SignalEmbedStrategy::PhaseModulation => {
+                embed_fft(layout, &mut out, &bits, strategy)?
+            }
+            SignalEmbedStrategy::SpreadSpectrum => embed_spread(layout, &mut out, &bits, seed)?,
+            SignalEmbedStrategy::EchoHiding => embed_echo(layout, &mut out, &bits, seed)?,
+        }
+
+        // Self-verify on the final quantised bytes.
+        let check = extract_bits(layout, &out, strategy, bits.len(), seed);
+        if check != bits {
+            let errors = check.iter().zip(&bits).filter(|(a, b)| a != b).count();
+            return Err(invalid(format!(
+                "{strategy:?}: {errors} of {} bits would not extract from this carrier \
+                 (clipping near full scale?); try another strategy",
+                bits.len()
+            )));
+        }
+
+        Ok(out)
+    }
+
+    /// In-memory embed of already codec-encoded bytes into a WAV (the
+    /// stream tests compare this with the stream handler byte for byte).
+    #[cfg(test)]
+    pub(crate) fn embed_encoded_wav(
+        data: &[u8],
+        encoded: &[u8],
+        params: &EmbedParams,
+    ) -> Result<Vec<u8>> {
+        let layout = SignalLayout::parse_wav(data)?;
+        let strategy = Self::select_strategy(params)?;
+        Self::embed_encoded_bytes(&layout, data, encoded, params, strategy)
+    }
+
     async fn embed_with_strategy(
         &self,
         carrier: &mut CarrierData,
@@ -1054,47 +1166,8 @@ impl SignalHandler {
         } else {
             (enc_start.elapsed().as_millis() as u64).max(1)
         };
-        let len_u32 = u32::try_from(encoded.len())
-            .map_err(|_| invalid("payload too large for signal header"))?;
-
-        let mut stream = Vec::with_capacity(HEADER_LEN + encoded.len());
-        stream.extend_from_slice(MAGIC);
-        stream.extend_from_slice(&len_u32.to_le_bytes());
-        stream.push(strategy.to_u8());
-        stream.push(FORMAT_VERSION);
-        stream.extend_from_slice(&encoded);
-
-        let needed = stream
-            .len()
-            .checked_mul(8)
-            .ok_or_else(|| invalid("payload too large"))?;
-        let available = layout.capacity_bits(strategy);
-        if needed > available {
-            return Err(SteganoError::InsufficientCapacity { needed, available });
-        }
-        let bits = bits_of(&stream);
-        let seed = pn_seed(&params.encryption_key);
-
-        let mut out = carrier.raw_data.clone();
-        match strategy {
-            SignalEmbedStrategy::TimeDomainLSB => embed_lsb(&layout, &mut out, &bits),
-            SignalEmbedStrategy::FrequencyDomain | SignalEmbedStrategy::PhaseModulation => {
-                embed_fft(&layout, &mut out, &bits, strategy)?
-            }
-            SignalEmbedStrategy::SpreadSpectrum => embed_spread(&layout, &mut out, &bits, seed)?,
-            SignalEmbedStrategy::EchoHiding => embed_echo(&layout, &mut out, &bits, seed)?,
-        }
-
-        // Self-verify on the final quantised bytes.
-        let check = extract_bits(&layout, &out, strategy, bits.len(), seed);
-        if check != bits {
-            let errors = check.iter().zip(&bits).filter(|(a, b)| a != b).count();
-            return Err(invalid(format!(
-                "{strategy:?}: {errors} of {} bits would not extract from this carrier \
-                 (clipping near full scale?); try another strategy",
-                bits.len()
-            )));
-        }
+        let out =
+            Self::embed_encoded_bytes(&layout, &carrier.raw_data, &encoded, params, strategy)?;
 
         carrier.raw_data = out;
         Ok(EmbedResult::success(
