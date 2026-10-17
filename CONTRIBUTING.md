@@ -145,8 +145,8 @@ maturin build --release          # build a wheel into target/wheels/
 python -c "import stegano; print(stegano.version())"
 ```
 
-On a Python newer than the pinned pyo3 release supports (for example 3.14
-with pyo3 0.22), set `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
+On a Python newer than the pinned pyo3 release supports (pyo3 0.29 supports
+up to 3.15), set `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### WebAssembly / npm
 

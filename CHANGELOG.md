@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Upgraded dependencies to clear Dependabot alerts
+  ([#98](https://github.com/scttfrdmn/stegano/issues/98)):
+  - pyo3 0.22.6 → 0.29.3 (optional, `--features python`): GHSA-36hh-v3qg-5jq4,
+    GHSA-chgr-c6px-7xpp, GHSA-pph8-gcv7-4qj5. The Python API is unchanged; the bindings were
+    ported to the 0.29 API (`PyBytes::new` / `PyDict::new`, `Python::detach`).
+  - bytes 1.10.1 → 1.12.1: GHSA-434x-w66g-qw3r (integer overflow in `BytesMut::reserve`).
+  - rand 0.8.5 → 0.8.8 and 0.9.2 → 0.9.5 (the latter via the proptest dev-dependency):
+    GHSA-cq8v-f236-94qc.
+- `pyproject.toml` no longer sets `PYO3_USE_ABI3_FORWARD_COMPATIBILITY`, because pyo3 0.29
+  supports CPython up to 3.15.
+
 ### Changed
 - npm publishing uses npm trusted publishing (OIDC); `NPM_TOKEN` is only a fallback
   ([#89](https://github.com/scttfrdmn/stegano/pull/89)). The workflow publishes the packed

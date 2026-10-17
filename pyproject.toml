@@ -28,8 +28,3 @@ features = ["python", "pyo3/extension-module"]
 module-name = "stegano"
 # Strip debug symbols in release wheels.
 strip = true
-
-[tool.maturin.env]
-# Required when the system Python is newer than the pyo3 release's max-tested
-# version.  Forward compatibility uses the stable ABI so it should be safe.
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"
