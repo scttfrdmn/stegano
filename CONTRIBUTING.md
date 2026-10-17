@@ -242,7 +242,9 @@ One-time setup:
 To check a release without publishing, run the workflow manually
 (**Actions → npm publish → Run workflow**) with `dry_run` on, which is the
 default. A real publish from `workflow_dispatch` is only allowed on a tag ref,
-for example to retry a failed release.
+for example to retry a failed release. To build and publish an existing
+release tag with the current workflow, for instance after a workflow fix, run it
+from `main` with the `tag` input set (e.g. `v0.7.0`) and `dry_run` off.
 
 Locally:
 
