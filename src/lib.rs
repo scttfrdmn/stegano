@@ -72,6 +72,7 @@ pub mod ffi;
 pub mod gpu;
 pub mod handlers;
 pub mod integrity;
+pub mod stream;
 #[cfg(feature = "experimental")]
 pub mod ml;
 #[cfg(feature = "experimental")]

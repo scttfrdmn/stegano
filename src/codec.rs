@@ -217,17 +217,41 @@ fn try_header(data: &[u8], ecc_len: usize) -> Result<(Header, usize)> {
 /// password is correct — only whether a payload is plausibly present.
 pub(crate) fn looks_like_payload(data: &[u8]) -> bool {
     ECC_LENS.into_iter().any(|ecc| {
-        let Ok((header, body_off)) = try_header(data, ecc) else {
-            return false;
-        };
-        let len = header.len as usize;
-        let need = if ecc == 0 {
-            Some(len)
-        } else {
-            rs_block_count(len, ecc).checked_mul(RS_BLOCK)
-        };
-        need.is_some_and(|n| n <= data.len() - body_off)
+        frame_len_with(data, ecc).is_some_and(|total| total <= data.len())
     })
+}
+
+/// Size of the header block for the largest EC level: a prefix of this many
+/// bytes (or the whole frame, if shorter) is always enough for [`frame_len`].
+pub(crate) const MAX_HEADER_BLOCK: usize = HEADER_LEN + ECC_LENS[ECC_LENS.len() - 1];
+
+/// Total encoded length (header block + body) of the frame at the start of
+/// `prefix`, assuming `ecc_len` parity bytes; `None` if the header does not
+/// parse at that EC level.
+fn frame_len_with(prefix: &[u8], ecc_len: usize) -> Option<usize> {
+    let (header, body_off) = try_header(prefix, ecc_len).ok()?;
+    let len = header.len as usize;
+    let body = if ecc_len == 0 {
+        Some(len)
+    } else {
+        rs_block_count(len, ecc_len).checked_mul(RS_BLOCK)
+    }?;
+    body_off.checked_add(body)
+}
+
+/// Total length in bytes of the [`encode_payload`] frame that starts at
+/// `prefix`, from its (possibly RS-protected) header alone.
+///
+/// `prefix` must hold at least [`MAX_HEADER_BLOCK`] bytes, or the complete
+/// frame if that is shorter; the EC level is auto-detected exactly as in
+/// [`decode_payload`].  Returns `None` if no valid header is found (or not
+/// enough bytes were supplied).  The body is not inspected and no key
+/// derivation or decryption is performed, so this is cheap enough to call
+/// while a frame is still being read from a stream.
+pub(crate) fn frame_len(prefix: &[u8]) -> Option<usize> {
+    ECC_LENS
+        .into_iter()
+        .find_map(|ecc| frame_len_with(prefix, ecc))
 }
 
 /// Decode a payload previously encoded with [`encode_payload`].
@@ -562,6 +586,28 @@ mod tests {
         assert!(decode_payload(&[0xFFu8; 600], &p).is_err());
         let enc = encode_payload(&[9u8; 400], &p).unwrap();
         assert!(decode_payload(&enc[..enc.len() - 1], &p).is_err());
+    }
+
+    #[test]
+    fn test_frame_len_all_levels() {
+        for level in LEVELS {
+            for pw in [&b""[..], b"pw"] {
+                for n in [0usize, 1, 1000] {
+                    let payload = vec![7u8; n];
+                    let enc = encode_payload(&payload, &params(pw, level)).unwrap();
+                    let mut padded = enc.clone();
+                    padded.extend_from_slice(&[0xAB; 300]);
+                    let prefix = &padded[..MAX_HEADER_BLOCK.min(padded.len())];
+                    assert_eq!(frame_len(prefix), Some(enc.len()), "{level:?} n={n}");
+                    // The whole frame (no padding) is always enough too.
+                    assert_eq!(frame_len(&enc), Some(enc.len()));
+                }
+            }
+        }
+        assert_eq!(frame_len(b""), None);
+        assert_eq!(frame_len(&[0u8; MAX_HEADER_BLOCK]), None);
+        let enc = encode_payload(b"x", &params(b"", ECLevel::None)).unwrap();
+        assert_eq!(frame_len(&enc[..HEADER_LEN - 1]), None);
     }
 
     #[test]

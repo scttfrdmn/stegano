@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cbindgen now also writes `go/stegano.h` inside the module, and the cgo directive is
   `-I${SRCDIR}` instead of `-I${SRCDIR}/../include`. The CI header check covers both copies.
   Releases also push a `go/vX.Y.Z` tag. See "Using from another module" in `go/README.md`.
+- Streaming embed/extract for large carriers ([#75](https://github.com/scttfrdmn/stegano/issues/75),
+  part of [#30](https://github.com/scttfrdmn/stegano/issues/30)): new `stegano::stream` module with
+  `embed_stream(format, reader, writer, payload, &params)`, `extract_stream(format, reader, &params)`,
+  `is_streamable`, and the `embed_file` / `extract_file` helpers. Only the carrier is streamed:
+  the payload is encoded once (wire format v2, unchanged) and memory use stays bounded by one
+  carrier record, whatever the file size. Extraction stops reading once the payload frame is
+  complete. FASTQ quality-score strategies are supported for now. The output is byte-identical
+  to the in-memory `GenomicsHandler`'s, and the two APIs can read each other's output. Other
+  formats and strategies return `InvalidParameter`. `embed_stream` can only detect insufficient
+  capacity at EOF, after the whole output has been written. That output is incomplete and must
+  be discarded. `embed_file` handles this by writing to a temporary file and renaming it only
+  on success.
 
 ### Fixed
 - WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not
