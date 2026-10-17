@@ -42,6 +42,7 @@
 
 use super::DataHandler;
 use crate::core::*;
+use crate::time::Instant;
 use async_trait::async_trait;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
@@ -50,7 +51,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::ops::Range;
-use crate::time::Instant;
 
 /// Handler for SAM/BAM sequence alignment carrier files.
 ///
@@ -88,7 +88,7 @@ impl SamBamEmbedStrategy {
     }
 
     /// Byte stored in the envelope (`MultiStrategy` is never stored).
-    fn to_u8(self) -> u8 {
+    pub(crate) fn to_u8(self) -> u8 {
         match self {
             Self::OptionalFields => 0,
             Self::QualityScores => 1,
@@ -98,7 +98,7 @@ impl SamBamEmbedStrategy {
         }
     }
 
-    fn from_u8(b: u8) -> Option<Self> {
+    pub(crate) fn from_u8(b: u8) -> Option<Self> {
         Some(match b {
             0 => Self::OptionalFields,
             1 => Self::QualityScores,
@@ -113,11 +113,11 @@ impl SamBamEmbedStrategy {
 // Constants
 // ---------------------------------------------------------------------------
 
-const BAM_MAGIC: [u8; 4] = [b'B', b'A', b'M', 1];
+pub(crate) const BAM_MAGIC: [u8; 4] = [b'B', b'A', b'M', 1];
 /// Envelope marker.
 const ENV_MAGIC: [u8; 4] = [b'S', b'B', b'M', 1];
 /// Envelope header: magic + strategy + u32 length.
-const ENV_HEADER_LEN: usize = 9;
+pub(crate) const ENV_HEADER_LEN: usize = 9;
 /// Stegano tag (lowercase: reserved by the SAM spec for end users).
 const TAG: [u8; 2] = *b"zs";
 /// Prefix of a SAM optional field carrying a chunk.
@@ -125,22 +125,22 @@ const SAM_TAG_PREFIX: &[u8] = b"zs:Z:";
 /// Prefix of the `@CO` comment header line carrying the envelope.
 const COMMENT_PREFIX: &[u8] = b"@CO\tzs:";
 /// Maximum payload bytes (before hex encoding) per `zs` tag.
-const MAX_CHUNK: usize = 255;
+pub(crate) const MAX_CHUNK: usize = 255;
 /// SAM QUAL characters (Phred+33).
-const SAM_QUAL_RANGE: (u8, u8) = (33, 126);
+pub(crate) const SAM_QUAL_RANGE: (u8, u8) = (33, 126);
 /// BAM quality values (raw Phred, limited to what SAM can represent).
-const BAM_QUAL_RANGE: (u8, u8) = (0, 93);
+pub(crate) const BAM_QUAL_RANGE: (u8, u8) = (0, 93);
 /// Codec header length used for capacity estimates (unencrypted, no EC).
 const CODEC_MIN_OVERHEAD: usize = crate::codec::HEADER_LEN;
 
 /// BGZF: maximum uncompressed bytes per block written (same as htslib).
-const BGZF_BLOCK_DATA: usize = 0xff00;
+pub(crate) const BGZF_BLOCK_DATA: usize = 0xff00;
 /// BGZF: maximum total block size.
 const BGZF_MAX_BLOCK: usize = 65536;
 /// BGZF: header length (gzip header with a 6-byte `BC` extra field).
 const BGZF_HEADER_LEN: usize = 18;
 /// BGZF: standard empty EOF marker block.
-const BGZF_EOF: [u8; 28] = [
+pub(crate) const BGZF_EOF: [u8; 28] = [
     0x1f, 0x8b, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x06, 0x00, 0x42, 0x43, 0x02, 0x00,
     0x1b, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
@@ -158,7 +158,7 @@ fn le_u16(b: &[u8], off: usize) -> Option<u16> {
     Some(u16::from_le_bytes([s[0], s[1]]))
 }
 
-fn le_u32(b: &[u8], off: usize) -> Option<u32> {
+pub(crate) fn le_u32(b: &[u8], off: usize) -> Option<u32> {
     let s = b.get(off..off.checked_add(4)?)?;
     Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
@@ -172,21 +172,20 @@ fn is_bgzf(data: &[u8]) -> bool {
     bgzf_block_len(data, 0).is_ok()
 }
 
-/// Validate the BGZF block header at `off`; return (total block length,
-/// compressed-data range).
-fn bgzf_block_len(data: &[u8], off: usize) -> Result<(usize, Range<usize>)> {
+/// Validate the BGZF block header at the start of `block` (the block's
+/// offset in the stream is `off`, used in messages only); return (total
+/// block length, header length).  `block` must hold at least the header
+/// (12 bytes plus the extra field), not necessarily the whole block.
+pub(crate) fn bgzf_header_at(block: &[u8], off: usize) -> Result<(usize, usize)> {
     let bad = |m: &str| integrity(format!("Invalid BGZF block at offset {off}: {m}"));
-    let h = data
-        .get(off..off.checked_add(12).ok_or_else(|| bad("overflow"))?)
-        .ok_or_else(|| bad("truncated header"))?;
+    let h = block.get(..12).ok_or_else(|| bad("truncated header"))?;
     if h[0] != 0x1f || h[1] != 0x8b || h[2] != 8 || h[3] != 4 {
         return Err(bad("not a BGZF gzip header"));
     }
     let xlen = le_u16(h, 10).ok_or_else(|| bad("truncated header"))? as usize;
-    let extra_start = off + 12;
-    let extra_end = extra_start + xlen;
-    let extra = data
-        .get(extra_start..extra_end)
+    let extra_end = 12 + xlen;
+    let extra = block
+        .get(12..extra_end)
         .ok_or_else(|| bad("truncated extra field"))?;
     let mut bsize = None;
     let mut p = 0usize;
@@ -205,28 +204,44 @@ fn bgzf_block_len(data: &[u8], off: usize) -> Result<(usize, Range<usize>)> {
     }
     let total = bsize.ok_or_else(|| bad("missing BC subfield"))? + 1;
     // header (12 + xlen) + CRC32 + ISIZE
-    if total < 12 + xlen + 8 {
+    if total < extra_end + 8 {
         return Err(bad("BSIZE too small"));
     }
-    let end = off.checked_add(total).ok_or_else(|| bad("overflow"))?;
-    if end > data.len() {
-        return Err(bad("truncated block"));
-    }
-    Ok((total, extra_end..end - 8))
+    Ok((total, extra_end))
 }
 
-/// Inflate one BGZF block starting at `off`; returns (block length, data).
-fn bgzf_read_block(data: &[u8], off: usize) -> Result<(usize, Vec<u8>)> {
-    let (total, cdata) = bgzf_block_len(data, off)?;
+/// Validate the BGZF block at the start of `block` (stream offset `off`);
+/// return (total block length, compressed-data range within `block`).
+fn bgzf_block_at(block: &[u8], off: usize) -> Result<(usize, Range<usize>)> {
+    let (total, header_len) = bgzf_header_at(block, off)?;
+    if total > block.len() {
+        return Err(integrity(format!(
+            "Invalid BGZF block at offset {off}: truncated block"
+        )));
+    }
+    Ok((total, header_len..total - 8))
+}
+
+/// Validate the BGZF block header at `off`; return (total block length,
+/// compressed-data range).
+fn bgzf_block_len(data: &[u8], off: usize) -> Result<(usize, Range<usize>)> {
+    let (total, cdata) = bgzf_block_at(data.get(off..).unwrap_or_default(), off)?;
+    Ok((total, cdata.start + off..cdata.end + off))
+}
+
+/// Inflate the BGZF block at the start of `block` (stream offset `off`, for
+/// messages); returns (block length, data).
+pub(crate) fn bgzf_inflate_at(block: &[u8], off: usize) -> Result<(usize, Vec<u8>)> {
+    let (total, cdata) = bgzf_block_at(block, off)?;
     let trailer = cdata.end;
-    let crc = le_u32(data, trailer).ok_or_else(|| integrity("BGZF trailer truncated"))?;
+    let crc = le_u32(block, trailer).ok_or_else(|| integrity("BGZF trailer truncated"))?;
     let isize =
-        le_u32(data, trailer + 4).ok_or_else(|| integrity("BGZF trailer truncated"))? as usize;
+        le_u32(block, trailer + 4).ok_or_else(|| integrity("BGZF trailer truncated"))? as usize;
     if isize > BGZF_MAX_BLOCK {
         return Err(integrity("BGZF block ISIZE exceeds 64 KiB"));
     }
     let mut out = Vec::with_capacity(isize);
-    DeflateDecoder::new(&data[cdata])
+    DeflateDecoder::new(&block[cdata])
         .take(BGZF_MAX_BLOCK as u64 + 1)
         .read_to_end(&mut out)
         .map_err(|e| integrity(format!("BGZF inflate failed at offset {off}: {e}")))?;
@@ -245,6 +260,11 @@ fn bgzf_read_block(data: &[u8], off: usize) -> Result<(usize, Vec<u8>)> {
     Ok((total, out))
 }
 
+/// Inflate one BGZF block starting at `off`; returns (block length, data).
+fn bgzf_read_block(data: &[u8], off: usize) -> Result<(usize, Vec<u8>)> {
+    bgzf_inflate_at(data.get(off..).unwrap_or_default(), off)
+}
+
 /// Decompress a complete BGZF stream.
 fn bgzf_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -261,25 +281,31 @@ fn bgzf_decompress(data: &[u8]) -> Result<Vec<u8>> {
 fn bgzf_compress(data: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(data.len() / 2 + BGZF_EOF.len());
     for chunk in data.chunks(BGZF_BLOCK_DATA) {
-        let mut cdata = deflate(chunk, Compression::default())?;
-        if cdata.len() + BGZF_HEADER_LEN + 8 > BGZF_MAX_BLOCK {
-            cdata = deflate(chunk, Compression::none())?;
-        }
-        let total = cdata.len() + BGZF_HEADER_LEN + 8;
-        let bsize = u16::try_from(total - 1)
-            .map_err(|_| integrity("BGZF block too large after compression"))?;
-        out.extend_from_slice(&[
-            0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 0xff, 6, 0, b'B', b'C', 2, 0,
-        ]);
-        out.extend_from_slice(&bsize.to_le_bytes());
-        out.extend_from_slice(&cdata);
-        let mut c = Crc::new();
-        c.update(chunk);
-        out.extend_from_slice(&c.sum().to_le_bytes());
-        out.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+        bgzf_write_block(chunk, &mut out)?;
     }
     out.extend_from_slice(&BGZF_EOF);
     Ok(out)
+}
+
+/// Append one BGZF block holding `chunk` (at most [`BGZF_BLOCK_DATA`] bytes).
+pub(crate) fn bgzf_write_block(chunk: &[u8], out: &mut Vec<u8>) -> Result<()> {
+    let mut cdata = deflate(chunk, Compression::default())?;
+    if cdata.len() + BGZF_HEADER_LEN + 8 > BGZF_MAX_BLOCK {
+        cdata = deflate(chunk, Compression::none())?;
+    }
+    let total = cdata.len() + BGZF_HEADER_LEN + 8;
+    let bsize = u16::try_from(total - 1)
+        .map_err(|_| integrity("BGZF block too large after compression"))?;
+    out.extend_from_slice(&[
+        0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 0xff, 6, 0, b'B', b'C', 2, 0,
+    ]);
+    out.extend_from_slice(&bsize.to_le_bytes());
+    out.extend_from_slice(&cdata);
+    let mut c = Crc::new();
+    c.update(chunk);
+    out.extend_from_slice(&c.sum().to_le_bytes());
+    out.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+    Ok(())
 }
 
 fn deflate(data: &[u8], level: Compression) -> Result<Vec<u8>> {
@@ -293,7 +319,7 @@ fn deflate(data: &[u8], level: Compression) -> Result<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-enum SamLine {
+pub(crate) enum SamLine {
     /// Header line (`@..`), raw bytes (including any trailing `\r`).
     Header(Vec<u8>),
     /// Empty (or `\r`-only) line, preserved verbatim.
@@ -303,11 +329,11 @@ enum SamLine {
 }
 
 #[derive(Debug, Clone)]
-struct SamRecord {
+pub(crate) struct SamRecord {
     /// Line bytes without a trailing `\r`.
-    line: Vec<u8>,
+    pub(crate) line: Vec<u8>,
     /// Line ended with `\r` (CRLF input).
-    cr: bool,
+    pub(crate) cr: bool,
     /// Byte range of the QUAL field within `line`.
     qual: Range<usize>,
 }
@@ -320,6 +346,47 @@ impl SamRecord {
     /// Optional fields (`TAG:TYPE:VALUE`) as byte slices.
     fn optional_fields(&self) -> impl Iterator<Item = &[u8]> {
         self.line.split(|&b| b == b'\t').skip(11)
+    }
+}
+
+/// Per-record view shared by SAM and BAM records: the embedding channels
+/// (`zs` tags, quality values) of a single alignment record.
+pub(crate) trait AlignmentRecord {
+    /// Quality values usable for embedding (`None` if the record is skipped).
+    fn usable_qual(&self) -> Option<&[u8]>;
+    fn usable_qual_mut(&mut self) -> Option<&mut [u8]>;
+    /// Does the record carry a `zs` tag (of any type)?
+    fn has_zs_tag(&self) -> bool;
+    /// Values of the record's `zs:Z` tags, in order.
+    fn zs_values(&self) -> Vec<&[u8]>;
+    /// Append `zs:Z:<value>`.
+    fn add_zs_tag(&mut self, value: &[u8]);
+}
+
+impl AlignmentRecord for SamRecord {
+    fn usable_qual(&self) -> Option<&[u8]> {
+        self.qual_present().then(|| &self.line[self.qual.clone()])
+    }
+
+    fn usable_qual_mut(&mut self) -> Option<&mut [u8]> {
+        self.qual_present()
+            .then(|| &mut self.line[self.qual.clone()])
+    }
+
+    fn has_zs_tag(&self) -> bool {
+        self.optional_fields().any(|f| f.starts_with(b"zs:"))
+    }
+
+    fn zs_values(&self) -> Vec<&[u8]> {
+        self.optional_fields()
+            .filter_map(|f| f.strip_prefix(SAM_TAG_PREFIX))
+            .collect()
+    }
+
+    fn add_zs_tag(&mut self, value: &[u8]) {
+        self.line.push(b'\t');
+        self.line.extend_from_slice(SAM_TAG_PREFIX);
+        self.line.extend_from_slice(value);
     }
 }
 
@@ -431,33 +498,38 @@ fn parse_sam(data: &[u8]) -> Result<SamDoc> {
     let mut lines = Vec::new();
     let mut seen_record = false;
     for (i, raw) in body.split(|&b| b == b'\n').enumerate() {
-        let (content, cr) = match raw.strip_suffix(b"\r") {
-            Some(c) => (c, true),
-            None => (raw, false),
-        };
-        if content.is_empty() {
-            lines.push(SamLine::Blank(raw.to_vec()));
-        } else if content[0] == b'@' {
-            if seen_record {
-                return Err(integrity(format!(
-                    "SAM line {}: header line after alignment records",
-                    i + 1
-                )));
-            }
-            lines.push(SamLine::Header(raw.to_vec()));
-        } else {
-            seen_record = true;
-            lines.push(SamLine::Record(parse_sam_record(
-                content.to_vec(),
-                cr,
-                i + 1,
-            )?));
-        }
+        lines.push(parse_sam_line(raw, i + 1, &mut seen_record)?);
     }
     Ok(SamDoc {
         lines,
         trailing_newline,
     })
+}
+
+/// Parse one SAM line (`raw` excludes the `\n`); `lineno` is 1-based and
+/// `seen_record` tracks whether an alignment record has been seen yet.
+pub(crate) fn parse_sam_line(raw: &[u8], lineno: usize, seen_record: &mut bool) -> Result<SamLine> {
+    let (content, cr) = match raw.strip_suffix(b"\r") {
+        Some(c) => (c, true),
+        None => (raw, false),
+    };
+    if content.is_empty() {
+        Ok(SamLine::Blank(raw.to_vec()))
+    } else if content[0] == b'@' {
+        if *seen_record {
+            return Err(integrity(format!(
+                "SAM line {lineno}: header line after alignment records"
+            )));
+        }
+        Ok(SamLine::Header(raw.to_vec()))
+    } else {
+        *seen_record = true;
+        Ok(SamLine::Record(parse_sam_record(
+            content.to_vec(),
+            cr,
+            lineno,
+        )?))
+    }
 }
 
 impl SamDoc {
@@ -519,7 +591,7 @@ impl SamDoc {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct BamRecord {
+pub(crate) struct BamRecord {
     /// Record bytes following `block_size`.
     data: Vec<u8>,
     /// Byte range of the quality scores within `data`.
@@ -538,6 +610,44 @@ impl BamRecord {
     fn aux_fields(&self) -> Vec<([u8; 2], u8, &[u8])> {
         // Already validated in parse; this cannot fail.
         parse_aux(&self.data[self.aux..]).unwrap_or_default()
+    }
+
+    /// Append `block_size` and the record bytes.
+    pub(crate) fn write_to<W: Write + ?Sized>(&self, out: &mut W) -> Result<()> {
+        let bs = u32::try_from(self.data.len()).map_err(|_| integrity("BAM record too large"))?;
+        out.write_all(&bs.to_le_bytes())?;
+        out.write_all(&self.data)?;
+        Ok(())
+    }
+}
+
+impl AlignmentRecord for BamRecord {
+    fn usable_qual(&self) -> Option<&[u8]> {
+        self.qual_usable().then(|| &self.data[self.qual.clone()])
+    }
+
+    fn usable_qual_mut(&mut self) -> Option<&mut [u8]> {
+        self.qual_usable()
+            .then(|| &mut self.data[self.qual.clone()])
+    }
+
+    fn has_zs_tag(&self) -> bool {
+        self.aux_fields().iter().any(|(t, _, _)| *t == TAG)
+    }
+
+    fn zs_values(&self) -> Vec<&[u8]> {
+        self.aux_fields()
+            .into_iter()
+            .filter(|(t, ty, _)| *t == TAG && *ty == b'Z')
+            .map(|(_, _, v)| &v[..v.len() - 1])
+            .collect()
+    }
+
+    fn add_zs_tag(&mut self, value: &[u8]) {
+        self.data.extend_from_slice(&TAG);
+        self.data.push(b'Z');
+        self.data.extend_from_slice(value);
+        self.data.push(0);
     }
 }
 
@@ -639,6 +749,37 @@ fn parse_bam_record(block: &[u8], index: usize) -> Result<BamRecord> {
 
 /// Decode raw (decompressed) BAM bytes.
 fn parse_bam_raw(data: &[u8]) -> Result<BamDoc> {
+    let (text, refs, mut off) = parse_bam_header(data)?;
+    let mut records = Vec::new();
+    while off < data.len() {
+        let (record, end) = next_bam_record(data, off, records.len())?;
+        records.push(record);
+        off = end;
+    }
+    Ok(BamDoc {
+        text,
+        refs,
+        records,
+    })
+}
+
+/// Parse the BAM record (`block_size` + data) at `off` of raw BAM bytes;
+/// returns the record and the offset just past it.
+pub(crate) fn next_bam_record(data: &[u8], off: usize, index: usize) -> Result<(BamRecord, usize)> {
+    let block_size = le_u32(data, off)
+        .ok_or_else(|| integrity(format!("BAM record {index}: truncated block_size")))?
+        as usize;
+    let start = off + 4;
+    let end = start
+        .checked_add(block_size)
+        .filter(|&e| e <= data.len())
+        .ok_or_else(|| integrity(format!("BAM record {index}: truncated")))?;
+    Ok((parse_bam_record(&data[start..end], index)?, end))
+}
+
+/// Parse the header of raw BAM bytes (magic, text, references); returns
+/// (header text, `n_ref` plus reference entries, offset of the first record).
+pub(crate) fn parse_bam_header(data: &[u8]) -> Result<(Vec<u8>, Vec<u8>, usize)> {
     if data.len() < 12 || data[..4] != BAM_MAGIC {
         return Err(integrity("Invalid BAM magic bytes"));
     }
@@ -668,25 +809,7 @@ fn parse_bam_raw(data: &[u8]) -> Result<BamDoc> {
         off = name_end + 4;
     }
     let refs = data[text_end..off].to_vec();
-    let mut records = Vec::new();
-    while off < data.len() {
-        let index = records.len();
-        let block_size = le_u32(data, off)
-            .ok_or_else(|| integrity(format!("BAM record {index}: truncated block_size")))?
-            as usize;
-        let start = off + 4;
-        let end = start
-            .checked_add(block_size)
-            .filter(|&e| e <= data.len())
-            .ok_or_else(|| integrity(format!("BAM record {index}: truncated")))?;
-        records.push(parse_bam_record(&data[start..end], index)?);
-        off = end;
-    }
-    Ok(BamDoc {
-        text,
-        refs,
-        records,
-    })
+    Ok((text, refs, off))
 }
 
 /// Decode a BAM file (BGZF-compressed or raw `BAM\1`).
@@ -702,7 +825,7 @@ fn parse_bam(data: &[u8]) -> Result<BamDoc> {
 
 /// Container compression for BAM output (`format_specific["bam_compression"]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum BamCompression {
+pub(crate) enum BamCompression {
     /// BGZF blocks plus the EOF marker (htslib-compatible).
     #[default]
     Bgzf,
@@ -710,7 +833,7 @@ enum BamCompression {
     None,
 }
 
-fn bam_compression_from_params(params: &EmbedParams) -> Result<BamCompression> {
+pub(crate) fn bam_compression_from_params(params: &EmbedParams) -> Result<BamCompression> {
     match params.format_specific.get("bam_compression") {
         None => Ok(BamCompression::Bgzf),
         Some(v) => match v.as_str() {
@@ -723,19 +846,34 @@ fn bam_compression_from_params(params: &EmbedParams) -> Result<BamCompression> {
     }
 }
 
+/// Write the raw BAM header: magic, `l_text`, text, then `refs` verbatim.
+pub(crate) fn write_bam_header<W: Write + ?Sized>(
+    text: &[u8],
+    refs: &[u8],
+    out: &mut W,
+) -> Result<()> {
+    let l_text = u32::try_from(text.len()).map_err(|_| integrity("BAM header too large"))?;
+    out.write_all(&BAM_MAGIC)?;
+    out.write_all(&l_text.to_le_bytes())?;
+    out.write_all(text)?;
+    out.write_all(refs)?;
+    Ok(())
+}
+
+/// Lines of a BAM header text (trailing NULs / `\r` stripped).
+pub(crate) fn bam_header_lines(text: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let end = text.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    text[..end]
+        .split(|&b| b == b'\n')
+        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+}
+
 impl BamDoc {
     fn serialize(&self, compression: BamCompression) -> Result<Vec<u8>> {
         let mut raw = Vec::new();
-        raw.extend_from_slice(&BAM_MAGIC);
-        let l_text =
-            u32::try_from(self.text.len()).map_err(|_| integrity("BAM header too large"))?;
-        raw.extend_from_slice(&l_text.to_le_bytes());
-        raw.extend_from_slice(&self.text);
-        raw.extend_from_slice(&self.refs);
+        write_bam_header(&self.text, &self.refs, &mut raw)?;
         for r in &self.records {
-            let bs = u32::try_from(r.data.len()).map_err(|_| integrity("BAM record too large"))?;
-            raw.extend_from_slice(&bs.to_le_bytes());
-            raw.extend_from_slice(&r.data);
+            r.write_to(&mut raw)?;
         }
         match compression {
             BamCompression::Bgzf => bgzf_compress(&raw),
@@ -745,10 +883,7 @@ impl BamDoc {
 
     /// Header text lines (trailing NULs / `\r` stripped).
     fn header_lines(&self) -> impl Iterator<Item = &[u8]> {
-        let end = self.text.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-        self.text[..end]
-            .split(|&b| b == b'\n')
-            .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+        bam_header_lines(&self.text)
     }
 
     fn add_comment(&mut self, line: Vec<u8>) {
@@ -804,37 +939,45 @@ impl Doc {
         }
     }
 
-    /// Quality values usable for embedding, in record order.
-    fn qual_slices(&self) -> Vec<&[u8]> {
+    /// Alignment records, in file order.
+    fn records(&self) -> Vec<&dyn AlignmentRecord> {
         match self {
-            Doc::Sam(s) => s
-                .records()
-                .filter(|r| r.qual_present())
-                .map(|r| &r.line[r.qual.clone()])
-                .collect(),
+            Doc::Sam(s) => s.records().map(|r| r as &dyn AlignmentRecord).collect(),
             Doc::Bam(b) => b
                 .records
                 .iter()
-                .filter(|r| r.qual_usable())
-                .map(|r| &r.data[r.qual.clone()])
+                .map(|r| r as &dyn AlignmentRecord)
                 .collect(),
         }
     }
 
-    fn qual_slices_mut(&mut self) -> Vec<&mut [u8]> {
+    fn records_mut(&mut self) -> Vec<&mut dyn AlignmentRecord> {
         match self {
             Doc::Sam(s) => s
                 .records_mut()
-                .filter(|r| r.qual_present())
-                .map(|r| &mut r.line[r.qual.clone()])
+                .map(|r| r as &mut dyn AlignmentRecord)
                 .collect(),
             Doc::Bam(b) => b
                 .records
                 .iter_mut()
-                .filter(|r| r.qual_usable())
-                .map(|r| &mut r.data[r.qual.clone()])
+                .map(|r| r as &mut dyn AlignmentRecord)
                 .collect(),
         }
+    }
+
+    /// Quality values usable for embedding, in record order.
+    fn qual_slices(&self) -> Vec<&[u8]> {
+        self.records()
+            .into_iter()
+            .filter_map(|r| r.usable_qual())
+            .collect()
+    }
+
+    fn qual_slices_mut(&mut self) -> Vec<&mut [u8]> {
+        self.records_mut()
+            .into_iter()
+            .filter_map(|r| r.usable_qual_mut())
+            .collect()
     }
 
     fn quality_capacity(&self) -> usize {
@@ -843,75 +986,23 @@ impl Doc {
 
     /// Does any record already carry a `zs` tag (of any type)?
     fn has_tag(&self) -> bool {
-        match self {
-            Doc::Sam(s) => s
-                .records()
-                .any(|r| r.optional_fields().any(|f| f.starts_with(b"zs:"))),
-            Doc::Bam(b) => b
-                .records
-                .iter()
-                .any(|r| r.aux_fields().iter().any(|(t, _, _)| *t == TAG)),
-        }
+        self.records().iter().any(|r| r.has_zs_tag())
     }
 
     /// Values of all `zs:Z` tags, in record order.
     fn tag_values(&self) -> Vec<Vec<u8>> {
-        match self {
-            Doc::Sam(s) => s
-                .records()
-                .flat_map(|r| {
-                    r.optional_fields()
-                        .filter_map(|f| f.strip_prefix(SAM_TAG_PREFIX))
-                        .map(|v| v.to_vec())
-                        .collect::<Vec<_>>()
-                })
-                .collect(),
-            Doc::Bam(b) => b
-                .records
-                .iter()
-                .flat_map(|r| {
-                    r.aux_fields()
-                        .into_iter()
-                        .filter(|(t, ty, _)| *t == TAG && *ty == b'Z')
-                        .map(|(_, _, v)| v[..v.len() - 1].to_vec())
-                        .collect::<Vec<_>>()
-                })
-                .collect(),
-        }
-    }
-
-    /// Attach `zs:Z:<value>` to the `i`-th record.
-    fn add_tag(&mut self, i: usize, value: &[u8]) {
-        match self {
-            Doc::Sam(s) => {
-                if let Some(r) = s.records_mut().nth(i) {
-                    r.line.push(b'\t');
-                    r.line.extend_from_slice(SAM_TAG_PREFIX);
-                    r.line.extend_from_slice(value);
-                }
-            }
-            Doc::Bam(b) => {
-                if let Some(r) = b.records.get_mut(i) {
-                    r.data.extend_from_slice(&TAG);
-                    r.data.push(b'Z');
-                    r.data.extend_from_slice(value);
-                    r.data.push(0);
-                }
-            }
-        }
+        self.records()
+            .iter()
+            .flat_map(|r| r.zs_values().into_iter().map(<[u8]>::to_vec))
+            .collect()
     }
 
     /// Payloads of `@CO\tzs:` header lines.
-    fn comment_values(&self) -> Vec<Vec<u8>> {
-        let lines: Vec<&[u8]> = match self {
+    fn header_lines(&self) -> Vec<&[u8]> {
+        match self {
             Doc::Sam(s) => s.headers().collect(),
             Doc::Bam(b) => b.header_lines().collect(),
-        };
-        lines
-            .into_iter()
-            .filter_map(|l| l.strip_prefix(COMMENT_PREFIX))
-            .map(|v| v.to_vec())
-            .collect()
+        }
     }
 
     fn add_comment(&mut self, value: &[u8]) {
@@ -928,7 +1019,7 @@ impl Doc {
 // Envelope and channels
 // ---------------------------------------------------------------------------
 
-fn build_envelope(strategy: SamBamEmbedStrategy, codec: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn build_envelope(strategy: SamBamEmbedStrategy, codec: &[u8]) -> Result<Vec<u8>> {
     let len = u32::try_from(codec.len())
         .map_err(|_| SteganoError::InvalidParameter("Payload too large".into()))?;
     let mut env = Vec::with_capacity(ENV_HEADER_LEN + codec.len());
@@ -940,7 +1031,7 @@ fn build_envelope(strategy: SamBamEmbedStrategy, codec: &[u8]) -> Result<Vec<u8>
 }
 
 /// Parse an envelope header: (strategy, codec length).
-fn parse_envelope_header(h: &[u8]) -> Option<(SamBamEmbedStrategy, usize)> {
+pub(crate) fn parse_envelope_header(h: &[u8]) -> Option<(SamBamEmbedStrategy, usize)> {
     if h.len() < ENV_HEADER_LEN || h[..4] != ENV_MAGIC {
         return None;
     }
@@ -949,13 +1040,13 @@ fn parse_envelope_header(h: &[u8]) -> Option<(SamBamEmbedStrategy, usize)> {
 }
 
 /// Validate a complete envelope; return (strategy, codec bytes).
-fn parse_envelope(env: &[u8]) -> Option<(SamBamEmbedStrategy, &[u8])> {
+pub(crate) fn parse_envelope(env: &[u8]) -> Option<(SamBamEmbedStrategy, &[u8])> {
     let (s, len) = parse_envelope_header(env)?;
     let body = env.get(ENV_HEADER_LEN..ENV_HEADER_LEN.checked_add(len)?)?;
     (env.len() == ENV_HEADER_LEN + len).then_some((s, body))
 }
 
-fn insufficient(needed_bytes: usize, available_bytes: usize) -> SteganoError {
+pub(crate) fn insufficient(needed_bytes: usize, available_bytes: usize) -> SteganoError {
     SteganoError::InsufficientCapacity {
         needed: needed_bytes.saturating_mul(8),
         available: available_bytes.saturating_mul(8),
@@ -973,19 +1064,28 @@ fn embed_tags(doc: &mut Doc, env: &[u8], spread: bool) -> Result<usize> {
         MAX_CHUNK
     };
     let chunks: Vec<&[u8]> = env.chunks(chunk).collect();
-    for (i, c) in chunks.iter().enumerate() {
-        let value = format!("{i},{}", hex::encode(c));
-        doc.add_tag(i, value.as_bytes());
+    for (i, (c, r)) in chunks.iter().zip(doc.records_mut()).enumerate() {
+        r.add_zs_tag(tag_chunk_value(i, c).as_bytes());
     }
     Ok(chunks.len())
+}
+
+/// Value of the `zs:Z` tag carrying envelope chunk `i`.
+pub(crate) fn tag_chunk_value(i: usize, chunk: &[u8]) -> String {
+    format!("{i},{}", hex::encode(chunk))
+}
+
+/// Parse a `zs:Z` tag value into (chunk index, chunk bytes).
+pub(crate) fn parse_tag_chunk(v: &[u8]) -> Option<(usize, Vec<u8>)> {
+    let s = std::str::from_utf8(v).ok()?;
+    let (idx, hex_part) = s.split_once(',')?;
+    Some((idx.parse().ok()?, hex::decode(hex_part).ok()?))
 }
 
 fn extract_tags(doc: &Doc) -> Option<Vec<u8>> {
     let mut chunks: Vec<(usize, Vec<u8>)> = Vec::new();
     for v in doc.tag_values() {
-        let s = std::str::from_utf8(&v).ok()?;
-        let (idx, hex_part) = s.split_once(',')?;
-        chunks.push((idx.parse().ok()?, hex::decode(hex_part).ok()?));
+        chunks.push(parse_tag_chunk(&v)?);
     }
     if chunks.is_empty() {
         return None;
@@ -1002,48 +1102,72 @@ fn embed_quality(doc: &mut Doc, env: &[u8]) -> Result<usize> {
     if env.len() > cap {
         return Err(insufficient(env.len(), cap));
     }
-    let (lo, hi) = doc.qual_range();
-    let mut bits = env
-        .iter()
-        .flat_map(|&byte| (0..8).rev().map(move |k| (byte >> k) & 1));
+    let range = doc.qual_range();
+    let total = env.len() * 8;
+    let mut pos = 0;
     let mut touched = 0;
     'outer: for q in doc.qual_slices_mut() {
         touched += 1;
         for v in q.iter_mut() {
-            let Some(bit) = bits.next() else {
+            if pos == total {
                 break 'outer;
-            };
-            let mut nv = (*v & !1) | bit;
-            if nv < lo {
-                nv += 2;
-            } else if nv > hi {
-                nv -= 2;
             }
-            *v = nv;
+            *v = set_qual_lsb(*v, env_bit(env, pos), range);
+            pos += 1;
         }
     }
     Ok(touched)
 }
 
+/// Bit `i` of `env` in the quality channel's order (MSB-first per byte).
+pub(crate) fn env_bit(env: &[u8], i: usize) -> u8 {
+    (env[i / 8] >> (7 - i % 8)) & 1
+}
+
+/// Set the LSB of quality value `v` to `bit`, staying within `(lo, hi)`.
+pub(crate) fn set_qual_lsb(v: u8, bit: u8, (lo, hi): (u8, u8)) -> u8 {
+    let nv = (v & !1) | bit;
+    if nv < lo {
+        nv + 2
+    } else if nv > hi {
+        nv - 2
+    } else {
+        nv
+    }
+}
+
+/// Reassembles bytes from quality-value LSBs (MSB-first per byte).
+#[derive(Debug, Default)]
+pub(crate) struct QualBits {
+    /// Complete bytes so far.
+    pub(crate) bytes: Vec<u8>,
+    acc: u8,
+    n: u8,
+}
+
+impl QualBits {
+    pub(crate) fn push(&mut self, v: u8) {
+        self.acc = (self.acc << 1) | (v & 1);
+        self.n += 1;
+        if self.n == 8 {
+            self.bytes.push(self.acc);
+            self.acc = 0;
+            self.n = 0;
+        }
+    }
+}
+
 fn quality_bytes(doc: &Doc, max: usize) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut acc = 0u8;
-    let mut n = 0;
+    let mut bits = QualBits::default();
     for q in doc.qual_slices() {
         for &v in q {
-            acc = (acc << 1) | (v & 1);
-            n += 1;
-            if n == 8 {
-                out.push(acc);
-                if out.len() == max {
-                    return out;
-                }
-                acc = 0;
-                n = 0;
+            bits.push(v);
+            if bits.bytes.len() == max {
+                return bits.bytes;
             }
         }
     }
-    out
+    bits.bytes
 }
 
 fn extract_quality(doc: &Doc) -> Option<Vec<u8>> {
@@ -1056,10 +1180,15 @@ fn extract_quality(doc: &Doc) -> Option<Vec<u8>> {
     (env.len() == ENV_HEADER_LEN + len).then_some(env)
 }
 
+/// The envelope carried by a header line (`\r` stripped), if it is a
+/// `@CO\tzs:<hex>` line holding a well-formed envelope.
+pub(crate) fn comment_envelope(line: &[u8]) -> Option<Vec<u8>> {
+    let v = line.strip_prefix(COMMENT_PREFIX)?;
+    hex::decode(v).ok().filter(|e| parse_envelope(e).is_some())
+}
+
 fn extract_comment(doc: &Doc) -> Option<Vec<u8>> {
-    doc.comment_values()
-        .into_iter()
-        .find_map(|v| hex::decode(v).ok().filter(|e| parse_envelope(e).is_some()))
+    doc.header_lines().into_iter().find_map(comment_envelope)
 }
 
 /// Locate the embedded envelope; returns (strategy, codec bytes).
@@ -1087,7 +1216,7 @@ fn find_envelope(doc: &Doc) -> Option<(SamBamEmbedStrategy, Vec<u8>)> {
         })
 }
 
-fn strategy_from_params(params: &EmbedParams) -> Result<SamBamEmbedStrategy> {
+pub(crate) fn strategy_from_params(params: &EmbedParams) -> Result<SamBamEmbedStrategy> {
     match params.format_specific.get("sam_strategy") {
         None => Ok(SamBamEmbedStrategy::OptionalFields),
         Some(v) => v
@@ -1323,7 +1452,7 @@ impl DataHandler for SamBamHandler {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use noodles_sam::alignment::io::Write as _;
     use noodles_sam::alignment::RecordBuf;
@@ -1333,7 +1462,7 @@ mod tests {
 
     /// Records cover: QUAL `*`, boundary QUAL chars `!`/`~`, a Z value with
     /// colons, unmapped reads, a paired read with `=` RNEXT.
-    fn sam_fixture(repeats: usize) -> Vec<u8> {
+    pub(crate) fn sam_fixture(repeats: usize) -> Vec<u8> {
         let header = "@HD\tVN:1.6\tSO:unsorted\n\
                       @SQ\tSN:chr1\tLN:248956422\n\
                       @SQ\tSN:chr2\tLN:242193529\n\
@@ -1357,7 +1486,7 @@ mod tests {
         out.into_bytes()
     }
 
-    fn params(strategy: Option<&str>, key: &[u8], ec: ECLevel) -> EmbedParams {
+    pub(crate) fn params(strategy: Option<&str>, key: &[u8], ec: ECLevel) -> EmbedParams {
         let mut p = EmbedParams {
             encryption_key: key.to_vec(),
             error_correction_level: ec,
@@ -1383,7 +1512,7 @@ mod tests {
     }
 
     /// Encode SAM text as raw (uncompressed) BAM.
-    fn sam_to_raw_bam(sam: &[u8]) -> Vec<u8> {
+    pub(crate) fn sam_to_raw_bam(sam: &[u8]) -> Vec<u8> {
         let text = std::str::from_utf8(sam).unwrap();
         let mut header = String::new();
         let mut refs: Vec<(String, u32)> = Vec::new();
@@ -1513,7 +1642,7 @@ mod tests {
         out
     }
 
-    fn bam_fixture(repeats: usize) -> Vec<u8> {
+    pub(crate) fn bam_fixture(repeats: usize) -> Vec<u8> {
         bgzf_compress(&sam_to_raw_bam(&sam_fixture(repeats))).unwrap()
     }
 
@@ -1530,7 +1659,7 @@ mod tests {
         }
     }
 
-    fn noodles_sam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
+    pub(crate) fn noodles_sam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
         let mut r = noodles_sam::io::Reader::new(data);
         let header = r.read_header().expect("noodles SAM header");
         let recs = r
@@ -1541,7 +1670,7 @@ mod tests {
         (header, recs)
     }
 
-    fn noodles_bam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
+    pub(crate) fn noodles_bam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
         let mut r = noodles_bam::io::Reader::new(data);
         let header = r.read_header().expect("noodles BAM header");
         let recs = r
@@ -1563,7 +1692,7 @@ mod tests {
         w.into_inner()
     }
 
-    fn noodles_bgzf_inflate(data: &[u8]) -> Vec<u8> {
+    pub(crate) fn noodles_bgzf_inflate(data: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         noodles_bgzf::io::Reader::new(data)
             .read_to_end(&mut out)
@@ -1920,7 +2049,23 @@ mod tests {
         }
     }
 
-    fn with_compression(mut p: EmbedParams, c: &str) -> EmbedParams {
+    /// In-memory embed of already codec-encoded bytes (same steps as
+    /// [`SamBamHandler::embed`] minus the codec), for byte-for-byte
+    /// comparison with the streaming path.
+    pub(crate) fn embed_codec(
+        format: &DataFormat,
+        data: &[u8],
+        codec: &[u8],
+        params: &EmbedParams,
+    ) -> Result<Vec<u8>> {
+        let strategy = strategy_from_params(params)?;
+        let compression = bam_compression_from_params(params)?;
+        let mut doc = Doc::parse(format, data)?;
+        SamBamHandler::embed_doc(&mut doc, codec, strategy)?;
+        doc.serialize(compression)
+    }
+
+    pub(crate) fn with_compression(mut p: EmbedParams, c: &str) -> EmbedParams {
         p.format_specific.insert(
             "bam_compression".into(),
             serde_json::Value::String(c.into()),
@@ -1929,7 +2074,7 @@ mod tests {
     }
 
     /// noodles reader over an uncompressed `BAM\1` stream (no BGZF layer).
-    fn noodles_raw_bam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
+    pub(crate) fn noodles_raw_bam(data: &[u8]) -> (noodles_sam::Header, Vec<RecordBuf>) {
         let mut r = noodles_bam::io::Reader::from(data);
         let header = r.read_header().expect("noodles raw BAM header");
         let recs = r
