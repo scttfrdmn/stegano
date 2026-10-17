@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conditional `exports`. `scripts/build-wasm.sh` assembles it in `pkg/`, smoke tests run from the
   packed tarball in CI (`npm/test/`), and pushing a `v*` tag publishes it with provenance
   (`.github/workflows/npm-publish.yml`).
+- BAM: `format_specific["bam_compression"]` = `"bgzf"` (default, unchanged) or `"none"` to write an
+  uncompressed `BAM\1` stream ([#74](https://github.com/scttfrdmn/stegano/issues/74)). Extraction
+  auto-detects either form; unknown values are rejected with `InvalidParameter`.
 
 ### Fixed
 - WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not
