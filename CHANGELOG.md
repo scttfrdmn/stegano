@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capacity at EOF, after the whole output has been written. That output is incomplete and must
   be discarded. `embed_file` handles this by writing to a temporary file and renaming it only
   on success.
+- VCF streaming ([#77](https://github.com/scttfrdmn/stegano/issues/77), part of
+  [#30](https://github.com/scttfrdmn/stegano/issues/30)): `stegano::stream` now handles
+  `DataFormat::VCF` with `vcf_strategy` = `info` (default), `id` and `quality`, one line at a
+  time. The `##INFO=<ID=STEG,...>` declaration is still written before `#CHROM`. LF/CRLF and all
+  untouched lines are kept byte for byte, and the output is byte-identical to the in-memory
+  `VcfHandler`'s. Streaming extraction auto-detects the channel (it also reads files written with
+  the in-memory `format`/`multi` strategies) and stops once the payload frame is complete.
+  `format` (alias `sample`) and `multi` need the whole file and return `InvalidParameter` for
+  streaming embed. Peak RSS was about 7 MB when embedding a 1.09 GB VCF; `bcftools view` accepts
+  the output.
 
 ### Fixed
 - WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not

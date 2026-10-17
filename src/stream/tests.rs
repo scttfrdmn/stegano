@@ -334,7 +334,6 @@ fn test_unsupported_format_and_strategy() {
         DataFormat::FASTA,
         DataFormat::PNG,
         DataFormat::SAM,
-        DataFormat::VCF,
     ] {
         assert!(!is_streamable(&f, &p));
         let err = embed_stream(f.clone(), Cursor::new(b""), Vec::new(), b"x", &p).unwrap_err();
