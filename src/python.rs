@@ -255,7 +255,8 @@ impl Stegano {
     /// Args:
     ///     carrier:  Carrier file bytes (PNG, FASTA, WAV, FITS, …).
     ///     payload:  Secret bytes to embed.
-    ///     password: Encryption password.  Empty string disables encryption.
+    ///     password: Encryption password.  Empty string disables encryption
+    ///               (the payload is then stored in plaintext).
     ///     stealth:  ``"low"`` | ``"medium"`` | ``"high"`` (default) | ``"maximum"``.
     ///     ec_level: ``"none"`` (default) | ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
     ///     cipher:   ``"aes256gcm"`` (default) | ``"chacha20"``.
@@ -340,7 +341,8 @@ impl Stegano {
 /// Args:
 ///     carrier:  Carrier file bytes (PNG, FASTA, WAV, FITS, …).
 ///     payload:  Secret bytes to embed.
-///     password: Encryption password.  Empty string disables encryption.
+///     password: Encryption password.  Empty string disables encryption
+///               (the payload is then stored in plaintext).
 ///     stealth:  ``"low"`` | ``"medium"`` | ``"high"`` (default) | ``"maximum"``.
 ///     ec_level: ``"none"`` (default) | ``"low"`` | ``"medium"`` | ``"high"`` | ``"maximum"``.
 ///     cipher:   ``"aes256gcm"`` (default) | ``"chacha20"``.

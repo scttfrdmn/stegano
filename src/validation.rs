@@ -1,7 +1,10 @@
-//! Comprehensive Statistical Validation Framework
+//! Statistical validation and steganalysis.
 //!
-//! This module provides world-class statistical validation capabilities for steganography,
-//! including classical statistical tests, advanced steganalysis, and publication-ready metrics.
+//! Classical statistical tests (chi-square, Kolmogorov-Smirnov, ...),
+//! steganalysis detectors (Sample Pairs Analysis, pairs-of-values, ...) and
+//! ROC/AUC and cross-validation metrics. Use them to measure how detectable
+//! an embedding is; the payloads this crate writes are detectable (see the
+//! threat model in `SECURITY.md`).
 
 use crate::core::*;
 use rustfft::{num_complex::Complex, FftPlanner};

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- npm publishing uses npm trusted publishing (OIDC); `NPM_TOKEN` is only a fallback
+  ([#89](https://github.com/scttfrdmn/stegano/pull/89)). The workflow publishes the packed
+  `./dist` tarball and can re-publish an existing release tag via the `tag` input
+  ([#90](https://github.com/scttfrdmn/stegano/pull/90)).
+
+### Documentation
+- README: states that payloads are encrypted only when a password is given (plaintext
+  otherwise, in every interface); adds a limitations summary, the CLI password sources and their
+  precedence, `detect` exit code 3, a per-format strategy/streaming table, the C function list,
+  the Python file API and `Stegano` class, and the `EmbedParams::new` (EC Medium) vs CLI/bindings
+  (EC none) default.
+- SECURITY.md rewritten: supported versions 0.7.x/0.6.x, the actual cryptography (Argon2id
+  64 MiB/t=3/p=1, AES-256-GCM or ChaCha20-Poly1305 with an authenticated header), a
+  "Threat model and limitations" section, and only the development practices that are actually
+  in place. Reports go through GitHub private vulnerability reporting.
+- CONTRIBUTING.md: correct clone URL, the real CI jobs (fmt is non-blocking), the `experimental`
+  feature, building each binding, the format-validity suite and the release steps.
+- Rustdoc and CLI help: `CipherKind` key derivation is Argon2id (not Blake3); VCF/SAM/BAM/DICOM
+  are no longer marked "planned"; `--gpu` / `use_gpu` are described as having no effect on
+  embedding; the FFI `panic = "unwind"` note, error codes, `CDataFormat` values and
+  `CCapacityInfo`/`CEmbedResult` fields are documented (C headers regenerated).
+
 ## [0.7.0] - 2026-10-17
 
 Streaming for large genomics files, a Go module other projects can use, and the `stegano-wasm`
@@ -15,10 +38,6 @@ npm package. The wire format is unchanged from 0.6.0.
 Measured peak memory: about 70 MB to embed or extract on a 1–2 GB FASTQ, VCF or BAM, almost all of
 it Argon2id's 64 MiB. A 1 GB FASTQ through the CLI took 71 MB streaming vs 5.19 GB with
 `--no-stream`. Streaming extraction reads only the first 256–512 KiB.
-
-Downstream: queryabl's `bamq write --embed-provenance` / `bamq verify-provenance`
-(scttfrdmn/queryabl#84) uses the Go module and the BAM `auxiliary` strategy
-([#33](https://github.com/scttfrdmn/stegano/issues/33)).
 
 ### Added
 - npm package `stegano-wasm` ([#34](https://github.com/scttfrdmn/stegano/issues/34)). It contains

@@ -60,7 +60,7 @@ pub enum Commands {
         /// Enable statistical validation analysis
         #[arg(long)]
         validate: bool,
-        /// Enable GPU acceleration
+        /// Experimental; has no effect on embedding
         #[arg(long)]
         gpu: bool,
         /// Stealth level (maximum, high, medium, low)
@@ -97,7 +97,7 @@ pub enum Commands {
         output: String,
         #[command(flatten)]
         password: PasswordArgs,
-        /// Enable GPU acceleration
+        /// Experimental; has no effect on embedding
         #[arg(long)]
         gpu: bool,
         /// Error-correction level. Only matters for password-less payloads:

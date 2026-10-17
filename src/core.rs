@@ -23,7 +23,7 @@
 //! - Encryption keys and algorithms
 //! - Error correction levels (None to Maximum)
 //! - Stealth levels (Maximum stealth to Low)
-//! - GPU acceleration options
+//! - The `use_gpu` flag (accepted for compatibility; it does not affect embedding)
 //! - Format-specific parameters
 //!
 //! ## Examples
@@ -45,7 +45,7 @@
 //!
 //! let params = EmbedParams::new(b"secure_key".to_vec())
 //!     .with_stealth_level(StealthLevel::Medium)
-//!     .with_gpu();
+//!     .with_ec_level(ECLevel::Low);
 //!
 //! // Or with error correction
 //! let params = EmbedParams::with_error_correction(b"secure_key".to_vec(), ECLevel::High);
@@ -62,16 +62,18 @@ use std::collections::HashMap;
 ///
 /// # Genomics Formats
 /// - [`FASTA`](DataFormat::FASTA): DNA/RNA/protein sequence data with header metadata embedding
-/// - [`FASTQ`](DataFormat::FASTQ): Next-generation sequencing data with advanced quality score steganography
-/// - [`VCF`](DataFormat::VCF): Variant Call Format for genomic variations (planned)
-/// - [`SAM`](DataFormat::SAM): Sequence Alignment/Map format (planned)
-/// - [`BAM`](DataFormat::BAM): Binary Alignment/Map format (planned)
+/// - [`FASTQ`](DataFormat::FASTQ): Sequencing reads; quality-score LSB embedding
+/// - [`VCF`](DataFormat::VCF): Variant Call Format (INFO/FORMAT/ID/QUAL channels)
+/// - [`SAM`](DataFormat::SAM): Sequence Alignment/Map text format
+/// - [`BAM`](DataFormat::BAM): Binary Alignment/Map (BGZF or raw `BAM\1`)
 ///
 /// # Imagery Formats
 /// - [`TIFF`](DataFormat::TIFF): Multi-channel scientific imagery with metadata fields
 /// - [`PNG`](DataFormat::PNG): Standard images with LSB techniques
-/// - [`MICROSCOPY`](DataFormat::MICROSCOPY): Multi-dimensional microscopy stacks (planned)
-/// - [`DICOM`](DataFormat::DICOM): Medical imaging format (planned)
+/// - [`MICROSCOPY`](DataFormat::MICROSCOPY): Microscopy images, handled as PNG/TIFF
+///   (single-page, detected by magic bytes)
+/// - [`DICOM`](DataFormat::DICOM): Medical imaging (private elements, preamble,
+///   trailing padding or pixel LSBs)
 ///
 /// # Signal Formats
 /// - [`WAV`](DataFormat::WAV): Audio signals with various embedding techniques
@@ -80,7 +82,7 @@ use std::collections::HashMap;
 ///
 /// # Generic Formats
 /// - [`BINARY`](DataFormat::BINARY): Generic binary data with LSB embedding
-/// - [`TEXT`](DataFormat::TEXT): Plain text with whitespace steganography
+/// - [`TEXT`](DataFormat::TEXT): Plain text, handled by the generic LSB handler
 ///
 /// # Examples
 ///
@@ -100,13 +102,13 @@ pub enum DataFormat {
     // Genomics formats
     /// FASTA sequence format - DNA/RNA/protein sequences with header embedding
     FASTA,
-    /// FASTQ format with quality scores - Advanced quality score steganography
+    /// FASTQ format with quality scores (quality-score LSB embedding)
     FASTQ,
-    /// Variant Call Format - Genomic variation data (planned)
+    /// Variant Call Format - Genomic variation data
     VCF,
-    /// Sequence Alignment/Map format (planned)
+    /// Sequence Alignment/Map format
     SAM,
-    /// Binary Alignment/Map format (planned)
+    /// Binary Alignment/Map format
     BAM,
 
     // Image formats
@@ -114,9 +116,9 @@ pub enum DataFormat {
     TIFF,
     /// Portable Network Graphics - Standard image format
     PNG,
-    /// Multi-dimensional microscopy data (planned)
+    /// Microscopy images (handled as single-page PNG/TIFF)
     MICROSCOPY,
-    /// Digital Imaging and Communications in Medicine (planned)
+    /// Digital Imaging and Communications in Medicine
     DICOM,
 
     // Signal formats
@@ -269,11 +271,16 @@ impl CarrierData {
     }
 }
 
+/// Spatial dimensions of an image-like carrier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dimensions {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
+    /// Number of planes/slices for volumetric data, if any.
     pub depth: Option<u32>,
+    /// Number of channels per pixel, if known.
     pub channels: Option<u32>,
 }
 
@@ -316,8 +323,9 @@ impl Dimensions {
 /// * `error_correction_level` - Reed-Solomon error correction strength
 /// * `stealth_level` - Balance between capacity and detectability
 ///
-/// # Performance Configuration  
-/// * `use_gpu` - Enable GPU acceleration when available
+/// # Other options
+/// * `use_gpu` - Experimental; accepted for compatibility but has no effect on
+///   embedding (the GPU modules are not used by the embedding pipeline)
 /// * `enable_validation` - Enable statistical validation analysis
 /// * `format_specific` - Format-specific embedding parameters
 ///
@@ -330,7 +338,7 @@ impl Dimensions {
 /// // Basic configuration
 /// let params = EmbedParams::new(b"secure_password".to_vec());
 ///
-/// // Advanced configuration with GPU and high stealth
+/// // Maximum stealth (`with_gpu` is accepted but does not change embedding)
 /// let params = EmbedParams::new(b"my_key".to_vec())
 ///     .with_stealth_level(StealthLevel::Maximum)
 ///     .with_gpu();
@@ -368,7 +376,8 @@ pub struct EmbedParams {
     pub error_correction_level: ECLevel,
     /// Stealth level balancing capacity vs detectability
     pub stealth_level: StealthLevel,
-    /// Enable GPU acceleration
+    /// Experimental flag; has no effect on embedding (the GPU modules are not
+    /// used by the embedding pipeline).
     pub use_gpu: bool,
     /// Enable statistical validation analysis
     pub enable_validation: bool,
@@ -405,7 +414,12 @@ impl Default for EmbedParams {
 }
 
 impl EmbedParams {
-    /// Create default embedding parameters
+    /// Create embedding parameters with the library defaults.
+    ///
+    /// An empty `key` means no encryption: the payload is stored in plaintext.
+    /// The error-correction default here is [`ECLevel::Medium`]; the CLI and
+    /// the C/Go/Python/WASM bindings default to [`ECLevel::None`] instead (see
+    /// [`crate::carrier::DEFAULT_EC_LEVEL`]).
     pub fn new(key: Vec<u8>) -> Self {
         Self {
             encryption_key: key,
@@ -431,7 +445,8 @@ impl EmbedParams {
         }
     }
 
-    /// Enable GPU acceleration
+    /// Set [`use_gpu`](Self::use_gpu). Experimental: this has no effect on
+    /// embedding.
     pub fn with_gpu(mut self) -> Self {
         self.use_gpu = true;
         self
@@ -468,9 +483,11 @@ impl EmbedParams {
 
 /// Symmetric AEAD cipher used for payload encryption.
 ///
-/// Both variants use a 256-bit key derived from the password via Blake3 and
-/// provide authenticated encryption — a wrong key produces a decryption error,
-/// never silent data corruption.
+/// Both variants use a 256-bit key derived from the password with Argon2id
+/// (64 MiB, 3 passes, 1 lane, random per-payload salt) and provide
+/// authenticated encryption, with the payload header as associated data: a
+/// wrong key or a modified header produces a decryption error, never silent
+/// data corruption. See `docs/WIRE_FORMAT.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CipherKind {
     /// AES-256-GCM (default). Fastest on CPUs with AES-NI hardware acceleration.
@@ -597,12 +614,19 @@ impl StealthLevel {
     }
 }
 
+/// Outcome of a successful embed.
 #[derive(Debug)]
 pub struct EmbedResult {
+    /// `true` when the payload was embedded.
     pub success: bool,
+    /// Number of payload bytes embedded, as reported by the handler.
     pub bytes_embedded: usize,
+    /// `true` when the carrier bytes were changed.
     pub carrier_modified: bool,
+    /// Timing and memory figures for the operation.
     pub performance_stats: PerformanceStats,
+    /// Statistical validation report, when validation was requested with
+    /// [`EmbedParams::with_validation`].
     pub validation_report: Option<crate::validation::ValidationReport>,
 }
 
@@ -645,11 +669,17 @@ impl EmbedResult {
     }
 }
 
+/// Timing and memory figures reported with an [`EmbedResult`].
 #[derive(Debug, Clone)]
 pub struct PerformanceStats {
+    /// Wall-clock time spent embedding, in milliseconds.
     pub embedding_time_ms: u64,
+    /// Time spent on encryption, in milliseconds (0 if not measured).
     pub encryption_time_ms: u64,
+    /// Always `false` in the embedding pipeline (the GPU is not used).
     pub gpu_acceleration_used: bool,
+    /// Handler's rough estimate of working memory, in bytes (not a
+    /// measurement).
     pub memory_usage_bytes: usize,
 }
 
@@ -684,11 +714,17 @@ impl Default for PerformanceStats {
     }
 }
 
+/// Embedding capacity of a carrier, as estimated by its handler.
 #[derive(Debug)]
 pub struct CapacityInfo {
+    /// Raw capacity in bits, including the handler's framing header.
     pub total_bits: usize,
+    /// Bits the handler recommends for the encoded payload (codec output,
+    /// which is larger than the plaintext; see `docs/WIRE_FORMAT.md`).
     pub recommended_bits: usize,
+    /// `recommended_bits / total_bits` (0.0 for an empty carrier).
     pub steganographic_ratio: f64,
+    /// Handler-specific details (strategy, sample counts, ...).
     pub format_specific_info: HashMap<String, serde_json::Value>,
 }
 
@@ -728,9 +764,10 @@ impl CapacityInfo {
     }
 }
 
-// Error types
+/// Errors returned by this crate.
 #[derive(Debug, thiserror::Error)]
 pub enum SteganoError {
+    /// The handler cannot process this carrier format or layout.
     #[error("Unsupported data format: {0:?}")]
     UnsupportedFormat(DataFormat),
 
@@ -739,23 +776,37 @@ pub enum SteganoError {
     /// Both `needed` and `available` are in **bits** (including any
     /// handler framing/header), for every handler.
     #[error("Insufficient capacity: need {needed} bits, have {available}")]
-    InsufficientCapacity { needed: usize, available: usize },
+    InsufficientCapacity {
+        /// Bits required.
+        needed: usize,
+        /// Bits available in the carrier.
+        available: usize,
+    },
 
+    /// Encryption or decryption failed (wrong password, password given for
+    /// an unencrypted payload or missing for an encrypted one, or a modified
+    /// payload or header).
     #[error("Encryption error: {0}")]
     EncryptionError(String),
 
+    /// Error from the experimental GPU modules; the embedding pipeline does
+    /// not produce it.
     #[error("GPU acceleration error: {0}")]
     GpuError(String),
 
+    /// No valid payload was found, or it is damaged beyond repair.
     #[error("Data integrity error: {0}")]
     IntegrityError(String),
 
+    /// An argument or option value is invalid.
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
 
+    /// An I/O operation failed.
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
+    /// JSON (de)serialization failed.
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 }
@@ -784,6 +835,7 @@ impl SteganoError {
     }
 }
 
+/// `Result` alias using [`SteganoError`].
 pub type Result<T> = std::result::Result<T, SteganoError>;
 
 #[cfg(test)]
