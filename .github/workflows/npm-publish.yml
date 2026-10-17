@@ -16,6 +16,12 @@ on:
         description: Build, test and run `npm publish --dry-run` only
         type: boolean
         default: true
+      tag:
+        description: >-
+          Existing release tag to build and publish (e.g. v0.7.0) using this
+          workflow version; empty = the ref the workflow runs on
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -35,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -59,7 +67,7 @@ jobs:
         id: pack
         run: |
           mkdir -p dist
-          tarball="dist/$(npm pack ./pkg --pack-destination dist --json | jq -r '.[0].filename')"
+          tarball="./dist/$(npm pack ./pkg --pack-destination dist --json | jq -r '.[0].filename')"
           version="$(jq -r .version pkg/package.json)"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -72,14 +80,20 @@ jobs:
         env:
           VERSION: ${{ steps.pack.outputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match package version $VERSION (from Cargo.toml)"
+          if [ -n "$INPUT_TAG" ]; then
+            REF_TYPE=tag REF_NAME="$INPUT_TAG"
+          else
+            REF_TYPE="$GITHUB_REF_TYPE" REF_NAME="$GITHUB_REF_NAME"
+          fi
+          if [ "$REF_TYPE" = "tag" ]; then
+            if [ "${REF_NAME#v}" != "$VERSION" ]; then
+              echo "::error::Tag $REF_NAME does not match package version $VERSION (from Cargo.toml)"
               exit 1
             fi
           elif [ "$DRY_RUN" != "true" ]; then
-            echo "::error::Real publishes must run on a v* tag (got $GITHUB_REF_TYPE $GITHUB_REF_NAME); use dry_run on branches"
+            echo "::error::Real publishes must run on a v* tag or set the tag input (got $REF_TYPE $REF_NAME); use dry_run on branches"
             exit 1
           fi
 
