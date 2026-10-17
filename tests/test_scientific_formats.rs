@@ -28,36 +28,74 @@ chr1	1110696	rs6040355	A	G	85.0	PASS	AC=1;AN=4;AF=0.25	GT:DP:GQ	0|1:25:60	0|0:22
     replicate_records(vcf_content, FIXTURE_REPEATS)
 }
 
-/// Helper function to create DICOM test data (simplified)
-fn create_test_dicom_data() -> Vec<u8> {
-    let mut data = Vec::new();
-
-    // Preamble (128 bytes of zeros)
-    data.extend_from_slice(&[0u8; 128]);
-
-    // DICOM prefix
-    data.extend_from_slice(b"DICM");
-
-    // File Meta Information Group Length (0002,0000)
-    data.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // Tag
-    data.extend_from_slice(b"UL"); // VR
-    data.extend_from_slice(&[0x04, 0x00]); // Length
-    data.extend_from_slice(&[0x00, 0x00]); // Reserved
-    data.extend_from_slice(&[0x04, 0x00, 0x00, 0x00]); // Value: 4
-
-    // Transfer Syntax UID (0002,0010)
-    data.extend_from_slice(&[0x02, 0x00, 0x10, 0x00]); // Tag
-    data.extend_from_slice(b"UI"); // VR
-    data.extend_from_slice(&[0x1A, 0x00]); // Length
-    data.extend_from_slice(&[0x00, 0x00]); // Reserved
-    data.extend_from_slice(b"1.2.840.10008.1.2\0"); // Implicit VR Little Endian
-
-    // Mock pixel data (256x256 16-bit grayscale)
-    let pixel_count = 256 * 256;
-    for i in 0..pixel_count {
-        let value = ((i % 256) as u16).to_le_bytes();
-        data.extend(&value);
+/// Append an explicit VR little endian data element (PS3.5 §7.1.2): OB/OW/SQ/UN/UT…
+/// use VR + 2 reserved bytes + u32 length, all other VRs VR + u16 length.
+fn put_explicit_le(out: &mut Vec<u8>, group: u16, element: u16, vr: &[u8; 2], value: &[u8]) {
+    assert!(
+        value.len().is_multiple_of(2),
+        "DICOM values have even length"
+    );
+    out.extend_from_slice(&group.to_le_bytes());
+    out.extend_from_slice(&element.to_le_bytes());
+    out.extend_from_slice(vr);
+    if matches!(vr, b"OB" | b"OW" | b"OF" | b"SQ" | b"UN" | b"UT") {
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    } else {
+        out.extend_from_slice(&(value.len() as u16).to_le_bytes());
     }
+    out.extend_from_slice(value);
+}
+
+/// Spec-correct DICOM Part 10 test file: preamble + `DICM`, File Meta group
+/// (explicit VR LE, Transfer Syntax = Explicit VR Little Endian), image pixel
+/// module and 256×256 16-bit (12 stored) monochrome pixel data.
+fn create_test_dicom_data() -> Vec<u8> {
+    let mut meta = Vec::new();
+    put_explicit_le(&mut meta, 0x0002, 0x0001, b"OB", &[0x00, 0x01]);
+    put_explicit_le(
+        &mut meta,
+        0x0002,
+        0x0002,
+        b"UI",
+        b"1.2.840.10008.5.1.4.1.1.4\0",
+    );
+    put_explicit_le(&mut meta, 0x0002, 0x0003, b"UI", b"1.2.3.4.5.6.7.8.9.10");
+    put_explicit_le(&mut meta, 0x0002, 0x0010, b"UI", b"1.2.840.10008.1.2.1\0");
+
+    let mut data = vec![0u8; 128];
+    data.extend_from_slice(b"DICM");
+    put_explicit_le(
+        &mut data,
+        0x0002,
+        0x0000,
+        b"UL",
+        &(meta.len() as u32).to_le_bytes(),
+    );
+    data.extend_from_slice(&meta);
+
+    put_explicit_le(
+        &mut data,
+        0x0008,
+        0x0016,
+        b"UI",
+        b"1.2.840.10008.5.1.4.1.1.4\0",
+    );
+    put_explicit_le(&mut data, 0x0008, 0x0060, b"CS", b"MR");
+    put_explicit_le(&mut data, 0x0028, 0x0002, b"US", &1u16.to_le_bytes());
+    put_explicit_le(&mut data, 0x0028, 0x0004, b"CS", b"MONOCHROME2 ");
+    put_explicit_le(&mut data, 0x0028, 0x0010, b"US", &256u16.to_le_bytes());
+    put_explicit_le(&mut data, 0x0028, 0x0011, b"US", &256u16.to_le_bytes());
+    put_explicit_le(&mut data, 0x0028, 0x0100, b"US", &16u16.to_le_bytes());
+    put_explicit_le(&mut data, 0x0028, 0x0101, b"US", &12u16.to_le_bytes());
+    put_explicit_le(&mut data, 0x0028, 0x0102, b"US", &11u16.to_le_bytes());
+    put_explicit_le(&mut data, 0x0028, 0x0103, b"US", &0u16.to_le_bytes());
+
+    // 256x256 16-bit grayscale, 12 bits stored
+    let pixels: Vec<u8> = (0..256 * 256)
+        .flat_map(|i: u32| (((i * 7) % 4096) as u16).to_le_bytes())
+        .collect();
+    put_explicit_le(&mut data, 0x7FE0, 0x0010, b"OW", &pixels);
 
     data
 }
@@ -324,20 +362,17 @@ async fn test_dicom_private_elements_embedding() {
     assert!(integrity_ok.is_ok());
     assert!(integrity_ok.unwrap());
 
+    // The private block is inserted in tag order before the pixel data, so the
+    // pixel data element itself (at the end of the file) is unchanged.
+    let px_len = 256 * 256 * 2;
+    assert_eq!(
+        &carrier_mut.raw_data[carrier_mut.raw_data.len() - px_len..],
+        &carrier.raw_data[carrier.raw_data.len() - px_len..]
+    );
+
     // Test extraction
-    let extracted = handler.extract(&carrier_mut, &params).await;
-    match extracted {
-        Ok(data) => {
-            assert_eq!(data, payload);
-        }
-        Err(e) => {
-            // If extraction fails, at least verify embedding claimed to work
-            println!("Extraction failed: {e:?}");
-            // This is acceptable for now since the test data might not be complete
-            println!("Embedded bytes: {}", result.bytes_embedded);
-            assert!(result.bytes_embedded > 0, "Should have embedded some data");
-        }
-    }
+    let extracted = handler.extract(&carrier_mut, &params).await.unwrap();
+    assert_eq!(extracted, payload);
 }
 
 #[tokio::test]
@@ -384,28 +419,28 @@ async fn test_dicom_pixel_lsb_embedding() {
     let payload = b"diagnostic_metadata_embedded";
 
     let mut carrier_mut = carrier.clone();
-    let embed_result = handler.embed(&mut carrier_mut, payload, &params).await;
+    let result = handler
+        .embed(&mut carrier_mut, payload, &params)
+        .await
+        .expect("pixel LSB embedding");
+    assert_eq!(result.bytes_embedded, payload.len());
+    assert!(handler.verify_integrity(&carrier_mut).unwrap());
 
-    match embed_result {
-        Ok(result) => {
-            assert!(result.bytes_embedded > 0);
-
-            // Verify diagnostic quality is preserved
-            let integrity_ok = handler.verify_integrity(&carrier_mut).unwrap();
-            assert!(integrity_ok);
-
-            let extracted = handler.extract(&carrier_mut, &params).await.unwrap();
-            assert_eq!(extracted, payload);
-        }
-        Err(e) => {
-            // If pixel data is not available in test data, that's acceptable
-            println!("Pixel LSB embedding failed (expected with test data): {e:?}");
-            assert!(
-                e.to_string().contains("No pixel data found")
-                    || e.to_string().contains("No pixel data found in DICOM")
-            );
-        }
+    // Same file size; every 16-bit sample changes by at most 1.
+    assert_eq!(carrier_mut.raw_data.len(), carrier.raw_data.len());
+    let px_len = 256 * 256 * 2;
+    let start = carrier.raw_data.len() - px_len;
+    assert_eq!(&carrier_mut.raw_data[..start], &carrier.raw_data[..start]);
+    let before = carrier.raw_data[start..].as_chunks::<2>().0;
+    let after = carrier_mut.raw_data[start..].as_chunks::<2>().0;
+    for (&a, &b) in before.iter().zip(after) {
+        let a = i32::from(u16::from_le_bytes(a));
+        let b = i32::from(u16::from_le_bytes(b));
+        assert!((a - b).abs() <= 1);
     }
+
+    let extracted = handler.extract(&carrier_mut, &params).await.unwrap();
+    assert_eq!(extracted, payload);
 }
 
 #[tokio::test]
@@ -442,7 +477,8 @@ async fn test_dicom_unused_metadata_embedding() {
             map
         },
         stealth_level: StealthLevel::Medium,
-        error_correction_level: ECLevel::Low,
+        // The 128-byte preamble holds at most 119 codec bytes, so no RS parity.
+        error_correction_level: ECLevel::None,
         encryption_key: b"dicom_metadata_key".to_vec(),
         use_gpu: false,
         enable_validation: false,
@@ -453,40 +489,27 @@ async fn test_dicom_unused_metadata_embedding() {
     let payload = b"device_calibration_logs";
 
     let mut carrier_mut = carrier.clone();
-    let embed_result = handler.embed(&mut carrier_mut, payload, &params).await;
+    let result = handler
+        .embed(&mut carrier_mut, payload, &params)
+        .await
+        .expect("preamble embedding");
+    assert_eq!(result.bytes_embedded, payload.len());
+    // Only the preamble changed; the File Meta group and data set are untouched.
+    assert_eq!(carrier_mut.raw_data.len(), carrier.raw_data.len());
+    assert_eq!(&carrier_mut.raw_data[128..], &carrier.raw_data[128..]);
+    assert!(handler.verify_integrity(&carrier_mut).unwrap());
 
-    match embed_result {
-        Ok(result) => {
-            assert!(result.bytes_embedded > 0);
+    let extracted = handler.extract(&carrier_mut, &params).await.unwrap();
+    assert_eq!(extracted, payload);
 
-            let extract_result = handler.extract(&carrier_mut, &params).await;
-            match extract_result {
-                Ok(extracted) => {
-                    assert_eq!(extracted, payload);
-                }
-                Err(e) => {
-                    println!("Extraction failed even after successful embed: {e:?}");
-                    // For test data, this might be expected
-                    assert!(
-                        e.to_string().contains("No private")
-                            || e.to_string().contains("metadata")
-                            || e.to_string().contains("unused")
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            // If metadata embedding fails with test data, that's acceptable
-            println!("Metadata embedding failed (expected with test data): {e:?}");
-            // Just verify that the error is related to the test data limitations
-            assert!(
-                e.to_string().contains("metadata")
-                    || e.to_string().contains("unused")
-                    || e.to_string().contains("No unused")
-                    || e.to_string().contains("No metadata")
-            );
-        }
-    }
+    // A larger payload with RS parity cannot fit in the preamble.
+    let mut big = params.clone();
+    big.error_correction_level = ECLevel::Low;
+    let mut c2 = carrier.clone();
+    assert!(matches!(
+        handler.embed(&mut c2, payload, &big).await,
+        Err(SteganoError::InsufficientCapacity { .. })
+    ));
 }
 
 #[tokio::test]
