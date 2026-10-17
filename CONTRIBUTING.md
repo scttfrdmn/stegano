@@ -212,19 +212,37 @@ The WebAssembly bindings are published to npm as
 workflow builds `pkg/` with `scripts/build-wasm.sh`, runs the smoke tests
 (`npm/test/run.mjs`) against the packed tarball, and checks that the tag
 (without the `v`) equals the version in `Cargo.toml`. It then publishes that
-exact tarball with `npm publish --provenance --access public`. If the version
+exact tarball with `npm publish --access public`. If the version
 is already on npm, the workflow skips the publish and prints a notice.
 
-One-time setup: add an `NPM_TOKEN` repository secret (Settings → Secrets and
-variables → Actions). It must be an npm **automation** token, or a
-**granular access token** with read and write permission for `stegano-wasm`.
-For the first publish, the token's scope must allow creating new packages.
-If the secret is missing, the publish step fails with an error that says so.
+Authentication uses **npm trusted publishing (OIDC)**, so no long-lived token
+is stored. npm is removing direct publishing with granular "bypass 2FA" tokens
+around January 2027, and classic tokens no longer exist. The workflow installs
+npm >= 11.5.1, which trusted publishing requires. Provenance is generated
+automatically only while the repository is public.
+
+One-time setup:
+
+1. **Bootstrap the first publish.** A Trusted Publisher can only be configured
+   for a package that already exists. Create a short-lived npm granular access
+   token: read and write, bypass 2FA, all packages, expires in 1 day. Add it as
+   the `NPM_TOKEN` repository secret (Settings → Secrets and variables →
+   Actions) and run the workflow on the release tag.
+2. **Configure the Trusted Publisher.** On npmjs.com, go to stegano-wasm →
+   Settings → Trusted Publisher → GitHub Actions. Enter user `scttfrdmn`,
+   repository `stegano`, workflow `npm-publish.yml`, and allow `npm publish`.
+   The fields are case-sensitive, and the first OIDC publish must happen within
+   2 days of saving or the configuration expires.
+3. **Lock it down.** Delete the `NPM_TOKEN` secret and revoke the token. Then
+   set the package's Publishing access to "Require two-factor authentication
+   and disallow tokens".
+
+`NPM_TOKEN` is still used as a fallback whenever it is set.
 
 To check a release without publishing, run the workflow manually
 (**Actions → npm publish → Run workflow**) with `dry_run` on, which is the
 default. A real publish from `workflow_dispatch` is only allowed on a tag ref,
-for example to retry after adding the secret.
+for example to retry a failed release.
 
 Locally:
 
