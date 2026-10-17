@@ -257,8 +257,72 @@ enum SteganoErrorCode stegano_extract_v2(const uint8_t *carrier_data,
                                          uint32_t *payload_len_out);
 
 /*
- Free a buffer returned by `stegano_extract`, `stegano_extract_v2` or
- `stegano_embed_v2`. Passing NULL is a no-op.
+ Detect the format of the file at `path` without reading all of it: the
+ file extension first, then the first 4 KiB (magic bytes, then handler
+ probing). Unrecognised files are reported as `CDataFormat_Binary`.
+
+ # Safety
+ `path` must be a valid NUL-terminated C string and `format_out` must
+ point to a writable `uint32_t`.
+ */
+enum SteganoErrorCode stegano_detect_file_format(const char *path, uint32_t *format_out);
+
+/*
+ Embed a payload into the carrier file `in_path`, writing the result to
+ `out_path` (path-based; no 32-bit limit on the carrier size).
+
+ Streamable format/strategy pairs (e.g. FASTQ, VCF `info`/`id`/`quality`, SAM/BAM `auxiliary`/`quality`)
+ are streamed with constant memory; anything else is read into memory.
+ The output is written to a temporary file in `out_path`'s directory and
+ renamed over `out_path` only on success, so on error `out_path` is left
+ untouched. `in_path` and `out_path` may be the same file.
+
+ `format_specific_json` accepts the same keys as `stegano_embed_v2`
+ (plus any handler key, e.g. `"bam_compression"`). `result_out` may be
+ NULL.
+
+ # Safety
+ - `in_path` and `out_path` must be valid NUL-terminated C strings
+ - `payload_data` must point to at least `payload_len` readable bytes
+ - `password` and `format_specific_json` must each be null or a valid
+   NUL-terminated C string
+ - `result_out` must be null or point to a writable `CEmbedResult`
+ */
+enum SteganoErrorCode stegano_embed_file(const char *in_path,
+                                         const char *out_path,
+                                         const uint8_t *payload_data,
+                                         size_t payload_len,
+                                         uint32_t format,
+                                         const char *password,
+                                         const char *format_specific_json,
+                                         struct CEmbedResult *result_out);
+
+/*
+ Extract the payload from the carrier file at `path` (path-based; no
+ 32-bit limit on the carrier size).
+
+ Streamable formats are streamed, stopping as soon as the payload is
+ complete; anything else is read into memory. On success `*output_out`
+ receives a library-allocated buffer (free it with `stegano_free`) and
+ `*output_len_out` its length. `format_specific_json` is as for
+ `stegano_extract_v2`.
+
+ # Safety
+ - `path` must be a valid NUL-terminated C string
+ - `password` and `format_specific_json` must each be null or a valid
+   NUL-terminated C string
+ - `output_out` and `output_len_out` must be valid writable pointers
+ */
+enum SteganoErrorCode stegano_extract_file(const char *path,
+                                           uint32_t format,
+                                           const char *password,
+                                           const char *format_specific_json,
+                                           uint8_t **output_out,
+                                           size_t *output_len_out);
+
+/*
+ Free a buffer returned by `stegano_extract`, `stegano_extract_v2`,
+ `stegano_extract_file` or `stegano_embed_v2`. Passing NULL is a no-op.
 
  # Arguments
  * `ptr` - Pointer to memory to free

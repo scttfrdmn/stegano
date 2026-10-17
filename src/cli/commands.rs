@@ -1,8 +1,10 @@
 use crate::carrier::{self, build_carrier};
+use crate::cli::files;
 use crate::cli::{PasswordArgs, PASSWORD_ENV};
 use crate::core::*;
 use crate::embedding::SteganoEmbedder;
 use std::fs;
+use std::path::Path;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_embed(
@@ -16,6 +18,7 @@ pub async fn handle_embed(
     ec_level: &str,
     strategy: Option<&str>,
     cipher: &str,
+    no_stream: bool,
 ) -> Result<()> {
     println!("🔐 Embedding {payload} into {input} -> {output}");
 
@@ -28,10 +31,7 @@ pub async fn handle_embed(
     })?;
     let key = resolve_password(password, true)?.unwrap_or_default();
 
-    let carrier_data = read_file(input, "carrier")?;
     let payload_data = read_file(payload, "payload")?;
-
-    let mut carrier = build_carrier(input, carrier_data);
 
     // Warn when ECLevel::Low is chosen with a small payload (RS block is always 255 bytes).
     if matches!(ec, ECLevel::Low) && payload_data.len() < 200 {
@@ -47,9 +47,34 @@ pub async fn handle_embed(
     if gpu {
         params = params.with_gpu();
     }
+
+    // Streaming path: decided from the extension / magic bytes only, so a
+    // large carrier is never read into memory.
+    if let Some(format) = streaming_format(input, no_stream, validate, "embed")? {
+        let mut params = params.clone();
+        if let Some(s) = strategy {
+            apply_strategy(&mut params, &format, s);
+        }
+        if files::embed_streamable(&format, &params) {
+            println!("🌊 Streaming {format:?} carrier (constant memory; --no-stream to disable)");
+            let result = crate::stream::embed_file(format, input, output, &payload_data, &params)
+                .map_err(|e| with_path_context(e, input, output))?;
+            println!("✅ Successfully embedded {} bytes", result.bytes_embedded);
+            println!(
+                "📈 Performance: {:.2}ms",
+                result.performance_stats.total_time_ms()
+            );
+            return Ok(());
+        }
+    }
+    println!("📦 In-memory embedding");
+
     if validate {
         params = params.with_validation();
     }
+
+    let carrier_data = read_file(input, "carrier")?;
+    let mut carrier = build_carrier(input, carrier_data);
 
     if let Some(s) = strategy {
         apply_strategy(&mut params, &carrier.format, s);
@@ -113,20 +138,34 @@ pub async fn handle_extract(
     gpu: bool,
     ec_level: &str,
     strategy: Option<&str>,
+    no_stream: bool,
 ) -> Result<()> {
     println!("🔍 Extracting from {input} -> {output}");
 
     let ec = parse_ec_level(ec_level)?;
     let key = resolve_password(password, false)?.unwrap_or_default();
 
-    let carrier_data = read_file(input, "input")?;
-    let carrier = build_carrier(input, carrier_data);
-
     let mut params = carrier::default_params(key).with_ec_level(ec);
 
     if gpu {
         params = params.with_gpu();
     }
+
+    if let Some(format) = streaming_format(input, no_stream, false, "extract")? {
+        // Stream extraction auto-detects the channel, so --strategy is not
+        // needed (and not consulted) here.
+        if let Some(r) = files::try_extract_stream(&format, Path::new(input), &params) {
+            println!("🌊 Streaming {format:?} carrier (stops at the end of the payload; --no-stream to disable)");
+            let extracted_data = r.map_err(|e| with_path_context(e, input, output))?;
+            write_file(output, &extracted_data)?;
+            println!("✅ Successfully extracted {} bytes", extracted_data.len());
+            return Ok(());
+        }
+    }
+    println!("📦 In-memory extraction");
+
+    let carrier_data = read_file(input, "input")?;
+    let carrier = build_carrier(input, carrier_data);
 
     if let Some(s) = strategy {
         apply_strategy(&mut params, &carrier.format, s);
@@ -323,14 +362,62 @@ fn read_file(path: &str, what: &str) -> Result<Vec<u8>> {
     })
 }
 
-/// Write a file, reporting failures as `SteganoError::IoError` with the path.
+/// Write a file atomically (special files such as `/dev/stdout` are written
+/// directly), reporting failures as `SteganoError::IoError` with the path.
 fn write_file(path: &str, data: &[u8]) -> Result<()> {
-    fs::write(path, data).map_err(|e| {
-        SteganoError::IoError(std::io::Error::new(
+    let special = fs::metadata(path).is_ok_and(|m| !m.is_file());
+    let result = if special {
+        fs::write(path, data).map_err(SteganoError::from)
+    } else {
+        files::write_atomic(Path::new(path), data)
+    };
+    result.map_err(|e| match e {
+        SteganoError::IoError(e) => SteganoError::IoError(std::io::Error::new(
             e.kind(),
             format!("failed to write output file '{path}': {e}"),
-        ))
+        )),
+        other => other,
     })
+}
+
+/// The format to try the streaming path with, or `None` for in-memory.
+///
+/// Detection uses only the extension and the magic bytes of the file head
+/// ([`files::detect_format_cheap`]); the caller still checks that the
+/// format/strategy pair is streamable.
+fn streaming_format(
+    input: &str,
+    no_stream: bool,
+    validate: bool,
+    what: &str,
+) -> Result<Option<DataFormat>> {
+    if no_stream {
+        println!("📦 --no-stream: using the in-memory path");
+        return Ok(None);
+    }
+    if validate {
+        // Validation compares the whole original and embedded carriers.
+        println!("📦 --validate needs the whole carrier: using the in-memory path");
+        return Ok(None);
+    }
+    files::detect_format_cheap(Path::new(input)).map_err(|e| match e {
+        SteganoError::IoError(e) => SteganoError::IoError(std::io::Error::new(
+            e.kind(),
+            format!("failed to read {what} input file '{input}': {e}"),
+        )),
+        other => other,
+    })
+}
+
+/// Add the file names to an I/O error from the stream API.
+fn with_path_context(e: SteganoError, input: &str, output: &str) -> SteganoError {
+    match e {
+        SteganoError::IoError(e) => SteganoError::IoError(std::io::Error::new(
+            e.kind(),
+            format!("I/O error streaming '{input}' -> '{output}': {e}"),
+        )),
+        other => other,
+    }
 }
 
 // ---------------------------------------------------------------------------
