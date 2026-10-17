@@ -164,7 +164,12 @@ jobs:
         with:
           # Pinned: output formatting can change between cbindgen releases.
           tool: cbindgen@0.29.4
-      - name: Regenerate include/stegano.h
-        run: cbindgen --config cbindgen.toml --output include/stegano.h src/ffi.rs
-      - name: Fail if the checked-in header is stale
-        run: git diff --exit-code -- include/stegano.h
+      - name: Regenerate include/stegano.h and go/stegano.h
+        run: |
+          cbindgen --config cbindgen.toml --output include/stegano.h src/ffi.rs
+          cbindgen --config cbindgen.toml --output go/stegano.h src/ffi.rs
+      - name: Fail if either checked-in header is stale or missing
+        run: |
+          # A file missing from git would be untracked, not a diff.
+          git ls-files --error-unmatch include/stegano.h go/stegano.h
+          git diff --exit-code -- include/stegano.h go/stegano.h

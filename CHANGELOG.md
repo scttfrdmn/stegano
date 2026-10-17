@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BAM: `format_specific["bam_compression"]` = `"bgzf"` (default, unchanged) or `"none"` to write an
   uncompressed `BAM\1` stream ([#74](https://github.com/scttfrdmn/stegano/issues/74)). Extraction
   auto-detects either form; unknown values are rejected with `InvalidParameter`.
+- Go module can be used from other repositories with
+  `go get github.com/scttfrdmn/stegano/go@<version>` ([#73](https://github.com/scttfrdmn/stegano/issues/73)).
+  cbindgen now also writes `go/stegano.h` inside the module, and the cgo directive is
+  `-I${SRCDIR}` instead of `-I${SRCDIR}/../include`. The CI header check covers both copies.
+  Releases also push a `go/vX.Y.Z` tag. See "Using from another module" in `go/README.md`.
 
 ### Fixed
 - WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not

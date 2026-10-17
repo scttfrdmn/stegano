@@ -1,10 +1,14 @@
 # cbindgen configuration for the stegano C ABI (src/ffi.rs).
 #
-# Regenerate the checked-in header after changing any FFI signature:
+# Regenerate both checked-in copies of the header after changing any FFI
+# signature:
 #
 #   cbindgen --config cbindgen.toml --output include/stegano.h src/ffi.rs
+#   cbindgen --config cbindgen.toml --output go/stegano.h src/ffi.rs
 #
-# CI fails if include/stegano.h differs from the regenerated output.
+# go/stegano.h lives inside the Go module (go/) so that
+# `go get github.com/scttfrdmn/stegano/go` builds without a repo checkout.
+# CI fails if either file differs from the regenerated output.
 
 language = "C"
 header = "/* SPDX-License-Identifier: Apache-2.0 */"
