@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-17
+
+Streaming for large genomics files, a Go module other projects can use, and the `stegano-wasm`
+npm package. The wire format is unchanged from 0.6.0.
+
+Measured peak memory: about 70 MB to embed or extract on a 1–2 GB FASTQ, VCF or BAM, almost all of
+it Argon2id's 64 MiB. A 1 GB FASTQ through the CLI took 71 MB streaming vs 5.19 GB with
+`--no-stream`. Streaming extraction reads only the first 256–512 KiB.
+
+Downstream: queryabl's `bamq write --embed-provenance` / `bamq verify-provenance`
+(scttfrdmn/queryabl#84) uses the Go module and the BAM `auxiliary` strategy
+([#33](https://github.com/scttfrdmn/stegano/issues/33)).
+
 ### Added
 - npm package `stegano-wasm` ([#34](https://github.com/scttfrdmn/stegano/issues/34)). It contains
   the web (ESM, `await init()`) and Node.js (CommonJS and ESM) builds, with TypeScript types and
   conditional `exports`. `scripts/build-wasm.sh` assembles it in `pkg/`, smoke tests run from the
-  packed tarball in CI (`npm/test/`), and pushing a `v*` tag publishes it with provenance
-  (`.github/workflows/npm-publish.yml`).
+  packed tarball in CI (`npm/test/`), and pushing a `v*` tag publishes it (`.github/workflows/npm-publish.yml`, needs the `NPM_TOKEN`
+  secret). npm provenance is used only when the repository is public.
 - BAM: `format_specific["bam_compression"]` = `"bgzf"` (default, unchanged) or `"none"` to write an
   uncompressed `BAM\1` stream ([#74](https://github.com/scttfrdmn/stegano/issues/74)). Extraction
   auto-detects either form; unknown values are rejected with `InvalidParameter`.
@@ -41,8 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VcfHandler`'s. Streaming extraction auto-detects the channel (it also reads files written with
   the in-memory `format`/`multi` strategies) and stops once the payload frame is complete.
   `format` (alias `sample`) and `multi` need the whole file and return `InvalidParameter` for
-  streaming embed. Peak RSS was about 7 MB when embedding a 1.09 GB VCF; `bcftools view` accepts
-  the output.
+  streaming embed. Embedding into a 1.09 GB VCF uses a few MB on top of Argon2id's 64 MiB (measured with test KDF
+  parameters at about 7 MB); `bcftools view` accepts the output.
 - SAM/BAM streaming ([#76](https://github.com/scttfrdmn/stegano/issues/76), part of
   [#30](https://github.com/scttfrdmn/stegano/issues/30)): `stegano::stream` now handles
   `DataFormat::SAM` (line by line; header lines pass through) and `DataFormat::BAM` (BGZF block

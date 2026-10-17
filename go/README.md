@@ -24,6 +24,8 @@ LIBDIR="$(pwd)/target/release"
 
 # 2. In your project, add the module.
 cd /path/to/your/project
+# The repository is private: let Go fetch it directly with your git credentials.
+export GOPRIVATE=github.com/scttfrdmn/stegano
 go get github.com/scttfrdmn/stegano/go@v0.7.0   # or @<commit-sha>
 
 # 3. Point cgo at the library for building, and the loader for running.
@@ -36,8 +38,7 @@ go build ./...
 Module versions are tagged `go/vX.Y.Z` (the module lives in the `go/`
 subdirectory), so `@v0.7.0` resolves to the `go/v0.7.0` tag. v0.7.0 is the
 first release usable this way (earlier releases read the header from outside
-the module); until it is tagged, use `@<commit-sha>` of a commit on `main`
-and build the library from that same commit. Use a library built from the
+the module). Use a library built from the
 same release: the header in the module and the symbols in
 `libstegano` must match. Instead of setting `LD_LIBRARY_PATH` /
 `DYLD_LIBRARY_PATH` you can install the library somewhere the loader already
@@ -94,7 +95,7 @@ err = stegano.EmbedFile("aln.bam", "aln.stego.bam", payload,
 fmt, err := stegano.DetectFormat(carrier)
 
 // Library version.
-fmt.Println(stegano.Version()) // crate version, e.g. "0.6.0"
+fmt.Println(stegano.Version()) // crate version, e.g. "0.7.0"
 ```
 
 ## Supported formats

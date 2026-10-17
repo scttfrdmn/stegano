@@ -334,7 +334,7 @@ enum SteganoErrorCode stegano_extract_file(const char *path,
 void stegano_free(void *ptr);
 
 /*
- Get the library version string (the crate version, e.g. `"0.6.0"`).
+ Get the library version string (the crate version, e.g. `"0.7.0"`).
  Returns: static NUL-terminated string (caller must NOT free)
  */
 const char *stegano_version(void);

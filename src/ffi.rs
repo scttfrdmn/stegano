@@ -845,7 +845,7 @@ pub unsafe extern "C" fn stegano_free(ptr: *mut c_void) {
     }
 }
 
-/// Get the library version string (the crate version, e.g. `"0.6.0"`).
+/// Get the library version string (the crate version, e.g. `"0.7.0"`).
 /// Returns: static NUL-terminated string (caller must NOT free)
 #[no_mangle]
 pub extern "C" fn stegano_version() -> *const c_char {
