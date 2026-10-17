@@ -827,6 +827,35 @@ mod tests {
     }
 
     #[test]
+    fn test_guard_catches_panic_inside_runtime_future() {
+        let code = guard(|| match run_blocking(async { panic!("boom in future") }) {
+            Ok(()) => SteganoErrorCode::Success,
+            Err(e) => e,
+        });
+        assert_eq!(code, SteganoErrorCode::Panic);
+        assert_eq!(SteganoErrorCode::Panic as i32, 9);
+    }
+
+    /// `catch_unwind` is a no-op under `panic = "abort"`, so the shipped
+    /// cdylib must be built with unwinding (#62). Test binaries always unwind,
+    /// so check the release profile in the manifest directly.
+    #[test]
+    fn test_release_profile_unwinds() {
+        let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        let release = manifest
+            .split("[profile.release]")
+            .nth(1)
+            .expect("[profile.release] section");
+        let section = release.split("\n[").next().unwrap();
+        let panic_lines: Vec<&str> = section
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("panic"))
+            .collect();
+        assert_eq!(panic_lines, ["panic = \"unwind\""]);
+    }
+
+    #[test]
     fn test_invalid_format_rejected() {
         let carrier = binary_carrier(4096);
         let mut info = CCapacityInfo {

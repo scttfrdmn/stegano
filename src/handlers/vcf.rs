@@ -1192,7 +1192,15 @@ mod tests {
             .embed(&mut c, &[0u8; 500], &params("info", ""))
             .await
             .unwrap_err();
-        assert!(matches!(err, SteganoError::InsufficientCapacity { .. }));
+        // Units are bits (#61): 2 records x INFO_CHUNK_BYTES bytes.
+        match err {
+            SteganoError::InsufficientCapacity { needed, available } => {
+                assert_eq!(available, 2 * INFO_CHUNK_BYTES * 8);
+                assert_eq!(needed % 8, 0);
+                assert!(needed > 500 * 8);
+            }
+            other => panic!("expected InsufficientCapacity, got {other:?}"),
+        }
     }
 
     #[tokio::test]

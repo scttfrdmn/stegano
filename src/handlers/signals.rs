@@ -1608,7 +1608,19 @@ mod tests {
         let r = handler
             .embed(&mut c, &[0u8; 5000], &params("timedomain", None))
             .await;
-        assert!(matches!(r, Err(SteganoError::InsufficientCapacity { .. })));
+        // Units are bits (#61): available = estimated payload bits + header.
+        let low = handler.estimate_capacity(&c).unwrap().format_specific_info
+            ["capacity_low_stealth_bits"]
+            .as_u64()
+            .unwrap() as usize;
+        match r {
+            Err(SteganoError::InsufficientCapacity { needed, available }) => {
+                assert_eq!(available, low + HEADER_BITS);
+                assert_eq!(needed % 8, 0);
+                assert!(needed > 5000 * 8);
+            }
+            other => panic!("expected InsufficientCapacity, got {other:?}"),
+        }
     }
 
     #[tokio::test]
