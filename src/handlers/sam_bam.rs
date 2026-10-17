@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::ops::Range;
-use std::time::Instant;
+use crate::time::Instant;
 
 /// Handler for SAM/BAM sequence alignment carrier files.
 ///

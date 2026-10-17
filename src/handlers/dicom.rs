@@ -44,7 +44,7 @@ use super::DataHandler;
 use crate::core::*;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use crate::time::Instant;
 
 /// A DICOM attribute tag `(group, element)`.
 pub type Tag = (u16, u16);

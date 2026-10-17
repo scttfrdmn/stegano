@@ -150,14 +150,28 @@ python -c "import stegano; print(stegano.version())"
 
 The module exposes `embed`, `extract`, `estimate_capacity` and `version`.
 
-**WebAssembly.** This needs [wasm-pack](https://rustwasm.github.io/wasm-pack/):
+**JavaScript / npm.** The WebAssembly bindings are published as
+[`stegano-wasm`](https://www.npmjs.com/package/stegano-wasm). One package works
+in browsers, bundlers and Node.js (ESM and CommonJS) and includes TypeScript types:
 
 ```bash
-./scripts/build-wasm.sh          # builds pkg-web/ and pkg-nodejs/
-./scripts/build-wasm.sh web      # browser (ESM) only
+npm install stegano-wasm
 ```
 
-The wasm32 build currently fails. The fix is tracked in [#40](https://github.com/scttfrdmn/stegano/issues/40).
+```js
+import init, { stegano_embed, stegano_extract } from 'stegano-wasm';
+await init(); // loads the .wasm (a no-op in Node)
+const stego = await stegano_embed(carrier, payload, 'password', '', '', ''); // '' = default
+const out = await stegano_extract(stego, 'password', '', '');
+```
+
+See [npm/README.md](npm/README.md) for the full API and the supported formats.
+To build the package from source you need [wasm-pack](https://rustwasm.github.io/wasm-pack/):
+
+```bash
+./scripts/build-wasm.sh          # assembles pkg/ (web + node builds)
+node npm/test/run.mjs            # packs pkg/ and runs the smoke tests
+```
 
 ## Documentation
 

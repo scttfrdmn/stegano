@@ -54,7 +54,7 @@ use crate::codec;
 use crate::core::*;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::time::Instant;
+use crate::time::Instant;
 
 /// FITS block size in bytes.
 const BLOCK: usize = 2880;

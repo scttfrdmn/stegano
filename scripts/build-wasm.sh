@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
-# Build WebAssembly bindings for browser (ESM) and Node.js (CJS) targets.
+# Build the WebAssembly bindings and assemble the `stegano-wasm` npm package.
 #
 # Requirements:
 #   cargo install wasm-pack                    # wasm-pack >= 0.13
 #   rustup target add wasm32-unknown-unknown   # needs a rustup toolchain;
 #                                              # Homebrew's rustc has no wasm32 std
+#   node / npm                                 # only for the smoke tests
 #
 # Usage:
-#   ./scripts/build-wasm.sh           # both targets
-#   ./scripts/build-wasm.sh web       # ESM / browser only
-#   ./scripts/build-wasm.sh nodejs    # CJS / Node.js only
+#   ./scripts/build-wasm.sh           # build both targets and assemble pkg/
+#   ./scripts/build-wasm.sh web       # only the ESM / browser build → pkg-web/
+#   ./scripts/build-wasm.sh nodejs    # only the CJS / Node.js build → pkg-nodejs/
 #
-# Output:
-#   pkg-web/    — stegano.js, stegano.d.ts, stegano_bg.wasm, package.json
-#   pkg-nodejs/ — stegano.js, stegano.d.ts, stegano_bg.wasm, package.json
+# Output of the default mode (one npm package containing both builds):
+#   pkg/package.json      generated from npm/package.template.json
+#   pkg/README.md         from npm/README.md
+#   pkg/LICENSE, NOTICE
+#   pkg/web/              wasm-pack --target web    (ESM; call `await init()`)
+#   pkg/node/             wasm-pack --target nodejs (CJS; loads .wasm synchronously)
+#                         + index.mjs / index.d.mts ESM wrapper (no-op init)
+#
+# Test with:   node npm/test/run.mjs          (packs pkg/ and runs smoke tests)
+# Publishing happens from CI on `v*` tags (.github/workflows/npm-publish.yml).
 
 set -euo pipefail
 
 TARGET="${1:-all}"
-FEATURES="--no-default-features --features wasm"
 
 # Run from the crate root regardless of the caller's cwd.
 cd "$(dirname "$0")/.."
@@ -40,31 +47,48 @@ else
     echo "warning: rustup not found; assuming rustc has the wasm32-unknown-unknown target" >&2
 fi
 
+# wasm-pack build for one target into pkg-<target>/ (no package.json; the
+# combined package gets its own).
 build_target() {
     local target="$1"
     local outdir="pkg-${target}"
     echo "==> Building wasm target=${target} → ${outdir}/"
+    rm -rf "${outdir}"
     wasm-pack build \
         --target "${target}" \
         --out-dir "${outdir}" \
-        --out-name "stegano" \
-        ${FEATURES}
+        --out-name stegano \
+        --no-pack \
+        --release \
+        --no-default-features --features wasm
+}
 
-    # Patch the generated package.json with stegano-specific metadata.
-    node - "${outdir}/package.json" <<'NODE'
-const fs = require('fs');
-const path = process.argv[2];
-const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-pkg.name = "stegano-wasm";
-pkg.description = "High-performance scientific data steganography — WebAssembly bindings";
-pkg.keywords = ["steganography", "genomics", "scientific", "wasm", "bioinformatics"];
-pkg.author = "Scott Friedman <scttfrdmn@gmail.com>";
-pkg.repository = { type: "git", url: "https://github.com/scttfrdmn/stegano" };
-pkg.license = "Apache-2.0";
-fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-console.log('Patched', path);
-NODE
-    echo "    Done: ${outdir}/"
+assemble() {
+    local version
+    version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)"
+    [ -n "${version}" ] || { echo "error: could not read version from Cargo.toml" >&2; exit 1; }
+
+    echo "==> Assembling pkg/ (stegano-wasm@${version})"
+    rm -rf pkg
+    mkdir -p pkg/web pkg/node
+
+    for f in stegano.js stegano.d.ts stegano_bg.wasm; do
+        cp "pkg-web/${f}" "pkg/web/${f}"
+        cp "pkg-nodejs/${f}" "pkg/node/${f}"
+    done
+    cp npm/node/index.mjs npm/node/index.d.mts npm/node/package.json pkg/node/
+    cp npm/README.md pkg/README.md
+    cp LICENSE NOTICE pkg/
+
+    node -e '
+        const fs = require("fs");
+        const [template, out, version] = process.argv.slice(1);
+        const pkg = JSON.parse(fs.readFileSync(template, "utf8"));
+        pkg.version = version;
+        fs.writeFileSync(out, JSON.stringify(pkg, null, 2) + "\n");
+    ' npm/package.template.json pkg/package.json "${version}"
+
+    echo "    Done: pkg/"
 }
 
 case "${TARGET}" in
@@ -73,17 +97,13 @@ case "${TARGET}" in
     all)
         build_target web
         build_target nodejs
+        assemble
+        echo ""
+        echo "Package assembled in pkg/. Smoke-test it with:"
+        echo "  node npm/test/run.mjs"
         ;;
     *)
-        echo "Usage: $0 [web|nodejs|all]" >&2
+        echo "Usage: $0 [web|nodejs]   (no argument: build both and assemble pkg/)" >&2
         exit 1
         ;;
 esac
-
-echo ""
-echo "Build complete."
-echo "  Browser (ESM):  pkg-web/"
-echo "  Node.js (CJS):  pkg-nodejs/"
-echo ""
-echo "Publish with:"
-echo "  cd pkg-web && npm publish --access public"

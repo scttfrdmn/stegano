@@ -6,7 +6,7 @@
 use crate::core::*;
 use crate::handlers::HandlerRegistry;
 use crate::validation::{StatisticalValidationSuite, ValidationReport};
-use std::time::Instant;
+use crate::time::Instant;
 
 /// Segment length (bytes) for per-segment ROC analysis in validation.
 const ROC_SEGMENT_LEN: usize = 256;

@@ -1,0 +1,81 @@
+{
+  "name": "stegano-wasm",
+  "version": "0.0.0-set-by-build-script",
+  "description": "Steganography for scientific data formats (FASTA/FASTQ, VCF, SAM/BAM, PNG/TIFF, DICOM, WAV, FITS), compiled to WebAssembly",
+  "license": "Apache-2.0",
+  "author": "Scott Friedman <scttfrdmn@gmail.com>",
+  "homepage": "https://github.com/scttfrdmn/stegano/tree/main/npm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scttfrdmn/stegano.git"
+  },
+  "bugs": {
+    "url": "https://github.com/scttfrdmn/stegano/issues"
+  },
+  "keywords": [
+    "steganography",
+    "wasm",
+    "webassembly",
+    "genomics",
+    "bioinformatics",
+    "dicom",
+    "fits",
+    "scientific-data"
+  ],
+  "type": "module",
+  "main": "./node/stegano.js",
+  "module": "./web/stegano.js",
+  "browser": "./web/stegano.js",
+  "types": "./web/stegano.d.ts",
+  "exports": {
+    ".": {
+      "node": {
+        "import": {
+          "types": "./node/index.d.mts",
+          "default": "./node/index.mjs"
+        },
+        "require": {
+          "types": "./node/stegano.d.ts",
+          "default": "./node/stegano.js"
+        }
+      },
+      "types": "./web/stegano.d.ts",
+      "browser": "./web/stegano.js",
+      "default": "./web/stegano.js"
+    },
+    "./web": {
+      "types": "./web/stegano.d.ts",
+      "default": "./web/stegano.js"
+    },
+    "./web/stegano_bg.wasm": "./web/stegano_bg.wasm",
+    "./node": {
+      "import": {
+        "types": "./node/index.d.mts",
+        "default": "./node/index.mjs"
+      },
+      "require": {
+        "types": "./node/stegano.d.ts",
+        "default": "./node/stegano.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "web/stegano.js",
+    "web/stegano.d.ts",
+    "web/stegano_bg.wasm",
+    "node/stegano.js",
+    "node/stegano.d.ts",
+    "node/stegano_bg.wasm",
+    "node/index.mjs",
+    "node/index.d.mts",
+    "node/package.json",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  }
+}

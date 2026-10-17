@@ -76,6 +76,7 @@ pub mod integrity;
 pub mod ml;
 #[cfg(feature = "experimental")]
 pub mod monitoring;
+pub(crate) mod time;
 pub mod validation;
 
 #[cfg(feature = "python")]

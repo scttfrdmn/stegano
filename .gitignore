@@ -82,3 +82,8 @@ local_config.toml
 docs/IP_AND_INTEGRATION.md
 # Coverage reports
 cobertura.xml
+
+# wasm-pack / npm package build output (scripts/build-wasm.sh)
+/pkg/
+/pkg-web/
+/pkg-nodejs/
