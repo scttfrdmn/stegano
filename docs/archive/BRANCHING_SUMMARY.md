@@ -15,7 +15,7 @@ A comprehensive development strategy has been designed and implemented for stega
 
 ### 2. **CI/CD Pipeline Implementation**
 
-#### **[Feature Branch Pipeline](.github/workflows/feature-branch.yml)**
+#### **Feature Branch Pipeline**
 - **Cross-platform testing** (Ubuntu, macOS, Windows) with Rust stable/beta
 - **Comprehensive validation**: formatting, linting, security, documentation
 - **Performance regression testing** with benchmark comparisons
@@ -24,7 +24,7 @@ A comprehensive development strategy has been designed and implemented for stega
 - **Quality gates**: 95% code coverage requirement, documentation coverage
 - **Automated PR feedback** with status summaries and recommendations
 
-#### **[Develop Integration Pipeline](.github/workflows/develop.yml)**
+#### **Develop Integration Pipeline**
 - **Full integration testing** across all platforms and feature combinations
 - **Performance analysis** with automated benchmark comparison
 - **Security scanning** with dependency auditing and vulnerability detection
@@ -35,7 +35,7 @@ A comprehensive development strategy has been designed and implemented for stega
 
 ### 3. **Development Environment Setup**
 
-#### **[Development Setup Script](scripts/dev-setup.sh)**
+#### **Development Setup Script**
 - **Automated Rust toolchain installation** with required components
 - **Development tools installation**: cargo-audit, cargo-tarpaulin, cargo-watch, etc.
 - **System dependency management** for Linux, macOS, and Windows
@@ -43,7 +43,7 @@ A comprehensive development strategy has been designed and implemented for stega
 - **IDE configuration** with VS Code extensions and rust-analyzer setup
 - **Git configuration** with hooks, line ending handling, and project settings
 
-#### **[Pre-commit Hook](scripts/pre-commit)**
+#### **Pre-commit Hook**
 - **Code quality enforcement**: formatting, linting, build verification
 - **Security checks**: basic secret detection and vulnerability scanning
 - **Test validation**: unit tests must pass before commit

@@ -45,13 +45,13 @@ The comprehensive 0.2.0 feature implementation roadmap has been successfully des
 
 ### 1. Strategic Documentation
 - **[ROADMAP_0_2_0.md](ROADMAP_0_2_0.md)**: Comprehensive 11-16 week implementation plan
-- **[docs/README.md](docs/README.md)**: Documentation navigation and standards
-- **[docs/api/core.md](docs/api/core.md)**: Complete core API reference with examples
-- **[docs/guides/getting-started.md](docs/guides/getting-started.md)**: Comprehensive user onboarding
+- **docs/README.md**: Documentation navigation and standards
+- **docs/api/core.md**: Complete core API reference with examples
+- **docs/guides/getting-started.md**: Comprehensive user onboarding
 
 ### 2. Advanced Examples
-- **[examples/gpu/performance_comparison.rs](examples/gpu/performance_comparison.rs)**: GPU vs CPU benchmarking suite
-- **[examples/advanced/ml_driven_embedding.rs](examples/advanced/ml_driven_embedding.rs)**: ML-powered adaptive steganography
+- **examples/gpu/performance_comparison.rs**: GPU vs CPU benchmarking suite
+- **examples/advanced/ml_driven_embedding.rs**: ML-powered adaptive steganography
 
 ### 3. Technical Specifications
 
