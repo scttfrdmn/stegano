@@ -1,49 +1,64 @@
-//! Signal steganography demonstration
+//! Shows embedding into a 16-bit WAV recording with the signals handler.
 
-use std::collections::HashMap;
+use stegano::carrier::carrier_from_bytes;
 use stegano::*;
+
+/// One second of a 440 Hz sine tone, 16-bit mono at 44.1 kHz, as WAV bytes.
+fn synthetic_wav() -> Vec<u8> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44_100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).expect("wav header");
+        for n in 0..spec.sample_rate {
+            let t = n as f32 / spec.sample_rate as f32;
+            let sample = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5 * i16::MAX as f32;
+            writer.write_sample(sample as i16).expect("wav sample");
+        }
+        writer.finalize().expect("wav finalize");
+    }
+    cursor.into_inner()
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("📊 Signal Steganography Demo");
-    println!("============================\n");
+    env_logger::init();
 
-    // Create a simple audio signal (simulated WAV data)
-    let sample_rate = 44100.0;
-    let duration = 1.0; // 1 second
-    let samples = (sample_rate * duration) as usize;
-    let mut signal_data = Vec::with_capacity(samples * 2); // 16-bit samples
+    println!("Stegano signals demo (WAV carrier)\n");
 
-    // Generate simple sine wave
-    for i in 0..samples {
-        let t = i as f32 / sample_rate;
-        let amplitude = (2.0 * std::f32::consts::PI * 440.0 * t).sin(); // 440 Hz tone
-        let sample = (amplitude * 32767.0) as i16;
-        signal_data.extend_from_slice(&sample.to_le_bytes());
+    // carrier_from_bytes also reads the sample rate from the WAV header.
+    let mut carrier = carrier_from_bytes(DataFormat::WAV, synthetic_wav());
+    println!(
+        "WAV: {} bytes, sample rate {:?} Hz",
+        carrier.raw_data.len(),
+        carrier.sampling_rate
+    );
+
+    let secret = b"Sensor array 3, calibration offset +0.012 V";
+    let params = EmbedParams::new(b"signals_key".to_vec());
+
+    let embedder = SteganoEmbedder::new();
+    let capacity = embedder.estimate_capacity(&carrier)?;
+    println!(
+        "Recommended payload: {} bytes",
+        capacity.recommended_bits / 8
+    );
+
+    let result = embedder.embed(&mut carrier, secret, &params).await?;
+    println!("Embedded {} bytes", result.bytes_embedded);
+
+    let extracted = embedder.extract(&carrier, &params).await?;
+    println!("Extracted: '{}'", String::from_utf8_lossy(&extracted));
+
+    if extracted != secret {
+        return Err(SteganoError::IntegrityError(
+            "round-trip mismatch".to_string(),
+        ));
     }
-
-    let carrier = CarrierData {
-        format: DataFormat::WAV,
-        raw_data: signal_data,
-        metadata: HashMap::new(),
-        dimensions: None,
-        sampling_rate: Some(sample_rate as f64),
-    };
-
-    println!("🎵 Audio Signal Data:");
-    println!("   Format: {:?}", carrier.format);
-    println!("   Sample rate: {} Hz", carrier.sampling_rate.unwrap());
-    println!("   Duration: {duration} seconds");
-    println!("   Size: {} bytes", carrier.raw_data.len());
-
-    // Note: This is a placeholder - full signal steganography would require
-    // more sophisticated algorithms
-    println!("\n✨ Signal steganography demo placeholder");
-    println!("   Full implementation would include:");
-    println!("   • LSB embedding in audio samples");
-    println!("   • Spread spectrum techniques");
-    println!("   • Phase coding methods");
-    println!("   • Echo hiding algorithms");
-
+    println!("\nRound trip OK");
     Ok(())
 }

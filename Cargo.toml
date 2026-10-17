@@ -188,24 +188,6 @@ name = "signal_demo"
 path = "examples/signals/demo.rs"
 
 [[example]]
-name = "gpu_acceleration_demo"
-path = "examples/gpu_acceleration_demo.rs"
-required-features = ["experimental"]
-
-# Phantom-science integration examples
-[[example]]
-name = "basic_integration"
-path = "examples/phantom_science/basic_integration.rs"
-
-[[example]]
-name = "fasta_embedding"
-path = "examples/phantom_science/fasta_embedding.rs"
-
-[[example]]
-name = "fastq_quality_scores"
-path = "examples/phantom_science/fastq_quality_scores.rs"
-
-[[example]]
 name = "validation_showcase"
 path = "examples/validation_showcase.rs"
 

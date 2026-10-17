@@ -5,9 +5,7 @@
 # Exclusions
 exclude = [
     "examples/*",
-    "gpu_kernels/*", 
-    "scripts/*",
-    "stegano_project_setup.sh"
+    "scripts/*"
 ]
 exclude-files = [
     "**/tests/*",

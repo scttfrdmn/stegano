@@ -1,6 +1,4 @@
-//! Quick Statistical Validation Demo
-//!
-//! A fast demonstration of Stegano's statistical validation capabilities
+//! Shows a fast run of the statistical validation suite on synthetic carriers.
 
 use stegano::core::*;
 use stegano::validation::*;
@@ -79,7 +77,7 @@ async fn main() -> Result<()> {
     println!("   Loaded {} datasets: {:?}", datasets.len(), datasets);
 
     println!("\n🎉 All statistical validation tests completed successfully!");
-    println!("💪 Stegano statistical validation: World-class excellence!");
+    println!("Quick validation demo complete.");
 
     Ok(())
 }
