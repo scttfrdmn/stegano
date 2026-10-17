@@ -45,10 +45,6 @@
 //! WASM bindings. All calls share one Tokio runtime and release the GIL
 //! while embedding/extracting.
 
-// pyo3 0.22's #[pyfunction]/#[pymethods] expansion trips this lint on every
-// `PyResult` return with recent clippy; it is not in our code.
-#![allow(clippy::useless_conversion)]
-
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyString};
@@ -215,7 +211,7 @@ fn extract_bytes(carrier: Vec<u8>, params: &EmbedParams) -> crate::core::Result<
     rt.block_on(SteganoEmbedder::new().extract(&carrier_data, params))
 }
 
-/// The shared runtime, as a library error (used inside `allow_threads`).
+/// The shared runtime, as a library error (used inside `detach`).
 fn tokio_runtime_for_worker() -> crate::core::Result<&'static tokio::runtime::Runtime> {
     RUNTIME
         .get_or_init(|| tokio::runtime::Runtime::new().map_err(|e| e.to_string()))
@@ -369,9 +365,9 @@ pub fn embed<'py>(
     let carrier = carrier.to_vec();
     let payload = payload.to_vec();
     let out = py
-        .allow_threads(move || embed_bytes(carrier, &payload, &params))
+        .detach(move || embed_bytes(carrier, &payload, &params))
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    Ok(PyBytes::new_bound(py, &out))
+    Ok(PyBytes::new(py, &out))
 }
 
 /// Extract the embedded payload from *carrier* bytes.
@@ -406,9 +402,9 @@ pub fn extract<'py>(
     runtime()?;
     let carrier = carrier.to_vec();
     let out = py
-        .allow_threads(move || extract_bytes(carrier, &params))
+        .detach(move || extract_bytes(carrier, &params))
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    Ok(PyBytes::new_bound(py, &out))
+    Ok(PyBytes::new(py, &out))
 }
 
 /// Embed *payload* into the carrier file *in_path*, writing *out_path*.
@@ -457,9 +453,9 @@ pub fn embed_file<'py>(
     runtime()?;
     let payload = payload.to_vec();
     let (result, mode) = py
-        .allow_threads(move || embed_file_impl(&in_path, &out_path, &payload, &params))
+        .detach(move || embed_file_impl(&in_path, &out_path, &payload, &params))
         .map_err(to_py_err)?;
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
     dict.set_item("bytes_embedded", result.bytes_embedded)?;
     dict.set_item("streamed", mode.is_streamed())?;
     Ok(dict)
@@ -498,9 +494,9 @@ pub fn extract_file<'py>(
     )?;
     runtime()?;
     let out = py
-        .allow_threads(move || extract_file_impl(&path, &params))
+        .detach(move || extract_file_impl(&path, &params))
         .map_err(to_py_err)?;
-    Ok(PyBytes::new_bound(py, &out))
+    Ok(PyBytes::new(py, &out))
 }
 
 /// Estimate the embedding capacity of *carrier* bytes.
@@ -519,7 +515,7 @@ pub fn estimate_capacity<'py>(py: Python<'py>, carrier: &[u8]) -> PyResult<Bound
         .estimate_capacity(&carrier_data)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-    let dict = PyDict::new_bound(py);
+    let dict = PyDict::new(py);
     dict.set_item("total_bits", cap.total_bits)?;
     dict.set_item("recommended_bits", cap.recommended_bits)?;
     dict.set_item("format", format_name(&carrier_data.format))?;
@@ -643,7 +639,7 @@ mod tests {
     }
 
     /// Roundtrips through the same helpers the Python functions call
-    /// (inside `allow_threads`), without needing the GIL.
+    /// (inside `detach`), without needing the GIL.
     #[test]
     fn test_binding_embed_extract_roundtrip() {
         let payload = b"Python binding roundtrip test payload";
@@ -664,7 +660,7 @@ mod tests {
     }
 
     /// File helpers used by `embed_file` / `extract_file` (inside
-    /// `allow_threads`): FASTQ is streamed, a binary file is not.
+    /// `detach`): FASTQ is streamed, a binary file is not.
     #[test]
     fn test_binding_file_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
