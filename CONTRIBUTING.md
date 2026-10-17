@@ -189,6 +189,36 @@ Releases follow semantic versioning:
 - **Minor** (x.y.0): New features, backward compatible
 - **Patch** (x.y.z): Bug fixes, backward compatible
 
+### Publishing to npm
+
+The WebAssembly bindings are published to npm as
+[`stegano-wasm`](https://www.npmjs.com/package/stegano-wasm) by
+`.github/workflows/npm-publish.yml`. **Pushing a `v*` tag publishes it.** The
+workflow builds `pkg/` with `scripts/build-wasm.sh`, runs the smoke tests
+(`npm/test/run.mjs`) against the packed tarball, and checks that the tag
+(without the `v`) equals the version in `Cargo.toml`. It then publishes that
+exact tarball with `npm publish --provenance --access public`. If the version
+is already on npm, the workflow skips the publish and prints a notice.
+
+One-time setup: add an `NPM_TOKEN` repository secret (Settings → Secrets and
+variables → Actions). It must be an npm **automation** token, or a
+**granular access token** with read and write permission for `stegano-wasm`.
+For the first publish, the token's scope must allow creating new packages.
+If the secret is missing, the publish step fails with an error that says so.
+
+To check a release without publishing, run the workflow manually
+(**Actions → npm publish → Run workflow**) with `dry_run` on, which is the
+default. A real publish from `workflow_dispatch` is only allowed on a tag ref,
+for example to retry after adding the secret.
+
+Locally:
+
+```bash
+./scripts/build-wasm.sh        # assemble pkg/
+node npm/test/run.mjs          # pack + smoke tests
+npm pack --dry-run ./pkg       # list the tarball contents
+```
+
 ## Architecture Guidelines
 
 ### Core Principles

@@ -74,7 +74,7 @@ use crate::core::*;
 use async_trait::async_trait;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
-use std::time::Instant;
+use crate::time::Instant;
 
 /// Magic bytes that open every embedded header.
 const MAGIC: &[u8; 4] = b"SGSJ";

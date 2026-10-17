@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- npm package `stegano-wasm` ([#34](https://github.com/scttfrdmn/stegano/issues/34)). It contains
+  the web (ESM, `await init()`) and Node.js (CommonJS and ESM) builds, with TypeScript types and
+  conditional `exports`. `scripts/build-wasm.sh` assembles it in `pkg/`, smoke tests run from the
+  packed tarball in CI (`npm/test/`), and pushing a `v*` tag publishes it with provenance
+  (`.github/workflows/npm-publish.yml`).
+
+### Fixed
+- WebAssembly: every embed panicked (`unreachable`) because `std::time::Instant::now()` is not
+  implemented on `wasm32-unknown-unknown`. The handlers' timing statistics now use an internal
+  clock that reads `Date.now()` on wasm32.
+
 ## [0.6.0] - 2026-10-16
 
 **This release breaks compatibility.** It changes the payload wire format and fixes every format

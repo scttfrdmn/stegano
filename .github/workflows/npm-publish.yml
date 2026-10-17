@@ -1,0 +1,104 @@
+name: npm publish
+
+# Publishes the `stegano-wasm` npm package (WebAssembly bindings) when a
+# `v*` tag is pushed. Requires the NPM_TOKEN repository secret (an npm
+# automation or granular access token with publish rights for stegano-wasm).
+# See CONTRIBUTING.md, "Publishing to npm".
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, test and run `npm publish --dry-run` only
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  PACKAGE: stegano-wasm
+
+jobs:
+  publish:
+    name: publish stegano-wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Build and assemble pkg/
+        run: ./scripts/build-wasm.sh
+
+      - name: Pack
+        id: pack
+        run: |
+          mkdir -p dist
+          tarball="dist/$(npm pack ./pkg --pack-destination dist --json | jq -r '.[0].filename')"
+          version="$(jq -r .version pkg/package.json)"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Packed $tarball ($version)"
+
+      - name: Smoke tests (the exact tarball that will be published)
+        run: node npm/test/run.mjs --tarball "${{ steps.pack.outputs.tarball }}"
+
+      - name: Check tag matches package version
+        env:
+          VERSION: ${{ steps.pack.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME#v}" != "$VERSION" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match package version $VERSION (from Cargo.toml)"
+              exit 1
+            fi
+          elif [ "$DRY_RUN" != "true" ]; then
+            echo "::error::Real publishes must run on a v* tag (got $GITHUB_REF_TYPE $GITHUB_REF_NAME); use dry_run on branches"
+            exit 1
+          fi
+
+      - name: Skip if this version is already on npm
+        id: exists
+        env:
+          VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          published="$(npm view "$PACKAGE@$VERSION" version 2>/dev/null || true)"
+          if [ "$published" = "$VERSION" ]; then
+            echo "::notice::$PACKAGE@$VERSION is already published on npm; skipping publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish (dry run)
+        if: steps.exists.outputs.skip != 'true' && inputs.dry_run
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --dry-run
+
+      - name: Publish
+        if: steps.exists.outputs.skip != 'true' && !inputs.dry_run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::The NPM_TOKEN repository secret is not set. Add an npm automation (or granular, publish-capable) token under Settings → Secrets and variables → Actions, then re-run this workflow."
+            exit 1
+          fi
+          npm publish "${{ steps.pack.outputs.tarball }}" --provenance --access public

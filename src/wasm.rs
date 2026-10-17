@@ -5,6 +5,7 @@
 //! Install [wasm-pack](https://rustwasm.github.io/wasm-pack/) and run:
 //! ```sh
 //! cargo install wasm-pack
+//! ./scripts/build-wasm.sh   # assembles the stegano-wasm npm package in pkg/
 //! # Build an ES module bundle for modern browsers:
 //! wasm-pack build --target web --no-default-features --features wasm
 //! # Build for Node.js:
@@ -19,7 +20,7 @@
 //!     stegano_extract,
 //!     stegano_estimate_capacity,
 //!     stegano_version,
-//! } from './stegano_bg.wasm';
+//! } from 'stegano-wasm'; // npm install stegano-wasm (see npm/README.md)
 //!
 //! await init();
 //!

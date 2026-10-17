@@ -50,7 +50,7 @@ use crate::core::*;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Instant;
+use crate::time::Instant;
 
 /// Handler for VCF (Variant Call Format) genomics carrier files.
 ///

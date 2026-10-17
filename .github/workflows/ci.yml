@@ -84,6 +84,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
 
+  npm:
+    name: npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build and assemble pkg/
+        run: ./scripts/build-wasm.sh
+      - name: Tarball contents
+        run: npm pack --dry-run ./pkg
+      - name: Smoke tests (packed tarball; require, import, web init)
+        run: node npm/test/run.mjs
+
   go:
     name: go (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

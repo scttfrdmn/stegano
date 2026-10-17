@@ -3,7 +3,7 @@
 use super::DataHandler;
 use crate::core::*;
 use async_trait::async_trait;
-use std::time::Instant;
+use crate::time::Instant;
 
 /// Fallback handler for arbitrary binary carrier data.
 ///
