@@ -1,238 +1,216 @@
-# Getting Started with Stegano
+# Getting started
 
-Welcome to Stegano, the advanced scientific data steganography system. This guide will help you get up and running quickly.
+This guide covers installing stegano, using the `stegano` command-line tool,
+and calling the Rust library. For the full API see
+[API_REFERENCE.md](API_REFERENCE.md); for what each format handler changes in
+a file see [FORMATS.md](FORMATS.md).
 
-## 🚀 Quick Installation
+Before you use stegano for anything sensitive, read
+[the threat model and limitations](../SECURITY.md#threat-model-and-limitations).
+In short: every handler writes a fixed marker, stegano's own `detect` command
+finds payloads without the password, and several strategies are plainly
+visible to anyone who opens the file. Encryption protects the payload's
+contents. It does not hide that a payload is there.
 
-### Prerequisites
-- Rust 1.70+ (install from [rustup.rs](https://rustup.rs/))
-- macOS 12+ for Metal GPU acceleration (optional)
-- Git for development
+## Install
 
-### Build from Source
-```bash
-git clone https://github.com/scttfrdmn/stegano.git
+stegano is not published on crates.io. The `stegano` crate on crates.io is an
+unrelated project, so do not add `stegano = "x.y"` to your manifest. Use the
+git repository instead.
+
+Requirements: a stable Rust toolchain (edition 2021).
+
+### Library
+
+```toml
+[dependencies]
+stegano = { git = "https://github.com/scttfrdmn/stegano", tag = "v0.7.0" }
+# Only needed for the async in-memory API (SteganoEmbedder):
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+### Command-line tool
+
+```sh
+cargo install --git https://github.com/scttfrdmn/stegano --tag v0.7.0 stegano
+```
+
+Or build it from a checkout:
+
+```sh
+git clone https://github.com/scttfrdmn/stegano
 cd stegano
-cargo build --release
+cargo build --release --bin stegano   # -> target/release/stegano
 ```
 
-The compiled binary will be available at `target/release/stegano`.
+Build release binaries. The Argon2id key derivation (64 MiB, t = 3) is slow in
+debug builds of your own crate.
 
-## 🎯 Basic Usage
+## CLI quick start
 
-### 1. Embed Secret Data
-Hide a text file inside an image:
-```bash
-./stegano embed --input photo.png --payload secret.txt --output hidden.png
+The tool has four subcommands: `embed`, `extract`, `analyze` and `detect`.
+`stegano <command> --help` prints the full option list.
+
+```sh
+# How much fits?
+stegano analyze -i reads.fastq
+
+# Embed secret.txt. The password is read from the environment here.
+export STEGANO_PASSWORD='correct horse battery staple'
+stegano embed -i reads.fastq -p secret.txt -o reads.stego.fastq
+
+# Extract it again
+stegano extract -i reads.stego.fastq -o recovered.txt
+
+# Check for a payload (no password needed). Exit status 0 = found,
+# 1 = not found, 3 = error.
+stegano detect -i reads.stego.fastq
 ```
 
-### 2. Extract Hidden Data
-Recover the hidden data:
-```bash
-./stegano extract --input hidden.png --output recovered.txt
+The carrier format comes from the file extension (`.fastq`/`.fq`, `.fasta`/`.fa`,
+`.vcf`, `.sam`, `.bam`, `.png`, `.tif`/`.tiff`, `.dcm`/`.dicom`, `.wav`,
+`.fits`/`.fit`/`.fts`, `.csv`, `.txt`) and otherwise from the file's magic
+bytes. Anything unrecognised is treated as generic binary.
+
+### Passwords
+
+Without a password the payload is stored unencrypted. There are four ways to
+supply one, in this order of precedence:
+
+| Option | Notes |
+|--------|-------|
+| `--password-file <PATH>` | First line of the file. |
+| `--password <PASSWORD>` | Visible to other users in `ps` and kept in shell history; prints a warning. |
+| `STEGANO_PASSWORD` environment variable | |
+| `--password-prompt` | Reads from the terminal without echo; `embed` asks twice. |
+
+### `embed` options
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `-i, --input` | required | Carrier file. |
+| `-p, --payload` | required | File to hide. |
+| `-o, --output` | required | Output carrier. Written to a temporary file and renamed only on success. |
+| `--stealth` | `high` | `low`, `medium`, `high` or `maximum`. Picks the default strategy for PNG/TIFF, WAV and FASTQ (see [FORMATS.md](FORMATS.md)); other formats ignore it. |
+| `--ec-level` | `none` | Reed-Solomon level: `none`, `low`, `medium`, `high`, `maximum`. |
+| `--strategy` | per format | Format-specific strategy. VCF: `info`, `quality`, `format`, `id`, `multi`. SAM/BAM: `optional`, `comment`, `quality`, `auxiliary`, `multi`. DICOM: `private`, `metadata`, `sequence`, `pixel_lsb`, `multi`. PNG/TIFF: `lsb`, `adaptive`, `edge`, `dct`. WAV: `timedomain`, `frequency`, `phase`, `spread`, `echo`. FASTQ: `conservative`, `balanced`, `aggressive`, `quality`. FASTA: `header`. Ignored (with a warning) for FITS, CSV, text and binary. |
+| `--cipher` | `aes256gcm` | `aes256gcm` or `chacha20`. Detected automatically on extract. |
+| `--validate` | off | Run the statistical checks described in [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md). Forces the in-memory path. |
+| `--no-stream` | off | Force the in-memory path. By default FASTQ, VCF (`info`, `id`, `quality`) and SAM/BAM (`auxiliary`, `quality`) are streamed with bounded memory. |
+| `--gpu` | off | Sets `EmbedParams::use_gpu`. The embedding path does not use it. |
+
+`extract` takes `-i`, `-o`, the password options, `--ec-level`, `--strategy`,
+`--no-stream` and `--gpu`. The strategy and cipher are read from the embedded
+header, so `--strategy` is not needed on extract.
+
+`--ec-level` without a password: whether a password-less payload went through
+the error-correction codec is decided by the caller's EC level, so if you
+embedded with a level other than `none` and no password, pass any non-`none`
+`--ec-level` to `extract` as well. The actual level is read from the payload.
+With a password this does not matter.
+
+`analyze -i <file>` prints the capacity estimate and whether hidden data is
+present. `detect -i <file>` reports presence only. Both accept `--validate`.
+
+### Examples
+
+```sh
+# BAM, packing the payload into as few records as possible (streamed)
+stegano embed -i aln.bam -p notes.txt -o aln.stego.bam --strategy auxiliary --password-prompt
+
+# VCF, payload in the ID column (streamed)
+stegano embed -i calls.vcf -p notes.txt -o calls.stego.vcf --strategy id --password-file pw.txt
+
+# PNG with ChaCha20-Poly1305 and medium Reed-Solomon
+stegano embed -i image.png -p notes.txt -o image.stego.png --cipher chacha20 --ec-level medium --password-prompt
+
+# DICOM, payload in a private data element
+stegano embed -i ct.dcm -p notes.txt -o ct.stego.dcm --strategy private --password-prompt
 ```
 
-### 3. Analyze Capacity
-Check how much data you can hide:
-```bash
-./stegano analyze --input photo.png
+## Library quick start
+
+### In-memory API
+
+`SteganoEmbedder` routes a `CarrierData` to the right handler.
+`stegano::carrier::build_carrier` detects the format from the path and bytes
+and fills in image dimensions and audio sample rate, as the CLI does.
+
+```rust,no_run
+use stegano::carrier::build_carrier;
+use stegano::{EmbedParams, SteganoEmbedder};
+
+#[tokio::main]
+async fn main() -> stegano::Result<()> {
+    let embedder = SteganoEmbedder::new();
+    let params = EmbedParams::new(b"correct horse battery staple".to_vec());
+
+    let mut carrier = build_carrier("image.png", std::fs::read("image.png")?);
+    let capacity = embedder.estimate_capacity(&carrier)?;
+    println!("about {} bytes available", capacity.recommended_bytes());
+
+    embedder.embed(&mut carrier, b"secret", &params).await?;
+    std::fs::write("image.stego.png", &carrier.raw_data)?;
+
+    let stego = build_carrier("image.stego.png", std::fs::read("image.stego.png")?);
+    let recovered = embedder.extract(&stego, &params).await?;
+    assert_eq!(recovered, b"secret");
+    Ok(())
+}
 ```
 
-## 🔐 Password Protection
+`EmbedParams::new` uses stealth `High`, error correction `Medium` and
+AES-256-GCM. The CLI and the bindings default to error correction `None`
+instead (`stegano::carrier::default_params`). With a password, either side
+can extract the other's output.
 
-For sensitive data, always use password protection:
+### Streaming API
 
-```bash
-# Embed with password
-./stegano embed \
-    --input carrier.bin \
-    --payload confidential.txt \
-    --output protected.bin \
-    --password "your_secure_password"
+For FASTQ, VCF and SAM/BAM, `stegano::stream` processes the carrier one record
+at a time, so memory use does not grow with the file size. It is synchronous
+and needs no async runtime.
 
-# Extract with same password
-./stegano extract \
-    --input protected.bin \
-    --output recovered.txt \
-    --password "your_secure_password"
+```rust,no_run
+use stegano::stream::{embed_file, extract_file, is_streamable};
+use stegano::{DataFormat, EmbedParams};
+
+fn main() -> stegano::Result<()> {
+    let params = EmbedParams::new(b"correct horse battery staple".to_vec());
+    assert!(is_streamable(&DataFormat::FASTQ, &params));
+
+    // Writes a temporary file next to the output and renames it on success.
+    embed_file(DataFormat::FASTQ, "reads.fastq", "reads.stego.fastq", b"secret", &params)?;
+
+    let recovered = extract_file(DataFormat::FASTQ, "reads.stego.fastq", &params)?;
+    assert_eq!(recovered, b"secret");
+    Ok(())
+}
 ```
 
-## 📊 Supported File Formats
+Strategies are selected through `format_specific`, using the same names as
+the CLI's `--strategy`:
 
-| Format | File Extensions | Best For |
-|--------|----------------|----------|
-| **Genomic Data** | `.fasta`, `.fa`, `.fastq`, `.fq` | DNA/RNA sequences |
-| **Medical Imaging** | `.dcm`, `.tiff`, `.tif` | DICOM, microscopy |
-| **Audio** | `.wav` | Signal data, recordings |
-| **Images** | `.png` | General image data |
-| **Variant Data** | `.vcf` | Genetic variants |
-| **Alignment** | `.sam`, `.bam` | Sequence alignments |
-| **Time Series** | `.csv` | Scientific measurements |
-| **Binary** | `.bin`, others | Any file type |
+```rust,no_run
+use stegano::serde_json::json;
+use stegano::stream::embed_file;
+use stegano::{DataFormat, EmbedParams};
 
-## 🎛️ Capacity Guidelines
-
-### Text Files
-- **Capacity**: ~12.5% of carrier size
-- **Example**: 1MB text file can hide ~125KB
-- **Best Practice**: Use with large log files or documents
-
-### Images (PNG)
-- **Capacity**: ~25-37.5% depending on stealth level
-- **Example**: 2MB image can hide ~500-750KB
-- **Best Practice**: Use high-resolution images for better capacity
-
-### Audio (WAV)
-- **Capacity**: ~6.25% of audio data
-- **Example**: 10MB audio can hide ~625KB
-- **Best Practice**: Use longer recordings for more space
-
-### Binary Data
-- **Capacity**: ~12.5% of carrier size
-- **Example**: 5MB binary can hide ~625KB
-- **Best Practice**: Use any large file as carrier
-
-## 🔍 Real-World Examples
-
-### Example 1: Research Data Protection
-```bash
-# Hide sensitive research findings in a public dataset
-./stegano embed \
-    --input public_dataset.csv \
-    --payload research_findings.txt \
-    --output protected_dataset.csv \
-    --password "lab_secure_2025"
+fn main() -> stegano::Result<()> {
+    let mut params = EmbedParams::new(b"correct horse battery staple".to_vec());
+    params.format_specific.insert("sam_strategy".into(), json!("auxiliary"));
+    embed_file(DataFormat::BAM, "aln.bam", "aln.stego.bam", b"secret", &params)?;
+    Ok(())
+}
 ```
 
-### Example 2: Medical Image Embedding
-```bash
-# Embed patient metadata in medical image
-./stegano embed \
-    --input patient_scan.tiff \
-    --payload metadata.json \
-    --output scan_with_metadata.tiff \
-    --password "medical_encryption_key"
-```
+The streaming and in-memory APIs produce identical output for the same
+encoded payload and read each other's files.
 
-### Example 3: Genomic Sequence Protection
-```bash
-# Hide variant analysis in reference genome
-./stegano embed \
-    --input reference_genome.fasta \
-    --payload variant_analysis.vcf \
-    --output protected_genome.fasta \
-    --password "genomics_2025"
-```
+## Next steps
 
-## ⚡ Performance Tips
-
-### For Large Files
-- Use `--use-gpu` flag on macOS for Metal acceleration
-- Process files in chunks for memory efficiency
-- Consider file format - images and audio offer better capacity
-
-### For Maximum Security
-- Always use strong passwords (20+ characters)
-- Use mixed file formats to avoid pattern detection
-- Verify extraction to ensure data integrity
-
-### For Best Stealth
-- Choose carrier files larger than 10x your payload
-- Use common file formats in your environment
-- Avoid suspicious file size changes
-
-## 🔧 Advanced Usage
-
-### Custom Embedding Parameters
-```bash
-# High stealth, low capacity
-./stegano embed \
-    --input carrier.png \
-    --payload secret.txt \
-    --output result.png \
-    --stealth-level high
-
-# Fast embedding, standard security
-./stegano embed \
-    --input carrier.wav \
-    --payload data.bin \
-    --output result.wav \
-    --error-correction low
-```
-
-### Batch Processing
-```bash
-# Process multiple files
-for file in data/*.png; do
-    ./stegano embed \
-        --input "$file" \
-        --payload secret.txt \
-        --output "hidden/$(basename "$file")" \
-        --password "batch_key_2025"
-done
-```
-
-### Verification Workflow
-```bash
-# 1. Analyze capacity first
-./stegano analyze --input carrier.bin
-
-# 2. Embed with verification
-./stegano embed \
-    --input carrier.bin \
-    --payload secret.txt \
-    --output result.bin \
-    --password "verify_key"
-
-# 3. Verify integrity
-./stegano analyze --input result.bin
-
-# 4. Extract and compare
-./stegano extract \
-    --input result.bin \
-    --output extracted.txt \
-    --password "verify_key"
-
-diff secret.txt extracted.txt
-```
-
-## 🚨 Common Issues & Solutions
-
-### "Insufficient Capacity" Error
-- **Problem**: Payload too large for carrier
-- **Solution**: Use a larger carrier file or compress payload
-- **Check**: Run `analyze` command first to check capacity
-
-### "Format Not Supported" Error
-- **Problem**: File format not recognized
-- **Solution**: Use supported formats or rename to `.bin`
-- **Workaround**: Binary format handles any file type
-
-### "Extraction Failed" Error
-- **Problem**: Wrong password or corrupted data
-- **Solution**: Verify password, check file integrity
-- **Debug**: Use `analyze` to check if data is present
-
-### Performance Issues
-- **Problem**: Slow processing on large files
-- **Solution**: Enable GPU acceleration on macOS
-- **Alternative**: Process files in smaller chunks
-
-## 📚 Next Steps
-
-1. **Read the API Documentation**: Understand advanced features
-2. **Explore Examples**: Check `examples/` directory for use cases
-3. **Join the Community**: Report issues and contribute
-4. **Enterprise Features**: Contact for commercial licensing
-
-## 🔒 Security Best Practices
-
-1. **Use Strong Passwords**: 20+ characters with mixed case, numbers, symbols
-2. **Verify Extractions**: Always compare original vs extracted data
-3. **Secure Key Management**: Never hardcode passwords in scripts
-4. **Regular Updates**: Keep Stegano updated for security patches
-5. **Audit Trails**: Log steganography operations for compliance
-
----
-
-Ready to protect your scientific data? Start with the basic embed/extract workflow and gradually explore advanced features!
+- [FORMATS.md](FORMATS.md): what each strategy modifies, capacity, and which
+  formats stream.
+- [API_REFERENCE.md](API_REFERENCE.md): types, builders, handlers and bindings.
+- [WIRE_FORMAT.md](WIRE_FORMAT.md): the encrypted payload format.
+- [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md): the statistical detectors.
+- `cargo doc --open`: the full rustdoc.

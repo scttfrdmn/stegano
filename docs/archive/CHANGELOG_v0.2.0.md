@@ -188,19 +188,19 @@ This major release introduces advanced machine learning optimization algorithms 
 ## 📚 Documentation Enhancements
 
 ### Comprehensive Guides
-- **[ML Optimization Guide](docs/ML_OPTIMIZATION_GUIDE.md)**: Complete coverage of all 5 algorithms
+- **ML Optimization Guide**: Complete coverage of all 5 algorithms
   - Algorithm selection decision tree
   - Configuration examples for different scenarios
   - Performance benchmarks and comparisons
   - Best practices and troubleshooting
 
-- **[Scientific Formats Guide](docs/SCIENTIFIC_FORMATS_GUIDE.md)**: Domain-specific documentation
+- **Scientific Formats Guide**: Domain-specific documentation
   - Format-specific embedding strategies
   - Compliance guidelines (HIPAA, FDA, GCP)
   - Integrity preservation techniques
   - Real-world usage examples
 
-- **[API Reference Updates](docs/API_REFERENCE_UPDATES.md)**: Complete v0.2.0 API documentation
+- **API Reference Updates**: Complete v0.2.0 API documentation
   - All new ML optimization APIs
   - Scientific format handler interfaces
   - Configuration type documentation
@@ -386,7 +386,7 @@ let params = EmbedParams {
 
 Copyright (c) 2025 Scott Friedman. All rights reserved.
 
-This software is proprietary and confidential. See [LICENSE](LICENSE) for full terms.
+This software is proprietary and confidential. See LICENSE for full terms.
 
 ---
 

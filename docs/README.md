@@ -1,100 +1,40 @@
-# Stegano Documentation
+# stegano documentation
 
-## Overview
+Documentation for stegano v0.7.0, a Rust library and CLI that embeds an
+optionally encrypted payload in genomics, imaging, astronomy and audio files.
+Start with the project [README](../README.md). Read
+[the threat model and limitations](../SECURITY.md#threat-model-and-limitations)
+before using stegano for anything that matters.
 
-Comprehensive documentation for the stegano scientific steganography library. This documentation covers everything from basic usage to advanced enterprise deployment patterns.
+| Document | Contents |
+|----------|----------|
+| [GETTING_STARTED.md](GETTING_STARTED.md) | Installing from git, CLI quick start (all `embed`/`extract` options, password sources), first library programs, including the streaming API. |
+| [API_REFERENCE.md](API_REFERENCE.md) | Core types, `EmbedParams` builders and defaults, ciphers, handlers, `stream`, `carrier`, `validation`, Cargo features, and the C, Go, Python and npm bindings. |
+| [FORMATS.md](FORMATS.md) | Per format: strategies and their `format_specific` keys, capacity, exactly what changes in the file and how visible it is, external validators, and the streaming matrix. |
+| [WIRE_FORMAT.md](WIRE_FORMAT.md) | Byte layout of the encoded payload (wire format v2): header, Argon2id, AEAD, Reed-Solomon framing. |
+| [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) | The statistical tests and LSB detectors (pairs of values, sample pairs analysis) and how to read their scores. |
+| [archive/](archive/README.md) | Superseded and historical documents. Not accurate for the current release. |
 
-## Documentation Structure
+For the complete API, run `cargo doc --open`. Binding-specific setup is in
+[go/README.md](../go/README.md), [npm/README.md](../npm/README.md) and
+[include/stegano.h](../include/stegano.h).
 
-### 📖 [API Reference](api/)
-Complete technical documentation for all public APIs and interfaces.
+## Performance
 
-- **[Core Types & Traits](api/core.md)** - Fundamental types, error handling, and core traits
-- **[Handler System](api/handlers.md)** - Format-specific steganography handlers
-- **[GPU Acceleration](api/gpu.md)** - High-performance GPU computing interface
-- **[Cryptography](api/crypto.md)** - Encryption and security features
-- **[FFI Integration](api/ffi.md)** - C/C++ foreign function interface
+There are no published benchmark figures. To measure on your own hardware:
 
-### 🎯 [User Guides](guides/)
-Step-by-step tutorials and practical guidance for common use cases.
+```sh
+cargo bench --features benchmarks               # embedding and validation suites
+cargo bench --features benchmarks,experimental  # also the experimental ML suite
+```
 
-- **[Getting Started](guides/getting-started.md)** - Quick start guide and basic examples
-- **[Performance Optimization](guides/performance-optimization.md)** - GPU acceleration and optimization strategies
-- **[Security Best Practices](guides/security-best-practices.md)** - Cryptographic security and threat mitigation
-- **[Format-Specific Guides](guides/formats/)** - Domain-specific steganography techniques
-- **[Troubleshooting](guides/troubleshooting.md)** - Common issues and solutions
+The `gpu`, `ml` and `monitoring` modules, behind the `experimental` feature
+(implied by `gpu`, `metal` and `cuda`), are experimental and unsupported. The
+embedding path does not use them, and `EmbedParams::use_gpu` / `--gpu` has no
+effect on embedding.
 
-### 🏗️ [Architecture](architecture/)
-Design documentation and system architecture details.
-
-- **[System Overview](architecture/overview.md)** - High-level architecture and design principles
-- **[Handler System Design](architecture/handler-system.md)** - Extensible format handler architecture
-- **[Security Model](architecture/security-model.md)** - Threat model and security architecture
-- **[Performance Architecture](architecture/performance.md)** - GPU acceleration and optimization design
-
-### 🔬 [Examples](examples/)
-Practical examples demonstrating real-world usage patterns.
-
-- **[Basic Examples](examples/basic/)** - Simple embedding and extraction workflows
-- **[Advanced Techniques](examples/advanced/)** - ML-driven optimization and anti-detection
-- **[GPU Acceleration](examples/gpu/)** - High-performance computing demonstrations
-- **[Scientific Workflows](examples/scientific/)** - Domain-specific processing pipelines
-
-### 🏢 [Enterprise Integration](enterprise/)
-Production deployment and enterprise integration guidance.
-
-- **[REST API Server](enterprise/api-server.md)** - HTTP API deployment and usage
-- **[Kubernetes Deployment](enterprise/kubernetes.md)** - Container orchestration and scaling
-- **[Monitoring & Observability](enterprise/monitoring.md)** - Production monitoring and alerting
-- **[Security & Compliance](enterprise/security.md)** - Enterprise security requirements
-
-## Quick Navigation
-
-### For Developers
-- New to stegano? Start with [Getting Started](guides/getting-started.md)
-- Need performance? Check [GPU Acceleration](api/gpu.md) and [Performance Guide](guides/performance-optimization.md)
-- Working with specific formats? See [Format-Specific Guides](guides/formats/)
-
-### For Scientists & Researchers
-- **Genomics**: [FASTA/FASTQ Processing](guides/formats/genomics.md)
-- **Medical Imaging**: [DICOM and Microscopy](guides/formats/imagery.md)
-- **Signal Processing**: [Audio and Timeseries](guides/formats/signals.md)
-
-### For Enterprise Users
-- **Production Deployment**: [Enterprise Integration](enterprise/)
-- **Security Requirements**: [Security Best Practices](guides/security-best-practices.md)
-- **Monitoring & Scaling**: [Monitoring Guide](enterprise/monitoring.md)
-
-## Contributing to Documentation
-
-We welcome contributions to improve the documentation! Please see [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines on:
-
-- Documentation style and formatting
-- Example code standards
-- Review process for documentation changes
-- Building and testing documentation locally
-
-## Documentation Standards
-
-### Code Examples
-All code examples in the documentation are:
-- ✅ **Tested**: Validated in CI/CD pipeline
-- ✅ **Complete**: Include necessary imports and error handling
-- ✅ **Current**: Updated with each release
-- ✅ **Cross-platform**: Work on Linux, macOS, and Windows
-
-### Versioning
-Documentation is versioned alongside the library:
-- **Latest**: Always reflects the current development version
-- **Stable**: Corresponds to the latest released version
-- **Previous**: Archived versions available for reference
-
-### Feedback & Support
-
-- **Issues**: Report documentation issues on [GitHub Issues](https://github.com/stegano/stegano/issues)
-- **Discussions**: Ask questions in [GitHub Discussions](https://github.com/stegano/stegano/discussions)
-- **Pull Requests**: Contribute improvements via [GitHub Pull Requests](https://github.com/stegano/stegano/pulls)
-
----
-
-*Documentation last updated: v0.2.0-dev*
+Two figures have been measured and are recorded in the CHANGELOG for 0.7.0.
+Streaming embed and extract on 1–2 GB FASTQ, VCF and BAM files peaked at about
+70 MB RSS, most of it Argon2id's 64 MiB. A 1 GB FASTQ through the CLI took
+about 71 MB streaming and 5.19 GB with `--no-stream`. Argon2id key derivation
+runs once per embed or extract and is much slower in unoptimised builds.
