@@ -70,6 +70,10 @@ hex = "0.4"
 png = "0.18"
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
 
+# Compression (BGZF for BAM). Default miniz_oxide backend is pure Rust and
+# wasm32-safe.
+flate2 = "1"
+
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 
@@ -116,6 +120,11 @@ rand = "0.8"
 # Additional testing utilities
 serial_test = "3.0"  # For sequential test execution
 mockall = "0.12"     # For mocking in tests
+
+# Independent SAM/BAM/BGZF parsers used to validate SamBamHandler output
+noodles-sam = "0.92"
+noodles-bam = "0.97"
+noodles-bgzf = "0.52"
 
 [features]
 default = []

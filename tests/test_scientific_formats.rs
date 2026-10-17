@@ -78,6 +78,23 @@ r005	147	chr1	25	30	10M	=	7	-25	GCCTAAGCTA	IIIIIIIIII	AS:i:20	MD:Z:10
     replicate_records(sam_content, FIXTURE_REPEATS)
 }
 
+/// SAM test data where every record carries real QUAL strings (the
+/// quality-score strategy never touches `*` QUAL, so it needs these).
+fn create_test_sam_data_with_quals() -> Vec<u8> {
+    let sam_content = r#"@HD	VN:1.6	SO:coordinate
+@SQ	SN:chr1	LN:248956422
+@RG	ID:sample1	SM:SAMPLE_001	PL:ILLUMINA
+@PG	ID:bwa	PN:bwa	VN:0.7.17-r1188
+@CO	Test SAM file for steganography
+r001	99	chr1	7	30	8M2I4M1D3M	=	37	39	TTAGATAAAGGATACTG	IIIIIIIIIIHHHHHHH	AS:i:18	XS:i:12	MD:Z:6A5
+r002	0	chr1	9	30	3S6M1P1I4M	*	0	0	AAAAGATAAGGATA	IIIIIIIIIIIIII	AS:i:15	MD:Z:10
+r003	0	chr1	9	30	5S6M	*	0	0	GCCTAAGCTAA	HHHHHHHHHHH	AS:i:12	SA:Z:chr1,29,-,6H5M,17,0;
+r004	0	chr1	16	30	6M14N5M	*	0	0	ATAGCTTCAGC	IIIIIIIIIII	AS:i:21	MD:Z:11
+r005	147	chr1	25	30	10M	=	7	-25	GCCTAAGCTA	IIIIIIIIII	AS:i:20	MD:Z:10
+"#;
+    replicate_records(sam_content, FIXTURE_REPEATS)
+}
+
 #[tokio::test]
 async fn test_vcf_info_fields_embedding() {
     let vcf_data = create_test_vcf_data();
@@ -537,7 +554,7 @@ async fn test_sam_optional_fields_embedding() {
 
 #[tokio::test]
 async fn test_sam_quality_scores_embedding() {
-    let sam_data = create_test_sam_data();
+    let sam_data = create_test_sam_data_with_quals();
     let carrier = CarrierData::new(DataFormat::SAM, sam_data);
 
     let params = EmbedParams {
