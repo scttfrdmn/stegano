@@ -87,7 +87,7 @@ pub enum QualityEmbedStrategy {
 }
 
 impl QualityEmbedStrategy {
-    const ALL: [QualityEmbedStrategy; 3] = [
+    pub(crate) const ALL: [QualityEmbedStrategy; 3] = [
         QualityEmbedStrategy::Conservative,
         QualityEmbedStrategy::Balanced,
         QualityEmbedStrategy::Aggressive,
@@ -112,8 +112,18 @@ impl QualityEmbedStrategy {
         Self::ALL.into_iter().find(|s| s.to_u8() == v)
     }
 
-    fn mask(self) -> u8 {
+    pub(crate) fn mask(self) -> u8 {
         (1u8 << self.bits_per_char()) - 1
+    }
+
+    /// Write the `nbits` (`1..=k`) low bits of `value` into quality character
+    /// `q`.  A final partial chunk (`nbits < k`) keeps the original value of
+    /// its unused bits.
+    pub(crate) fn embed_char(self, q: u8, value: u8, nbits: usize) -> u8 {
+        let used = ((1u16 << nbits) - 1) as u8;
+        let new = (q & !(self.mask() & used)) | value;
+        debug_assert!(self.is_eligible(new));
+        new
     }
 
     /// Whether quality character `q` can carry bits.  Depends only on the
@@ -152,10 +162,10 @@ const MAX_QUALITY_ASCII: u8 = 126; // '~'
 pub const FASTQ_MIN_MASKED_QUALITY: u8 = 36;
 
 /// Stream magic.
-const MAGIC: &[u8; 4] = b"GNSJ";
+pub(crate) const MAGIC: &[u8; 4] = b"GNSJ";
 /// Stream header: magic (4) + strategy (1) + length u32 LE (4).
-const HEADER_LEN: usize = 9;
-const HEADER_BITS: usize = HEADER_LEN * 8;
+pub(crate) const HEADER_LEN: usize = 9;
+pub(crate) const HEADER_BITS: usize = HEADER_LEN * 8;
 
 /// Strategy byte for the FASTA header-suffix scheme.
 pub const FASTA_STRATEGY_BYTE: u8 = 0x10;
@@ -165,7 +175,7 @@ pub const FASTA_CHUNK_BYTES: usize = 128;
 /// FASTA header suffix tag.
 const FASTA_TAG: &[u8] = b" stg=";
 
-const STRATEGY_KEY: &str = "genomics_strategy";
+pub(crate) const STRATEGY_KEY: &str = "genomics_strategy";
 
 // ---------------------------------------------------------------------------
 // Line handling (byte exact)
@@ -180,6 +190,19 @@ struct Line {
     term_end: usize,
 }
 
+/// Length of a line's content, given the line including its terminator (if
+/// any): a trailing `"\n"` or `"\r\n"` is excluded; a `'\r'` not followed by
+/// `'\n'` (e.g. at EOF) is content.
+pub(crate) fn content_len(line: &[u8]) -> usize {
+    if line.ends_with(b"\r\n") {
+        line.len() - 2
+    } else if line.ends_with(b"\n") {
+        line.len() - 1
+    } else {
+        line.len()
+    }
+}
+
 fn split_lines(data: &[u8]) -> Vec<Line> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -187,14 +210,9 @@ fn split_lines(data: &[u8]) -> Vec<Line> {
         match data[start..].iter().position(|&b| b == b'\n') {
             Some(off) => {
                 let nl = start + off;
-                let end = if nl > start && data[nl - 1] == b'\r' {
-                    nl - 1
-                } else {
-                    nl
-                };
                 lines.push(Line {
                     start,
-                    end,
+                    end: start + content_len(&data[start..=nl]),
                     term_end: nl + 1,
                 });
                 start = nl + 1;
@@ -210,6 +228,38 @@ fn split_lines(data: &[u8]) -> Vec<Line> {
         }
     }
     lines
+}
+
+/// Validate the first line of a record (0-based line index `i`).
+pub(crate) fn check_fastq_header(i: usize, header: &[u8]) -> Result<()> {
+    if !header.starts_with(b"@") {
+        return Err(SteganoError::IntegrityError(format!(
+            "Invalid FASTQ header at line {}",
+            i + 1
+        )));
+    }
+    Ok(())
+}
+
+/// Validate lines 2-4 of a complete record whose header is at 0-based line
+/// index `i`.
+pub(crate) fn check_fastq_record(i: usize, seq: &[u8], sep: &[u8], qual: &[u8]) -> Result<()> {
+    if !sep.starts_with(b"+") {
+        return Err(SteganoError::IntegrityError(format!(
+            "Invalid FASTQ separator at line {} (only 4-line records are supported)",
+            i + 3
+        )));
+    }
+    if seq.len() != qual.len() {
+        return Err(SteganoError::IntegrityError(format!(
+            "FASTQ record at line {}: quality length {} != sequence length {} \
+             (multi-line FASTQ is not supported)",
+            i + 1,
+            qual.len(),
+            seq.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Location of one complete FASTQ record: indices into the line list.
@@ -232,30 +282,11 @@ fn locate_fastq(data: &[u8], lines: &[Line]) -> Result<Vec<FastqLoc>> {
         if (i..lines.len()).all(|j| content(j).is_empty()) {
             break; // trailing blank lines
         }
-        if !content(i).starts_with(b"@") {
-            return Err(SteganoError::IntegrityError(format!(
-                "Invalid FASTQ header at line {}",
-                i + 1
-            )));
-        }
+        check_fastq_header(i, content(i))?;
         if i + 3 >= lines.len() {
             break; // trailing incomplete record: preserved, not used
         }
-        if !content(i + 2).starts_with(b"+") {
-            return Err(SteganoError::IntegrityError(format!(
-                "Invalid FASTQ separator at line {} (only 4-line records are supported)",
-                i + 3
-            )));
-        }
-        if content(i + 1).len() != content(i + 3).len() {
-            return Err(SteganoError::IntegrityError(format!(
-                "FASTQ record at line {}: quality length {} != sequence length {} \
-                 (multi-line FASTQ is not supported)",
-                i + 1,
-                content(i + 3).len(),
-                content(i + 1).len()
-            )));
-        }
+        check_fastq_record(i, content(i + 1), content(i + 2), content(i + 3))?;
         recs.push(FastqLoc {
             header: i,
             sequence: i + 1,
@@ -300,7 +331,7 @@ fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn build_stream(strategy_byte: u8, encoded: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn build_stream(strategy_byte: u8, encoded: &[u8]) -> Result<Vec<u8>> {
     let len = u32::try_from(encoded.len()).map_err(|_| {
         SteganoError::InvalidParameter("Payload too large for genomics header (> 4 GiB)".into())
     })?;
@@ -313,14 +344,14 @@ fn build_stream(strategy_byte: u8, encoded: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Parse a stream header; returns the payload length if magic and strategy match.
-fn parse_stream_header(h: &[u8], strategy_byte: u8) -> Option<usize> {
+pub(crate) fn parse_stream_header(h: &[u8], strategy_byte: u8) -> Option<usize> {
     if h.len() < HEADER_LEN || &h[0..4] != MAGIC || h[4] != strategy_byte {
         return None;
     }
     Some(u32::from_le_bytes([h[5], h[6], h[7], h[8]]) as usize)
 }
 
-fn not_found() -> SteganoError {
+pub(crate) fn not_found() -> SteganoError {
     SteganoError::IntegrityError("No embedded data found".to_string())
 }
 
@@ -339,7 +370,7 @@ impl GenomicsHandler {
     // Strategy selection
     // -----------------------------------------------------------------------
 
-    fn strategy_param(params: &EmbedParams) -> Result<Option<&str>> {
+    pub(crate) fn strategy_param(params: &EmbedParams) -> Result<Option<&str>> {
         match params.format_specific.get(STRATEGY_KEY) {
             None => Ok(None),
             Some(v) => v.as_str().map(Some).ok_or_else(|| {
@@ -348,7 +379,7 @@ impl GenomicsHandler {
         }
     }
 
-    fn fastq_strategy(params: &EmbedParams) -> Result<QualityEmbedStrategy> {
+    pub(crate) fn fastq_strategy(params: &EmbedParams) -> Result<QualityEmbedStrategy> {
         Ok(match Self::strategy_param(params)? {
             None | Some("quality") => match params.stealth_level {
                 StealthLevel::Low => QualityEmbedStrategy::Aggressive,
@@ -581,7 +612,6 @@ impl GenomicsHandler {
         let lines = split_lines(data);
         let recs = locate_fastq(data, &lines)?;
         let k = strategy.bits_per_char() as usize;
-        let mask = strategy.mask();
 
         let positions: Vec<usize> = quality_positions(&lines, &recs)
             .filter(|&p| strategy.is_eligible(data[p]))
@@ -602,9 +632,7 @@ impl GenomicsHandler {
                 v |= b << i;
             }
             // A final partial chunk keeps the original value of its unused bits.
-            let used = ((1u16 << chunk.len()) - 1) as u8;
-            let new = (data[p] & !(mask & used)) | v;
-            debug_assert!(strategy.is_eligible(new));
+            let new = strategy.embed_char(data[p], v, chunk.len());
             if new != data[p] {
                 modified += 1;
             }
