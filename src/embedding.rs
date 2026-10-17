@@ -93,6 +93,10 @@ impl SteganoEmbedder {
     /// * `roc_analysis` — SPA scores computed on the *modified data alone*, per
     ///   segment, with the ground-truth label "segment was modified". Present only
     ///   when both modified and unmodified segments exist.
+    ///
+    /// The PoV and SPA results are also stored in `steganalysis_results`, and
+    /// `finalize()` derives `overall_score` from them (see
+    /// [`crate::validation::detection_resistance_score`]).
     async fn run_validation(
         &self,
         original_data: &[u8],
@@ -107,8 +111,9 @@ impl SteganoEmbedder {
         if let Ok(pov) = steganalysis.pairs_of_values_test(modified_data) {
             report.add_test_result(
                 "pairs_of_values_test".to_string(),
-                serde_json::to_value(pov).map_err(SteganoError::SerializationError)?,
+                serde_json::to_value(&pov).map_err(SteganoError::SerializationError)?,
             );
+            report.steganalysis_results.pairs_of_values = Some(pov);
         }
 
         // KS test for distribution comparison
@@ -140,9 +145,10 @@ impl SteganoEmbedder {
                 {
                     report.add_test_result(
                         "pixel_pair_analysis".to_string(),
-                        serde_json::to_value(pixel_analysis)
+                        serde_json::to_value(&pixel_analysis)
                             .map_err(SteganoError::SerializationError)?,
                     );
+                    report.steganalysis_results.pixel_pair_analysis = Some(pixel_analysis);
                 }
             }
             DataFormat::WAV | DataFormat::BinarySignal => {
@@ -168,9 +174,10 @@ impl SteganoEmbedder {
                     {
                         report.add_test_result(
                             "audio_steganalysis".to_string(),
-                            serde_json::to_value(audio_analysis)
+                            serde_json::to_value(&audio_analysis)
                                 .map_err(SteganoError::SerializationError)?,
                         );
+                        report.steganalysis_results.audio_analysis = Some(audio_analysis);
                     }
                 }
             }

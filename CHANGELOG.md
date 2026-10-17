@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ValidationReport::overall_score` is now computed, so `stegano embed --validate` no longer
+  always prints "Overall Score: 0/10" ([#96](https://github.com/scttfrdmn/stegano/issues/96)).
+  `finalize()` sets it from the pairs-of-values and Sample Pairs Analysis results with
+  `validation::detection_resistance_score`: `10 × (1 − mean suspicion)`, where PoV contributes
+  1 if it flags the carrier and SPA contributes its estimated embedding rate. It is a heuristic
+  covering only those two LSB-replacement detectors, not a security guarantee. Breaking:
+  the field (and `ValidationSummary::overall_score`) is now `Option<f64>`, and
+  `overall_score()` returns `Option<u8>`. They are `None` when neither detector ran.
+  `comprehensive_validation` now calls `finalize()`, and the embedding path also stores the
+  PoV, SPA and audio results in `steganalysis_results`. The CLI line is now
+  `Detection-resistance score: N/10 (heuristic)`, or `n/a`.
+
 ### Security
 - Upgraded dependencies to clear Dependabot alerts
   ([#98](https://github.com/scttfrdmn/stegano/issues/98)):

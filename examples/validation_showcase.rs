@@ -182,8 +182,10 @@ async fn main() -> Result<()> {
     let validation_report =
         validation_suite.comprehensive_validation(&original_data, &stego_data, &DataFormat::PNG)?;
     println!(
-        "• Complete validation: overall score = {:.3} ({:.2}ms)",
-        validation_report.overall_score,
+        "• Complete validation: detection-resistance score = {} ({:.2}ms)",
+        validation_report
+            .overall_score
+            .map_or_else(|| "n/a".to_string(), |s| format!("{s:.1}/10")),
         start.elapsed().as_millis()
     );
 

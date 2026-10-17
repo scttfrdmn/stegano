@@ -112,7 +112,10 @@ pub async fn handle_embed(
 
     if let Some(validation_report) = result.validation_report {
         println!("\n🔬 Statistical Validation Results:");
-        println!("   Overall Score: {}/10", validation_report.overall_score());
+        match validation_report.overall_score() {
+            Some(score) => println!("   Detection-resistance score: {score}/10 (heuristic)"),
+            None => println!("   Detection-resistance score: n/a (no LSB detector ran)"),
+        }
         println!(
             "   Tests Completed: {}",
             validation_report.test_results().len()
@@ -122,13 +125,15 @@ pub async fn handle_embed(
             println!("   ✓ {test_name}");
         }
 
-        if validation_report.overall_score() >= 8 {
-            println!("   🎉 Excellent validation score - embedding is statistically robust!");
-        } else if validation_report.overall_score() >= 6 {
-            println!("   ⚠️  Good validation score - embedding passed most tests");
-        } else {
-            println!("   ❌ Low validation score - embedding may be detectable");
+        match validation_report.overall_score() {
+            Some(s) if s >= 8 => {
+                println!("   LSB detectors see little or no evidence of embedding.")
+            }
+            Some(s) if s >= 5 => println!("   ⚠️  Some LSB detectors flag the output."),
+            Some(_) => println!("   ❌ LSB detectors flag the output - embedding is detectable."),
+            None => {}
         }
+        println!("   (Score covers two LSB-replacement detectors only; not a security guarantee.)");
     }
 
     Ok(())
