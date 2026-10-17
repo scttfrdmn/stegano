@@ -909,6 +909,7 @@ fn test_cli_fits_integer_pixel_lsb() {
         &["--strategy", "pixel_lsb"],
     );
     assert_eq!(stego.len(), carrier.len());
+}
 
 /// Parse `N` from "Detection-resistance score: N/10" in embed output.
 fn detection_score(stdout: &str) -> u8 {
