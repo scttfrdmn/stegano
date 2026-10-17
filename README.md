@@ -1,6 +1,6 @@
 # Stegano
 
-[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Stegano is a Rust library and CLI for embedding encrypted payloads in scientific
@@ -12,14 +12,16 @@ Reed-Solomon error correction before being embedded by a format-specific handler
 
 Stegano is pre-1.0 and under active development. Please read this before relying on it:
 
-- **Format handlers are being corrected for real-file validity in v0.6.0**
-  ([#42](https://github.com/scttfrdmn/stegano/issues/42)–[#48](https://github.com/scttfrdmn/stegano/issues/48)).
-  Several 0.5.x handlers (for example PNG/TIFF, WAV, DICOM, FITS, SAM/BAM, VCF and
-  FASTQ) can produce output that standard tools for that format reject. Do not
-  use them on data you cannot regenerate.
-- **The payload wire format will change incompatibly in v0.6.0**
-  ([#38](https://github.com/scttfrdmn/stegano/issues/38)). Data embedded with
-  0.5.x will not be extractable with 0.6.x.
+- **Every format handler writes valid files (v0.6.0).** CI checks each handler's output
+  against the standard tool for that format: Pillow, `wave`, astropy, Biopython,
+  bcftools, samtools and pydicom. If a standard tool rejects an output file, that is a bug.
+- **Payloads are detectable.** Embedding is still sequential with plaintext handler
+  markers, so steganalysis such as Sample Pairs Analysis or pairs-of-values (included in
+  `validation`) can detect it. Keyed embedding positions are planned
+  ([#50](https://github.com/scttfrdmn/stegano/issues/50)). The encryption protects
+  confidentiality; it does not hide that a payload exists.
+- **The wire format changed in v0.6.0** ([#38](https://github.com/scttfrdmn/stegano/issues/38),
+  `docs/WIRE_FORMAT.md`). Data embedded with 0.5.x cannot be extracted with 0.6.x.
 - **The GPU, ML and monitoring modules are experimental** and are not used by
   the embedding path ([#40](https://github.com/scttfrdmn/stegano/issues/40)).
   The `--gpu` flag and `use_gpu` parameter do not currently speed up embedding.

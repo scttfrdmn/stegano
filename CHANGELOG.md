@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-16
+
+**This release breaks compatibility.** It changes the payload wire format and fixes every format
+handler so its output is a valid file of the carrier's format. Data embedded with 0.5.x
+**cannot** be extracted with 0.6.x. Re-embed from your original payloads.
+
+### Security
+- **Payload wire format v2** ([#38](https://github.com/scttfrdmn/stegano/issues/38)):
+  - Argon2id key derivation (m=64 MiB, t=3, p=1) with a random 16-byte salt per payload. This
+    replaces the single BLAKE3 hash with a fixed salt, and the 32-byte raw-key shortcut is gone.
+  - The whole 36-byte header (version, flags, cipher, EC length, salt, nonce, length) is
+    AEAD associated data.
+  - Removed the unkeyed BLAKE3 field, which let anyone detect a payload without the key.
+  - A password supplied for an unencrypted payload, or missing for an encrypted one, is an error
+    (no silent downgrade).
+  - The header is protected by Reed-Solomon, and lengths are checked before any allocation.
+  - Keys are zeroized, and `EmbedParams` Debug output redacts the key.
+  - See `docs/WIRE_FORMAT.md`.
+- FFI panics are caught and returned as an error code. The release profile now uses
+  `panic = "unwind"` ([#62](https://github.com/scttfrdmn/stegano/issues/62)).
+- CLI passwords can come from `--password-file`, `STEGANO_PASSWORD` or a tty prompt.
+  `--password` still works but prints a warning that it is visible to other users
+  ([#39](https://github.com/scttfrdmn/stegano/issues/39)).
+
+### Fixed: format handlers now write valid files
+- **PNG/TIFF** ([#42](https://github.com/scttfrdmn/stegano/issues/42)):
+  - Images are decoded to pixels and only sample LSBs change. Before, bits were written over
+    the PNG signature, chunk CRCs and zlib stream.
+  - Fixed the AdaptiveLSB/EdgeBased encoder/decoder desync and the DCT clamping failure.
+  - Capacity estimates are exact.
+- **WAV** ([#43](https://github.com/scttfrdmn/stegano/issues/43)):
+  - New RIFF chunk parser covering PCM 8/16/24/32 and float, any channel count. Headers and
+    other chunks stay byte-identical.
+  - No more panics on low sample rates.
+  - Spread spectrum and echo use a keyed PN sequence and check at embed time that the payload
+    can be extracted.
+- **DICOM** ([#44](https://github.com/scttfrdmn/stegano/issues/44)):
+  - Explicit-VR length layout follows PS3.5.
+  - Supports implicit VR LE and explicit VR BE.
+  - An unmodified file is written back byte-identical, and elements are never silently
+    dropped.
+  - Pixel LSB changes each sample by at most 1.
+  - Private block is ordered, with a private creator element.
+- **FITS** ([#45](https://github.com/scttfrdmn/stegano/issues/45)):
+  - Parses HDUs (BITPIX/NAXIS) and embeds only in the sample LSBs of the first integer image
+    HDU. Other headers and HDUs are untouched.
+  - Float data needs an explicit opt-in.
+- **SAM/BAM** ([#46](https://github.com/scttfrdmn/stegano/issues/46)):
+  - BGZF read/write.
+  - Valid 2-character `zs:Z:` tags.
+  - `*` qualities left untouched.
+  - Strict, bounds-checked parsing that never drops records.
+- **VCF** ([#47](https://github.com/scttfrdmn/stegano/issues/47)):
+  - Unchanged lines pass through untouched, so QUAL values are no longer rounded.
+  - New INFO/FORMAT keys are declared in the header.
+  - Fixed a UTF-8 slicing panic, and payloads of more than 100 chunks no longer truncate.
+- **FASTQ/FASTA** ([#48](https://github.com/scttfrdmn/stegano/issues/48)):
+  - Fixed the quality-skip desync on low qualities (`#`, `!`).
+  - FASTA capacity is enforced.
+  - CRLF and trailing records are preserved.
+- **Self-describing extraction:** each handler stores a strategy marker and decodes once.
+- **Generic `verify_integrity`:** no longer reports a payload in all-zero carriers
+  ([#60](https://github.com/scttfrdmn/stegano/issues/60)).
+- **`InsufficientCapacity`:** always reported in bits
+  ([#61](https://github.com/scttfrdmn/stegano/issues/61)).
+
+### Fixed: bindings and CLI ([#39](https://github.com/scttfrdmn/stegano/issues/39))
+- **FFI output:** `stegano_embed_v2` returns a newly allocated output buffer and its length, so
+  carriers that grow (SAM, VCF, DICOM) are no longer truncated. v1 `stegano_embed` returns
+  `OutputSizeChanged` instead of truncating.
+- **FFI inputs:** the format is a validated `uint32_t` (invalid values used to be undefined
+  behaviour), and the `cipher` option is honoured.
+- **C header:** generated with cbindgen into `include/stegano.h`, and CI checks it is up to
+  date.
+- **Go:** `WithCipher` now works, and `WithStrategy` sends the right key for each format.
+- **Shared carrier builder:** new `src/carrier.rs` sets sample rate and dimensions for the CLI,
+  FFI, Python and WASM alike, and the defaults are the same everywhere.
+- **CLI:**
+  - The DICOM strategy key is correct.
+  - `extract --ec-level`.
+  - Consistent exit codes.
+
+### Fixed: validation ([#41](https://github.com/scttfrdmn/stegano/issues/41))
+- **New detectors:** the Westfeld–Pfitzmann pairs-of-values attack and Sample Pairs Analysis.
+- **Corrected statistics:**
+  - The pixel-pair statistic is no longer constant.
+  - The chi-square critical value is one-tailed.
+  - ROC/AUC and cross-validation use a real detector score.
+
+### Changed
+- **BREAKING:** `gpu`, `ml` and `monitoring` are behind the off-by-default `experimental` feature.
+  `wgpu` is no longer a default dependency (181 → 131 crates). The wasm32 build works
+  ([#40](https://github.com/scttfrdmn/stegano/issues/40)).
+- **BREAKING:** the fake XOR-parity `IntegritySystem` was removed.
+- **BREAKING:** `with_encryption` constructors on handlers were removed. All encryption goes
+  through the codec.
+- **CI** (GitHub Actions; [#35](https://github.com/scttfrdmn/stegano/issues/35),
+  [#36](https://github.com/scttfrdmn/stegano/issues/36)): tests, clippy `-D warnings`, a
+  wasm32 check, Go tests, the C header check, and an external format-validity suite.
+
+### Also included (developed after 0.5.1)
 ### Added
 - **Extended FFI v2** (`src/ffi.rs`): `stegano_embed_v2` and `stegano_extract_v2` accept a
   `format_specific_json` parameter (null-terminated UTF-8 JSON object) that is parsed into
