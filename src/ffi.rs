@@ -718,7 +718,7 @@ pub unsafe extern "C" fn stegano_detect_file_format(
 /// Embed a payload into the carrier file `in_path`, writing the result to
 /// `out_path` (path-based; no 32-bit limit on the carrier size).
 ///
-/// Streamable format/strategy pairs (e.g. FASTQ, VCF `info`/`id`/`quality`)
+/// Streamable format/strategy pairs (e.g. FASTQ, VCF `info`/`id`/`quality`, SAM/BAM `auxiliary`/`quality`)
 /// are streamed with constant memory; anything else is read into memory.
 /// The output is written to a temporary file in `out_path`'s directory and
 /// renamed over `out_path` only on success, so on error `out_path` is left

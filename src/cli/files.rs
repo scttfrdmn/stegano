@@ -81,13 +81,29 @@ pub fn embed_streamable(format: &DataFormat, params: &EmbedParams) -> bool {
     stream::is_streamable(format, params)
 }
 
-/// Whether [`extract_path`] streams `format`.  Stream extraction
-/// auto-detects the strategy, so `*_strategy` keys are ignored here.
-pub fn extract_streamable(format: &DataFormat, params: &EmbedParams) -> bool {
-    let mut p = params.clone();
-    p.format_specific.retain(|k, _| !k.ends_with("_strategy"));
-    stream::is_streamable(format, &p)
+/// Try to extract from `path` with the stream API.
+///
+/// Returns `None` if `format` has no stream handler (the caller then uses
+/// the in-memory path), otherwise the stream result.  Stream extraction
+/// only needs a streamable *format*: it auto-detects the channel, including
+/// channels that can only be embedded in memory (e.g. VCF `format`/`multi`,
+/// SAM `optional`/`comment`/`multi`), so `is_streamable` (which checks the
+/// embed strategy) is not the right test here.  The format check happens
+/// before any carrier byte is read.
+pub fn try_extract_stream(
+    format: &DataFormat,
+    path: &Path,
+    params: &EmbedParams,
+) -> Option<Result<Vec<u8>>> {
+    match stream::extract_file(format.clone(), path, params) {
+        Err(SteganoError::InvalidParameter(m)) if m.contains(NOT_STREAMABLE) => None,
+        r => Some(r),
+    }
 }
+
+/// Suffix of the `InvalidParameter` message the stream API returns for a
+/// format/strategy it does not handle (see [`crate::stream`]).
+const NOT_STREAMABLE: &str = "is not streamable; use the in-memory API";
 
 /// Embed `payload` reading the carrier from `in_path` and writing the result
 /// atomically to `out_path` (which may equal `in_path`).
@@ -134,11 +150,10 @@ pub async fn extract_path(
         Some(f) => f,
         None => detect_file_format(path)?,
     };
-    if allow_stream && extract_streamable(&format, params) {
-        return Ok((
-            stream::extract_file(format, path, params)?,
-            IoMode::Streamed,
-        ));
+    if allow_stream {
+        if let Some(r) = try_extract_stream(&format, path, params) {
+            return Ok((r?, IoMode::Streamed));
+        }
     }
     let carrier: CarrierData = carrier::carrier_from_bytes(format, fs::read(path)?);
     let out = SteganoEmbedder::new().extract(&carrier, params).await?;
@@ -221,14 +236,40 @@ mod tests {
         assert_eq!(detect_format_cheap(&opaque).unwrap(), None);
     }
 
-    #[test]
-    fn test_extract_streamable_ignores_strategy() {
+    #[tokio::test]
+    async fn test_extract_streams_in_memory_only_strategies() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.sam");
+        let mut sam = String::from("@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:100000\n");
+        for i in 0..200 {
+            sam.push_str(&format!(
+                "r{i}\t0\tchr1\t{}\t60\t8M\t*\t0\t0\tACGTACGT\tIIIIIIII\n",
+                i + 1
+            ));
+        }
+        fs::write(&input, sam).unwrap();
         let mut p = carrier::default_params(vec![]);
         p.format_specific
-            .insert("vcf_strategy".into(), serde_json::Value::from("format"));
-        assert!(!embed_streamable(&DataFormat::VCF, &p));
-        assert!(extract_streamable(&DataFormat::VCF, &p));
-        assert!(!extract_streamable(&DataFormat::PNG, &p));
+            .insert("sam_strategy".into(), serde_json::Value::from("comment"));
+        assert!(!embed_streamable(&DataFormat::SAM, &p));
+
+        let out = dir.path().join("out.sam");
+        let (_, m) = embed_path(None, &input, &out, b"sam", &p, true)
+            .await
+            .unwrap();
+        assert_eq!(m, IoMode::InMemory);
+        // Extraction streams regardless of the embed strategy.
+        let (got, m) = extract_path(None, &out, &p, true).await.unwrap();
+        assert_eq!((got.as_slice(), m), (&b"sam"[..], IoMode::Streamed));
+
+        // A format without a stream handler falls back; a missing file is
+        // reported as an I/O error either way.
+        assert!(try_extract_stream(&DataFormat::PNG, &out, &p).is_none());
+        let missing = dir.path().join("missing.sam");
+        assert!(matches!(
+            try_extract_stream(&DataFormat::SAM, &missing, &p),
+            Some(Err(SteganoError::IoError(_)))
+        ));
     }
 
     #[tokio::test]

@@ -152,10 +152,11 @@ pub async fn handle_extract(
     }
 
     if let Some(format) = streaming_format(input, no_stream, false, "extract")? {
-        if files::extract_streamable(&format, &params) {
+        // Stream extraction auto-detects the channel, so --strategy is not
+        // needed (and not consulted) here.
+        if let Some(r) = files::try_extract_stream(&format, Path::new(input), &params) {
             println!("🌊 Streaming {format:?} carrier (stops at the end of the payload; --no-stream to disable)");
-            let extracted_data = crate::stream::extract_file(format, input, &params)
-                .map_err(|e| with_path_context(e, input, output))?;
+            let extracted_data = r.map_err(|e| with_path_context(e, input, output))?;
             write_file(output, &extracted_data)?;
             println!("✅ Successfully extracted {} bytes", extracted_data.len());
             return Ok(());

@@ -60,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Streaming in the CLI, C FFI, Go and Python ([#78](https://github.com/scttfrdmn/stegano/issues/78),
   part of [#30](https://github.com/scttfrdmn/stegano/issues/30)). Each call checks
   `stream::is_streamable`, so any format registered with `stegano::stream` is picked up
-  automatically.
+  automatically. Extraction streams any format that has a stream handler, whatever strategy the
+  payload was embedded with.
   - CLI: `embed` and `extract` stream when the format and strategy allow it. The format comes from
     the extension, or from the magic bytes of the first 4 KiB, so the file is never read whole.
     `--no-stream` forces the in-memory path, and `--validate` also uses it. The command prints

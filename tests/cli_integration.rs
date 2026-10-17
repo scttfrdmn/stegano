@@ -721,6 +721,38 @@ fn test_cli_vcf_streaming_roundtrip() {
     assert!(extract_out.contains("Streaming VCF"), "{extract_out}");
 }
 
+fn sam_carrier(records: usize) -> Vec<u8> {
+    let mut s = String::from("@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:1000000\n");
+    for i in 0..records {
+        s.push_str(&format!(
+            "read{i}\t0\tchr1\t{}\t60\t8M\t*\t0\t0\tACGTACGT\tIIIIIIII\n",
+            i + 1
+        ));
+    }
+    s.into_bytes()
+}
+
+#[test]
+fn test_cli_sam_streaming_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let (embed_out, extract_out, stego) = cli_roundtrip(
+        &dir,
+        "aln.sam",
+        &sam_carrier(300),
+        &["--strategy", "auxiliary"],
+        &[],
+    );
+    assert!(embed_out.contains("Streaming SAM"), "{embed_out}");
+    assert!(extract_out.contains("Streaming SAM"), "{extract_out}");
+    assert!(stego.windows(6).any(|w| w == b"\tzs:Z:"));
+
+    // The default SAM strategy is in-memory only; extraction still streams.
+    let (embed_out, extract_out, _) =
+        cli_roundtrip(&dir, "aln-default.sam", &sam_carrier(300), &[], &[]);
+    assert!(embed_out.contains("In-memory"), "{embed_out}");
+    assert!(extract_out.contains("Streaming SAM"), "{extract_out}");
+}
+
 #[test]
 fn test_cli_no_stream_interoperates_with_streaming() {
     let dir = TempDir::new().unwrap();

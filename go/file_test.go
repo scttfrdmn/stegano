@@ -104,6 +104,25 @@ func TestEmbedExtractFile_SAM(t *testing.T) {
 	}
 }
 
+func TestEmbedExtractFile_SAMAuxiliaryFormatSpecific(t *testing.T) {
+	// sam_strategy=auxiliary is streamable; passing it as a raw key proves
+	// WithFormatSpecific reaches the file API.
+	payload := []byte("SAM auxiliary via WithFormatSpecific")
+	out := fileRoundtrip(t, "aux.sam", samCarrier(300), payload,
+		stegano.WithFormatSpecific("sam_strategy", "auxiliary"), stegano.WithPassword("aux"))
+	if !bytes.Contains(out, []byte("\tzs:Z:")) {
+		t.Fatalf("auxiliary strategy should add zs:Z: tags")
+	}
+	if bytes.Contains(out, []byte("@CO")) {
+		t.Fatalf("unexpected @CO lines: strategy key not honoured")
+	}
+	// Readable through the in-memory API as well.
+	got, err := stegano.Extract(out, stegano.WithPassword("aux"))
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("in-memory Extract of streamed SAM: %q, %v", got, err)
+	}
+}
+
 func TestEmbedFile_Errors(t *testing.T) {
 	dir := t.TempDir()
 	var serr *stegano.Error

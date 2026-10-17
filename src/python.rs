@@ -411,7 +411,7 @@ pub fn extract<'py>(
 
 /// Embed *payload* into the carrier file *in_path*, writing *out_path*.
 ///
-/// Streamable formats and strategies (FASTQ, VCF ``info``/``id``/``quality``,
+/// Streamable formats and strategies (FASTQ, VCF ``info``/``id``/``quality``, SAM/BAM ``auxiliary``/``quality``,
 /// ...) are streamed with constant memory and no size limit; anything else
 /// is read into memory.  *out_path* is written atomically (temporary file +
 /// rename), so it is left untouched on error; it may equal *in_path*.  The
