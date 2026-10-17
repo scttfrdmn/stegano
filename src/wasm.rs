@@ -36,7 +36,7 @@
 //! const info = stegano_estimate_capacity(carrier);
 //! console.log(`Format: ${info.format()}, Total bits: ${info.total_bits}`);
 //!
-//! console.log(stegano_version()); // crate version, e.g. '0.7.0'
+//! console.log(stegano_version()); // crate version, e.g. '0.8.0'
 //! ```
 
 #[cfg(any(target_arch = "wasm32", test))]

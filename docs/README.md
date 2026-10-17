@@ -1,6 +1,6 @@
 # stegano documentation
 
-Documentation for stegano v0.7.0, a Rust library and CLI that embeds an
+Documentation for stegano v0.8.0, a Rust library and CLI that embeds an
 optionally encrypted payload in genomics, imaging, astronomy and audio files.
 Start with the project [README](../README.md). Read
 [the threat model and limitations](../SECURITY.md#threat-model-and-limitations)

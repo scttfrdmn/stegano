@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-17
+
+New handlers for CSV and plain-text carriers, streaming for FITS and WAV, a computed validation
+score, dependency security upgrades, and rewritten documentation. The repository is now public
+under Apache-2.0. The payload wire format is unchanged from 0.6.0/0.7.0.
+
+**Breaking:** `ValidationReport::overall_score` / `ValidationSummary::overall_score` are now
+`Option<f64>` and `overall_score()` returns `Option<u8>` (#96). CSV and `.txt` carriers are now
+embedded by dedicated handlers; files produced by the old (corrupting) byte-LSB path are not
+readable by them.
+
 ### Added
 - CSV `csv_min_significant_digits` ([#103](https://github.com/scttfrdmn/stegano/issues/103)):
   a numeric cell is used only if its mantissa has at least this many significant digits

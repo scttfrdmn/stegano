@@ -24,7 +24,7 @@ Requirements: a stable Rust toolchain (edition 2021).
 
 ```toml
 [dependencies]
-stegano = { git = "https://github.com/scttfrdmn/stegano", tag = "v0.7.0" }
+stegano = { git = "https://github.com/scttfrdmn/stegano", tag = "v0.8.0" }
 # Only needed for the async in-memory API (SteganoEmbedder):
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -32,7 +32,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ### Command-line tool
 
 ```sh
-cargo install --git https://github.com/scttfrdmn/stegano --tag v0.7.0 stegano
+cargo install --git https://github.com/scttfrdmn/stegano --tag v0.8.0 stegano
 ```
 
 Or build it from a checkout:
