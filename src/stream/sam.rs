@@ -871,7 +871,7 @@ impl StreamHandler for SamBamStream {
         })
     }
 
-    fn extract_encoded(&self, reader: &mut dyn BufRead) -> Result<Vec<u8>> {
+    fn extract_encoded(&self, reader: &mut dyn BufRead, _params: &EmbedParams) -> Result<Vec<u8>> {
         extract(self, reader).map(|(raw, _)| raw)
     }
 }

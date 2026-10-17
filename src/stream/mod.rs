@@ -19,6 +19,8 @@
 //! | [`DataFormat::FASTQ`] | quality-score LSB (`genomics_strategy` = `quality`, `conservative`, `balanced`, `aggressive`, or absent) |
 //! | [`DataFormat::VCF`] | `vcf_strategy` = `info` (or absent), `id`, `quality`; extraction also reads `format`/`multi` files |
 //! | [`DataFormat::SAM`], [`DataFormat::BAM`] | `sam_strategy` = `auxiliary` or `quality` (BAM: BGZF or raw `BAM\1` input; `bam_compression` = `bgzf` (default) or `none`); extraction also reads `optional`/`comment`/`multi` files |
+//! | [`DataFormat::CsvTimeseries`] | last-digit parity (`csv_strategy` = `digit` or absent; `csv_delimiter` honoured on embed and extract) |
+//! | [`DataFormat::TEXT`] | trailing whitespace, embed only with a fixed `text_bits_per_line` (the automatic choice needs the line count up front); extraction works for any `k` |
 //!
 //! Anything else returns [`SteganoError::InvalidParameter`]
 //! (`"<format>/<strategy> is not streamable; use the in-memory API"`); use
@@ -57,8 +59,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+mod csv;
 mod fastq;
 mod sam;
+mod text;
 mod vcf;
 
 /// I/O buffer size used by [`embed_file`] / [`extract_file`].
@@ -94,8 +98,9 @@ pub(crate) trait StreamHandler: Sync {
     ) -> Result<StreamStats>;
 
     /// Read the codec-encoded bytes from `reader`, stopping as soon as the
-    /// frame is complete.
-    fn extract_encoded(&self, reader: &mut dyn BufRead) -> Result<Vec<u8>>;
+    /// frame is complete.  `params` supplies format options that extraction
+    /// needs (e.g. the CSV delimiter); the strategy is auto-detected.
+    fn extract_encoded(&self, reader: &mut dyn BufRead, params: &EmbedParams) -> Result<Vec<u8>>;
 }
 
 /// Name of the strategy requested in `params` (for error messages).
@@ -122,6 +127,8 @@ fn handler_for(format: &DataFormat) -> Option<&'static dyn StreamHandler> {
         DataFormat::VCF => Some(&vcf::VcfStream),
         DataFormat::SAM => Some(&sam::SAM_STREAM),
         DataFormat::BAM => Some(&sam::BAM_STREAM),
+        DataFormat::CsvTimeseries => Some(&csv::CsvStream),
+        DataFormat::TEXT => Some(&text::TextStream),
         _ => None,
     }
 }
@@ -164,7 +171,7 @@ pub(crate) fn extract_encoded_stream(
 ) -> Result<Vec<u8>> {
     handler_for(format)
         .ok_or_else(|| not_streamable(format, params))?
-        .extract_encoded(reader)
+        .extract_encoded(reader, params)
 }
 
 /// Embed `payload` while streaming the carrier from `reader` to `writer`.

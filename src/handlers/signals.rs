@@ -21,9 +21,8 @@
 //!   chunk is left untouched. A `data` chunk whose declared size runs past the
 //!   end of the file (common for streamed recordings) is clamped to the bytes
 //!   that are actually present.
-//! * [`DataFormat::BinarySignal`] and [`DataFormat::CsvTimeseries`] keep the
-//!   historical raw semantics: the bytes are treated as mono 16-bit
-//!   little-endian samples with no header. If the length is odd, the final
+//! * [`DataFormat::BinarySignal`] keeps the historical raw semantics: the
+//!   bytes are treated as mono 16-bit little-endian samples with no header. If the length is odd, the final
 //!   byte is not part of any sample and is preserved unchanged. The sample
 //!   rate is `carrier.sampling_rate`, or 44 100 Hz if that is absent. The
 //!   rate only affects the echo-hiding delays.
@@ -263,7 +262,7 @@ impl SignalLayout {
     fn from_carrier(carrier: &CarrierData) -> Result<Self> {
         match carrier.format {
             DataFormat::WAV => Self::parse_wav(&carrier.raw_data),
-            _ => {
+            DataFormat::BinarySignal => {
                 let rate = carrier
                     .sampling_rate
                     .filter(|r| r.is_finite() && *r >= 1.0 && *r <= u32::MAX as f64)
@@ -281,6 +280,9 @@ impl SignalLayout {
                     },
                 })
             }
+            // CSV is text (see `handlers::csv`); other formats have their own
+            // handlers.
+            _ => Err(SteganoError::UnsupportedFormat(carrier.format.clone())),
         }
     }
 

@@ -521,3 +521,184 @@ fn big_fastq_manual() {
     );
     std::fs::remove_file(&out).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// CSV and plain text
+// ---------------------------------------------------------------------------
+
+/// CSV with a quoted header, quoted cells (commas, escaped quotes, an
+/// embedded line break), negative/exponent numbers; `eol` endings, optional
+/// final newline.
+fn synth_csv(rows: usize, eol: &str, final_eol: bool) -> Vec<u8> {
+    let mut s = format!("t,\"a, b\",v,note{eol}");
+    for i in 0..rows {
+        let note = match i % 3 {
+            0 => "\"x \"\"y\"\", z\"".to_string(),
+            1 => format!("\"two{eol}lines\""),
+            _ => "text".to_string(),
+        };
+        s.push_str(&format!(
+            "{i},-{}.{:02},{}e-{},{note}",
+            i % 9,
+            i % 100,
+            i % 7 + 1,
+            i % 4
+        ));
+        if i + 1 < rows || final_eol {
+            s.push_str(eol);
+        }
+    }
+    s.into_bytes()
+}
+
+/// Text with existing trailing whitespace, a Unicode line and blank lines.
+fn synth_text(lines: usize, eol: &str, final_eol: bool) -> Vec<u8> {
+    let mut s = String::new();
+    for i in 0..lines {
+        s.push_str(match i % 4 {
+            0 => "plain line",
+            1 => "trailing  \t",
+            2 => "ünïcode ✓",
+            _ => "",
+        });
+        if i + 1 < lines || final_eol {
+            s.push_str(eol);
+        }
+    }
+    s.into_bytes()
+}
+
+fn with_key(mut p: EmbedParams, key: &str, v: serde_json::Value) -> EmbedParams {
+    p.format_specific.insert(key.to_string(), v);
+    p
+}
+
+fn stream_embed(
+    format: DataFormat,
+    data: &[u8],
+    encoded: &[u8],
+    p: &EmbedParams,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    embed_encoded_stream(&format, &mut Cursor::new(data), &mut out, encoded, p)?;
+    Ok(out)
+}
+
+#[tokio::test]
+async fn test_csv_stream_interop() {
+    use crate::handlers::csv::{embed_encoded, CsvHandler};
+    let carriers = [
+        synth_csv(300, "\r\n", false),
+        synth_csv(300, "\n", true),
+        synth_csv(300, "\r\n", true),
+    ];
+    for orig in &carriers {
+        for pw in [&b""[..], b"pw"] {
+            let p = params(pw, None);
+            for n in [0usize, 1, 40] {
+                let payload: Vec<u8> = (0..n as u8).collect();
+                let encoded = encode_payload(&payload, &p).unwrap();
+                let mem = embed_encoded(orig, &encoded, b',').unwrap();
+                let streamed =
+                    stream_embed(DataFormat::CsvTimeseries, orig, &encoded, &p).unwrap();
+                assert_eq!(streamed, mem);
+                assert_eq!(
+                    extract_stream(DataFormat::CsvTimeseries, Cursor::new(&mem), &p).unwrap(),
+                    payload
+                );
+                let c = CarrierData::new(DataFormat::CsvTimeseries, streamed);
+                assert_eq!(CsvHandler.extract(&c, &p).await.unwrap(), payload);
+            }
+        }
+    }
+    // A custom delimiter is honoured on both paths.
+    let semi: Vec<u8> = String::from_utf8(synth_csv(300, "\n", true))
+        .unwrap()
+        .replace(',', ";")
+        .into_bytes();
+    let p = with_key(params(b"", None), "csv_delimiter", ";".into());
+    let encoded = encode_payload(b"semi", &p).unwrap();
+    let streamed = stream_embed(DataFormat::CsvTimeseries, &semi, &encoded, &p).unwrap();
+    assert_eq!(streamed, embed_encoded(&semi, &encoded, b';').unwrap());
+    assert_eq!(
+        extract_stream(DataFormat::CsvTimeseries, Cursor::new(&streamed), &p).unwrap(),
+        b"semi"
+    );
+}
+
+#[test]
+fn test_csv_stream_errors_match_in_memory() {
+    use crate::handlers::csv::embed_encoded;
+    let p = params(b"", None);
+    let small = synth_csv(20, "\n", true);
+    let encoded = encode_payload(&[0u8; 64], &p).unwrap();
+    let mem = embed_encoded(&small, &encoded, b',').unwrap_err();
+    let st = stream_embed(DataFormat::CsvTimeseries, &small, &encoded, &p).unwrap_err();
+    assert!(matches!(mem, SteganoError::InsufficientCapacity { .. }));
+    assert_eq!(mem.to_string(), st.to_string());
+    let mut bin = synth_csv(300, "\n", true);
+    bin.extend_from_slice(b"1,2\0\n");
+    let mem = embed_encoded(&bin, &encoded, b',').unwrap_err();
+    let st = stream_embed(DataFormat::CsvTimeseries, &bin, &encoded, &p).unwrap_err();
+    assert_eq!(mem.to_string(), st.to_string());
+    assert!(extract_stream(DataFormat::CsvTimeseries, Cursor::new(&small), &p).is_err());
+    assert!(extract_stream(DataFormat::CsvTimeseries, Cursor::new(b"\xff\x00"), &p).is_err());
+    let bad = with_key(p, "csv_strategy", "bogus".into());
+    assert!(!is_streamable(&DataFormat::CsvTimeseries, &bad));
+}
+
+#[tokio::test]
+async fn test_text_stream_interop() {
+    use crate::handlers::text::{embed_encoded, TextHandler};
+    let p0 = params(b"", None);
+    assert!(is_streamable(&DataFormat::CsvTimeseries, &p0));
+    // The automatic bits-per-line choice is not streamable.
+    assert!(!is_streamable(&DataFormat::TEXT, &p0));
+    let err = embed_stream(DataFormat::TEXT, Cursor::new(b""), Vec::new(), b"x", &p0).unwrap_err();
+    assert!(err.to_string().contains("is not streamable"), "{err}");
+
+    let carriers = [synth_text(400, "\n", true), synth_text(400, "\r\n", false)];
+    for orig in &carriers {
+        for pw in [&b""[..], b"pw"] {
+            for k in [2usize, 3, 64] {
+                let p = with_key(params(pw, None), "text_bits_per_line", k.into());
+                assert!(is_streamable(&DataFormat::TEXT, &p));
+                let payload = b"text payload".to_vec();
+                let encoded = encode_payload(&payload, &p).unwrap();
+                let mem = embed_encoded(orig, &encoded, Some(k)).unwrap();
+                let streamed = stream_embed(DataFormat::TEXT, orig, &encoded, &p).unwrap();
+                assert_eq!(streamed, mem, "k={k}");
+                let c = CarrierData::new(DataFormat::TEXT, streamed);
+                assert_eq!(TextHandler.extract(&c, &p).await.unwrap(), payload);
+            }
+            // Stream extraction reads files embedded with the automatic k.
+            let p = params(pw, None);
+            let mut c = CarrierData::new(DataFormat::TEXT, orig.clone());
+            TextHandler.embed(&mut c, b"auto", &p).await.unwrap();
+            assert_eq!(
+                extract_stream(DataFormat::TEXT, Cursor::new(&c.raw_data), &p).unwrap(),
+                b"auto"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_text_stream_errors_match_in_memory() {
+    use crate::handlers::text::embed_encoded;
+    let p = with_key(params(b"", None), "text_bits_per_line", 2.into());
+    let small = synth_text(30, "\n", true);
+    let encoded = encode_payload(b"too big for thirty lines", &p).unwrap();
+    let mem = embed_encoded(&small, &encoded, Some(2)).unwrap_err();
+    let st = stream_embed(DataFormat::TEXT, &small, &encoded, &p).unwrap_err();
+    assert!(matches!(mem, SteganoError::InsufficientCapacity { .. }));
+    assert_eq!(mem.to_string(), st.to_string());
+    let mut bin = synth_text(400, "\n", true);
+    bin.extend_from_slice(b"caf\xe9\n");
+    let mem = embed_encoded(&bin, &encoded, Some(2)).unwrap_err();
+    let st = stream_embed(DataFormat::TEXT, &bin, &encoded, &p).unwrap_err();
+    assert_eq!(mem.to_string(), st.to_string());
+    for g in [&b""[..], b"a \n", b"x\t\n\n", b"\x00\x01"] {
+        assert!(extract_stream(DataFormat::TEXT, Cursor::new(g), &p).is_err());
+    }
+}

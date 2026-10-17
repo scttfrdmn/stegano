@@ -8,8 +8,8 @@ the two disagree, the source is right.
 ## Read this first
 
 - **Every format carries a fixed marker.** Each handler writes a constant
-  header (`GNSJ`, `IMSJ`, `SGSJ`, `FTSJ`, `STGD`, `SBM\x01`, the VCF stream
-  byte, the generic length header) in front of the payload. Anyone with this
+  header (`GNSJ`, `IMSJ`, `SGSJ`, `FTSJ`, `STGD`, `SBM\x01`, `CSVJ`, `TXTJ`,
+  the VCF stream byte, the generic length header) in front of the payload. Anyone with this
   library can tell whether a file carries a payload, without the password.
   `stegano detect` does exactly that.
 - **Several strategies are plaintext-visible.** FASTA headers, VCF
@@ -54,8 +54,10 @@ that suite.
 | [DICOM](#dicom) | `DICOM` | `dicom_strategy` | `private`, `metadata`, `sequence`, `pixel_lsb`, `multi` | no |
 | [FITS](#fits) | `FITS` | `fits_strategy` | `pixel_lsb`, `float_mantissa` | no |
 | [WAV](#wav) | `WAV` | `signal_strategy` | from stealth; `timedomain`, `frequency`, `phase`, `spread`, `echo` | no |
-| [CSV and raw signals](#csv-and-raw-signals) | `CsvTimeseries`, `BinarySignal` | `signal_strategy` | as WAV | no |
-| [Text and binary](#text-and-binary-generic) | `TEXT`, `BINARY` | none | 1-bit LSB | no |
+| [Raw signals](#raw-signals) | `BinarySignal` | `signal_strategy` | as WAV | no |
+| [CSV](#csv) | `CsvTimeseries` | `csv_strategy` | `digit` (last-digit parity of numeric cells) | yes |
+| [Plain text](#plain-text) | `TEXT` | `text_strategy` | `whitespace` (trailing spaces/tabs) | with a fixed `text_bits_per_line` |
+| [Binary](#binary-generic) | `BINARY` | none | 1-bit LSB | no |
 
 "From stealth" means the strategy follows `EmbedParams::stealth_level` when
 the key is absent. The other handlers ignore the stealth level.
@@ -340,27 +342,115 @@ stereo and 24-bit stereo files, all strategies.
 
 **Streaming:** no.
 
-## CSV and raw signals
+## Raw signals
 
-`.csv` files map to `DataFormat::CsvTimeseries`. That format and
-`DataFormat::BinarySignal` go to the signal handler in raw mode: the bytes are
-read as mono 16-bit little-endian samples with no header. The CSV text is
-**not parsed**. The strategies and capacities are as for [WAV](#wav), with
-the sample rate taken from `carrier.sampling_rate` (default 44 100 Hz).
-
-**Visibility:** for CSV this changes the characters of the file (for example
-`,` becomes `-` and newlines become other control bytes), so the output is
-generally no longer valid CSV and the change is obvious. Use raw mode only for
-genuine 16-bit sample streams.
+`DataFormat::BinarySignal` goes to the signal handler in raw mode: the bytes
+are read as mono 16-bit little-endian samples with no header. The strategies
+and capacities are as for [WAV](#wav), with the sample rate taken from
+`carrier.sampling_rate` (default 44 100 Hz). Use it only for genuine 16-bit
+sample streams. `CsvTimeseries` used to be routed here too, which corrupted
+CSV files ([#97](https://github.com/scttfrdmn/stegano/issues/97)). It now has
+its own handler.
 
 **Validated with:** not covered by the format-validity suite.
 
 **Streaming:** no.
 
-## Text and binary (generic)
+## CSV
 
-Handler: `handlers::generic::GenericHandler`, used for `DataFormat::TEXT`
-(`.txt`), `DataFormat::BINARY` and any file whose format is not recognised.
+Handler: `handlers::csv::CsvHandler`, used for `DataFormat::CsvTimeseries`
+(`.csv`).
+
+**Parsing:** RFC 4180. Fields are separated by `,`, or by the single ASCII
+character in `format_specific["csv_delimiter"]` (`tab` or `\t` for a tab).
+Pass the same value to extract. Records end at `\n` or `\r\n`. A field that
+starts with `"` is quoted, `""` is an escaped quote, and delimiters and line
+breaks inside quotes are data. The carrier must be UTF-8 text without NUL
+bytes. Anything else is an error.
+
+**Strategy** (`csv_strategy`): `digit` is the only one (aliases `last_digit`,
+`parity`). A cell is eligible if it is **unquoted** and a plain decimal number
+whose mantissa ends in a digit: `12`, `-3.140`, `.5`, `1e-5`, `6.02E+23`, but
+not `12.`, ` 12`, `"12"`, `nan` or `0x1F`. Each eligible cell carries one bit
+in the parity of the last digit of its mantissa (the digit before any
+exponent). Embedding flips that digit 0↔1, 2↔3, 4↔5, 6↔7 or 8↔9 as needed.
+
+**Header:** the first non-blank record is a header if it has a non-empty cell
+that is not eligible (a name, a quoted cell). A header is never modified, even
+if some of its cells look numeric. An all-numeric first row is data.
+
+**What changes:** only the last mantissa digit of eligible cells, so **numeric
+values do change**, by at most one unit in their last printed place
+(`12.34` → `12.35`, `-7` → `-6`, `1e-5` → `0e-5`). Field widths never change.
+Delimiters, quotes, quoted cells, non-numeric cells, the header, line endings
+(per line) and the final-newline state stay byte-identical. Do not use this on
+columns where a last-place change matters (identifiers, counts, checksums).
+
+**Capacity:** exactly one bit per eligible cell, minus the 9-byte envelope
+(`CSVJ`, strategy byte, length) and the codec overhead. `estimate_capacity`
+reports the eligible cell count and the largest unencrypted and encrypted
+payload, assuming the `,` delimiter. `InsufficientCapacity` is reported in
+bits.
+
+**Visibility:** the file stays valid CSV with the same shape and text, but the
+low digits are the payload, and about half of the cells used differ from the
+cover. Anyone comparing against the original sees the changes, and the
+last-digit distribution of a column may no longer look natural.
+
+**Validated with:** Python's `csv` module (`strict=True`). The suite checks
+that row and column counts are the same, the header and every non-numeric
+cell are equal, every numeric cell is within one last-place unit, and CRLF and
+final-newline state are preserved.
+
+**Streaming:** yes, byte-identical to the in-memory handler.
+
+## Plain text
+
+Handler: `handlers::text::TextHandler`, used for `DataFormat::TEXT` (`.txt`).
+
+**Strategy** (`text_strategy`): `whitespace` is the only one (alias
+`trailing_whitespace`). Each eligible line carries `k` bits as `k` trailing
+characters, space = 0 and tab = 1, written before the line terminator. A line
+is eligible unless it contains a bare carriage return (one that is not part of
+`\r\n`). On every line it uses, the embedder first **removes existing
+trailing spaces and tabs** and then writes exactly `k` characters. The
+extractor reads the whole trailing run of each line, so whitespace that was
+already in the cover cannot throw it off. Lines after the last one used are
+left byte-identical, trailing whitespace included.
+
+`k` is the smallest value in 1..=64 that fits the payload, unless
+`format_specific["text_bits_per_line"]` fixes it. The envelope's strategy byte
+records `k`, and extraction reads it from the file.
+
+**What changes:** only trailing whitespace. Every line with trailing
+whitespace stripped equals the cover's line stripped the same way. Line
+endings (`\n`/`\r\n`, per line) and the final-newline state are kept, and an
+ASCII file stays ASCII. The carrier must be UTF-8 text without NUL bytes.
+Binary or non-UTF-8 input is an error.
+
+**Capacity:** `64 × eligible lines` bits (`k × eligible lines` with a fixed
+`k`), minus the 9-byte envelope (`TXTJ`, `k`, length) and the codec overhead.
+`estimate_capacity` reports the eligible line count and the largest payloads.
+
+**Visibility:** invisible in normal rendering, but plainly **visible in any
+editor or diff that shows whitespace**. Anything that strips trailing
+whitespace (editors on save, commit hooks, formatters) destroys the payload.
+
+**Validated with:** UTF-8 decoding and line comparison. The suite checks that
+the line count is the same, every line is equal after `rstrip()`, CRLF and
+final-newline state are preserved, and no byte values other than space and
+tab are introduced. It runs on an LF carrier and a CRLF carrier without a
+final newline, both with existing trailing whitespace and Unicode lines.
+
+**Streaming:** embedding streams only with a fixed `text_bits_per_line`,
+because the automatic `k` needs the line count up front. The output is then
+byte-identical to the in-memory handler with the same `k`. Extraction streams
+for any `k`.
+
+## Binary (generic)
+
+Handler: `handlers::generic::GenericHandler`, used for `DataFormat::BINARY`
+and any file whose format is not recognised.
 
 **Strategy:** one only (no key): LSB replacement, 1 bit per carrier byte,
 starting at the first byte, with a 32-bit length header before the codec
@@ -368,10 +458,10 @@ bytes.
 
 **Capacity:** `file bytes − 32` bits.
 
-**Visibility:** in a text file each modified byte becomes a neighbouring
-character (`a` ↔ `` ` ``, `e` ↔ `d`, space ↔ `!`), so the change is visible.
-In structured binary formats it corrupts headers, because it starts at byte 0.
-Use the format-specific handlers whenever one exists.
+**Visibility:** any byte may change, so text becomes garbled (`a` ↔ `` ` ``,
+`,` ↔ `-`), and structured binary formats get corrupted headers because
+embedding starts at byte 0. Use the format-specific handlers whenever one
+exists. Name text files `.txt` or `.csv` so they get the text-aware handlers.
 
 **Validated with:** not covered by the format-validity suite.
 
@@ -392,9 +482,12 @@ the bindings read the file into memory.
 | VCF | `info` (default), `id`, `quality` | yes, any strategy |
 | SAM | `auxiliary`, `quality` | yes, any strategy |
 | BAM (BGZF or raw `BAM\1` input; `bam_compression` honoured) | `auxiliary`, `quality` | yes, any strategy |
-| FASTA, PNG, TIFF, DICOM, FITS, WAV, CSV, text, binary | no | no |
+| CSV (`csv_delimiter` honoured) | yes | yes |
+| Text | only with a fixed `text_bits_per_line` | yes, any `k` |
+| FASTA, PNG, TIFF, DICOM, FITS, WAV, raw signals, binary | no | no |
 
-Memory use is bounded by one record (FASTQ, VCF, SAM) or one BGZF block plus
+Memory use is bounded by one record (FASTQ, VCF, SAM), one line (CSV, text)
+or one BGZF block plus
 the largest record (BAM), plus the encoded payload and Argon2id's 64 MiB.
 CHANGELOG 0.7.0 reports about 70 MB peak RSS when embedding into or
 extracting from 1–2 GB FASTQ, VCF and BAM files. Extraction stops reading once
