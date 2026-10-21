@@ -303,6 +303,17 @@ fn locate_fastq(data: &[u8], lines: &[Line]) -> Result<Vec<FastqLoc>> {
     Ok(recs)
 }
 
+/// Quality lines (without terminators) of every complete FASTQ record, in
+/// file order.  Used by [`crate::validation::fastq_quality`].
+pub(crate) fn fastq_quality_lines(data: &[u8]) -> Result<Vec<&[u8]>> {
+    let lines = split_lines(data);
+    let recs = locate_fastq(data, &lines)?;
+    Ok(recs
+        .iter()
+        .map(|r| &data[lines[r.quality].start..lines[r.quality].end])
+        .collect())
+}
+
 /// Byte positions of every quality character, in file order.
 fn quality_positions<'a>(
     lines: &'a [Line],

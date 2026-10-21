@@ -190,11 +190,38 @@ pub async fn handle_extract(
 }
 
 pub async fn handle_analyze(input: &str, validate: bool) -> Result<()> {
+    handle_analyze_with(input, validate, None, None).await
+}
+
+/// [`handle_analyze`] with the FASTQ quality-alphabet options:
+/// `quality_bins` declares the alphabet (see
+/// [`QualityAlphabet::parse`](crate::validation::fastq_quality::QualityAlphabet::parse))
+/// and `quality_reference` names an unmodified FASTQ to compare the quality
+/// histogram with.  Both are rejected for non-FASTQ input.
+pub async fn handle_analyze_with(
+    input: &str,
+    validate: bool,
+    quality_bins: Option<&str>,
+    quality_reference: Option<&str>,
+) -> Result<()> {
     println!("📊 Analyzing {input}");
 
     let carrier_data = read_file(input, "input")?;
 
     let carrier = build_carrier(input, carrier_data);
+
+    let is_fastq = carrier.format == DataFormat::FASTQ;
+    if !is_fastq && (quality_bins.is_some() || quality_reference.is_some()) {
+        return Err(SteganoError::InvalidParameter(format!(
+            "--quality-bins and --quality-reference apply to FASTQ input only (got {:?})",
+            carrier.format
+        )));
+    }
+    let quality_options = if is_fastq {
+        Some(fastq_quality_options(quality_bins, quality_reference)?)
+    } else {
+        None
+    };
 
     let embedder = SteganoEmbedder::new();
     let capacity = embedder.estimate_capacity(&carrier)?;
@@ -263,6 +290,10 @@ pub async fn handle_analyze(input: &str, validate: bool) -> Result<()> {
         println!("  ✅ Statistical validation analysis complete");
     }
 
+    if let Some(options) = quality_options {
+        print_fastq_quality_report(&carrier.raw_data, &options)?;
+    }
+
     if !capacity.format_specific_info.is_empty() {
         println!("\n📋 Format-specific info:");
         for (key, value) in &capacity.format_specific_info {
@@ -270,6 +301,101 @@ pub async fn handle_analyze(input: &str, validate: bool) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn fastq_quality_options(
+    quality_bins: Option<&str>,
+    quality_reference: Option<&str>,
+) -> Result<crate::validation::fastq_quality::FastqQualityOptions> {
+    use crate::validation::fastq_quality::*;
+    let alphabet = quality_bins.map(QualityAlphabet::parse).transpose()?;
+    let reference = match quality_reference {
+        Some(path) => Some(QualityHistogram::from_fastq(&read_file(
+            path,
+            "reference",
+        )?)?),
+        None => None,
+    };
+    Ok(FastqQualityOptions {
+        alphabet,
+        reference,
+        ..Default::default()
+    })
+}
+
+/// Print the FASTQ quality-alphabet section of `analyze`.
+fn print_fastq_quality_report(
+    data: &[u8],
+    options: &crate::validation::fastq_quality::FastqQualityOptions,
+) -> Result<()> {
+    use crate::validation::fastq_quality::*;
+    let r = analyze_fastq_qualities(data, options)?;
+    let h = &r.histogram;
+
+    println!("\n🧬 FASTQ quality alphabet:");
+    println!(
+        "  Records: {}, quality characters: {}, distinct values: {}",
+        r.records,
+        h.total(),
+        h.distinct()
+    );
+    if h.invalid() > 0 {
+        println!("  Characters outside Phred+33: {}", h.invalid());
+    }
+    let hist: Vec<String> = (0..PHRED_VALUES)
+        .filter(|&q| h.counts()[q] > 0)
+        .map(|q| format!("Q{q}={}", h.counts()[q]))
+        .collect();
+    println!("  Histogram: {}", hist.join(" "));
+
+    match (&r.alphabet, r.alphabet_source) {
+        (Some(alphabet), Some(source)) => {
+            let bins: Vec<String> = alphabet.bins().iter().map(|q| format!("Q{q}")).collect();
+            let how = match source {
+                AlphabetSource::Declared => "declared".to_string(),
+                AlphabetSource::Inferred => format!(
+                    "inferred, {:.2}% of characters on bins",
+                    r.best_scheme.1 * 100.0
+                ),
+            };
+            println!(
+                "  Alphabet: {} ({}) [{how}]",
+                alphabet.name(),
+                bins.join(",")
+            );
+            println!(
+                "  Off-bin values: {} ({:.4}%)",
+                r.off_bin_count,
+                r.off_bin_fraction * 100.0
+            );
+            if r.off_bin_count > 0 {
+                let first: Vec<String> = r
+                    .off_bin_samples
+                    .iter()
+                    .map(|s| format!("record {} col {} Q{}", s.record + 1, s.column + 1, s.phred))
+                    .collect();
+                println!("  First off-bin: {}", first.join("; "));
+                println!(
+                    "  ⚠️  Quality values were changed after binning (stegano's FASTQ quality \
+                     strategy does this)"
+                );
+            }
+        }
+        _ => println!(
+            "  Alphabet: no known binning scheme matched (best: {}, {:.2}% of characters on \
+             bins); pass --quality-bins to check against a known alphabet",
+            r.best_scheme.0.name(),
+            r.best_scheme.1 * 100.0
+        ),
+    }
+
+    if let Some(d) = r.divergence {
+        println!(
+            "  Reference divergence: chi-square {:.2} (df {}), p-value {:.6}, KL {:.6} nats",
+            d.chi_square, d.degrees_of_freedom, d.p_value, d.kl_divergence
+        );
+    }
     Ok(())
 }
 

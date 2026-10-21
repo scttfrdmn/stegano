@@ -65,6 +65,34 @@ println!("PoV p = {:.3}, SPA rate = {:.3}", pov.embedding_probability, spa.estim
 # Ok::<(), stegano::SteganoError>(())
 ```
 
+### FASTQ quality alphabet
+
+`validation::fastq_quality::analyze_fastq_qualities(data, &FastqQualityOptions) -> FastqQualityReport`
+
+Checks the Phred values of a FASTQ file against a binned alphabet. A known
+`BinningScheme` (`Rta3FourBin`, `Illumina8Bin`) or a custom
+`QualityAlphabet` can be declared. Otherwise the scheme with the highest
+coverage is used, if it covers at least `INFER_MIN_COVERAGE` (90%) of the
+characters.
+
+| Field | Meaning |
+|-------|---------|
+| `histogram` | `QualityHistogram`: count per Phred value, plus characters outside Phred+33. |
+| `alphabet`, `alphabet_source` | The alphabet checked and whether it was declared or inferred; `None` if nothing matched. |
+| `best_scheme` | The known scheme with the highest coverage, and that coverage. |
+| `off_bin_count`, `off_bin_fraction`, `off_bin_samples` | Characters outside the alphabet and the first few positions (0-based record and column). |
+| `divergence` | With `FastqQualityOptions::reference`: chi-square, p-value and `KL(file ‖ reference)` against a smoothed reference histogram. `histogram_divergence` computes the same thing for two histograms. |
+
+On binned data, any off-bin value means qualities were changed after
+binning. stegano's FASTQ quality strategy produces off-bin values (see
+[FORMATS.md](FORMATS.md#fastq)). `stegano analyze` prints this report for
+every FASTQ input.
+
+Limitations: the check only works if the alphabet is right. Files that mix
+binning schemes, or pipelines that legitimately rewrite qualities
+(recalibration), also produce off-bin values. Inference fails once most
+characters have been moved, so declare the alphabet in that case.
+
 ## Validation during embedding
 
 `EmbedParams::with_validation()` (CLI: `--validate`) makes

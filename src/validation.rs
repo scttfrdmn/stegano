@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
+pub mod fastq_quality;
+
 /// Complete statistical validation suite with comprehensive test coverage
 #[derive(Debug)]
 pub struct StatisticalValidationSuite {
