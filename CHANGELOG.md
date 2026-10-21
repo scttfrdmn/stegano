@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- FASTQ quality-alphabet check ([#108](https://github.com/scttfrdmn/stegano/issues/108)):
+  `stegano::validation::fastq_quality` builds a file's Phred histogram, infers or takes the
+  binning scheme (Illumina RTA3 4-bin, Illumina 8-bin, or a custom list), counts quality values
+  that are off the bins and records where they are, and can compare the histogram with an
+  unmodified reference (chi-square, KL). `stegano analyze` prints the check for every FASTQ input
+  and adds `--quality-bins <SCHEME|LIST>` and `--quality-reference <FILE>`.
+  `cli::commands::handle_analyze_with` takes the new options.
+
+### Documentation
+- `docs/FORMATS.md`: the FASTQ quality strategy can be detected on binned data, because modified
+  characters move off their bins (measured in
+  [#107](https://github.com/scttfrdmn/stegano/issues/107)). Also adds a capacity table per
+  alphabet. `docs/VALIDATION_GUIDE.md` documents the new detector.
+
 ## [0.8.0] - 2026-10-17
 
 New handlers for CSV and plain-text carriers, streaming for FITS and WAV, a computed validation

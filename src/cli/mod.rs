@@ -129,6 +129,14 @@ pub enum Commands {
         /// Run statistical validation analysis
         #[arg(long)]
         validate: bool,
+        /// FASTQ: expected quality alphabet for the off-bin check
+        /// (rta3-4bin, illumina-8bin, or Phred values such as 2,12,23,37).
+        /// Default: inferred from the file
+        #[arg(long, value_name = "SCHEME|LIST")]
+        quality_bins: Option<String>,
+        /// FASTQ: unmodified reference file to compare the quality histogram with
+        #[arg(long, value_name = "FILE")]
+        quality_reference: Option<String>,
     },
     /// Detect whether a carrier file contains hidden data.
     /// Exit status: 0 = hidden data found, 1 = not found, 3 = error.

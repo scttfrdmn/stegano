@@ -67,8 +67,20 @@ async fn main() {
                 std::process::exit(exit_code::FAILURE);
             }
         }
-        Commands::Analyze { input, validate } => {
-            if let Err(e) = stegano::cli::commands::handle_analyze(&input, validate).await {
+        Commands::Analyze {
+            input,
+            validate,
+            quality_bins,
+            quality_reference,
+        } => {
+            if let Err(e) = stegano::cli::commands::handle_analyze_with(
+                &input,
+                validate,
+                quality_bins.as_deref(),
+                quality_reference.as_deref(),
+            )
+            .await
+            {
                 eprintln!("❌ Analysis failed: {e}");
                 std::process::exit(exit_code::FAILURE);
             }

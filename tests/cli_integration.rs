@@ -979,3 +979,94 @@ fn test_cli_embed_validate_reports_computed_score() {
         "clean vs LSB-saturated carrier: {outputs:#?}"
     );
 }
+
+/// `analyze` reports zero off-bin quality values for a clean RTA3-binned
+/// FASTQ and a non-zero count once the quality strategy has embedded into it.
+#[test]
+fn test_cli_analyze_fastq_off_bin_detection() {
+    let temp_dir = TempDir::new().unwrap();
+    let clean_path = temp_dir.path().join("binned.fastq");
+    let payload_path = temp_dir.path().join("secret.txt");
+    let embedded_path = temp_dir.path().join("embedded.fastq");
+
+    // RTA3 bins Q2/Q12/Q23/Q37 as Phred+33.
+    let bins = b"#-8F";
+    let mut fastq = String::new();
+    for r in 0..300usize {
+        let qual: String = (0..100)
+            .map(|i| bins[(r * 7 + i * 13 + i * i) % 4] as char)
+            .collect();
+        fastq.push_str(&format!("@read{r}\n{}\n+\n{qual}\n", "ACGT".repeat(25)));
+    }
+    fs::write(&clean_path, fastq).unwrap();
+    fs::write(&payload_path, "fingerprint").unwrap();
+
+    let analyze = |path: &std::path::Path, extra: &[&str]| {
+        let mut args = vec!["run", "--bin", "stegano", "--", "analyze", "--input"];
+        args.push(path.to_str().unwrap());
+        args.extend_from_slice(extra);
+        let out = Command::new("cargo").args(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "analyze failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    let clean = analyze(&clean_path, &[]);
+    assert!(clean.contains("Alphabet: rta3-4bin"), "{clean}");
+    assert!(clean.contains("Off-bin values: 0 "), "{clean}");
+
+    let embed = Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "stegano",
+            "--",
+            "embed",
+            "--input",
+            clean_path.to_str().unwrap(),
+            "--payload",
+            payload_path.to_str().unwrap(),
+            "--output",
+            embedded_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        embed.status.success(),
+        "embed failed: {}",
+        String::from_utf8_lossy(&embed.stderr)
+    );
+
+    let embedded = analyze(
+        &embedded_path,
+        &["--quality-reference", clean_path.to_str().unwrap()],
+    );
+    assert!(embedded.contains("Alphabet: rta3-4bin"), "{embedded}");
+    assert!(!embedded.contains("Off-bin values: 0 "), "{embedded}");
+    assert!(embedded.contains("changed after binning"), "{embedded}");
+    assert!(embedded.contains("Reference divergence"), "{embedded}");
+
+    // Declared alphabet; the options are rejected for non-FASTQ input.
+    let declared = analyze(&embedded_path, &["--quality-bins", "2,12,23,37"]);
+    assert!(declared.contains("[declared]"), "{declared}");
+    let bin_path = temp_dir.path().join("carrier.bin");
+    fs::write(&bin_path, vec![0u8; 1000]).unwrap();
+    let out = Command::new("cargo")
+        .args([
+            "run",
+            "--bin",
+            "stegano",
+            "--",
+            "analyze",
+            "--input",
+            bin_path.to_str().unwrap(),
+            "--quality-bins",
+            "rta3",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}

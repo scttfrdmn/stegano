@@ -87,11 +87,49 @@ never touched or produced. Line endings, a missing final newline and a
 trailing incomplete record are preserved byte for byte.
 
 **Capacity:** `k × eligible characters` bits, minus the 72-bit `GNSJ` header.
+`stegano analyze` prints the exact figure for each `k`. How many characters are
+eligible depends on the file's quality alphabet:
+
+| Alphabet | Never eligible | Not eligible at `k = 3` | Capacity |
+|----------|----------------|-------------------------|----------|
+| Full-range Phred | Q0–Q2 (`!` `"` `#`) | Q3–Q6 (`$`–`'`) | `k` bits per character at Q3 or above (Q7 or above for `k = 3`) |
+| Illumina RTA3, 4 bins (Q2, Q12, Q23, Q37) | Q2 | none | `k` bits per character not at Q2 |
+| Illumina 8 bins (Q2, Q6, Q15, Q22, Q27, Q33, Q37, Q40) | Q2 | Q6 | `k` bits per character not at Q2 (and not at Q6 for `k = 3`) |
+
+For example, an RTA3 file with 10⁸ quality characters, 5% of them Q2, holds
+about `k × 9.5 × 10⁷` bits: roughly 11.9 MB at `k = 1` and 35.6 MB at `k = 3`.
 
 **Visibility:** Each quality value changes by at most `2^k - 1`. That changes
 downstream statistics and can matter to quality-aware tools. The `GNSJ` header
 sits in the quality LSBs, where a reader that knows the scheme finds it
 directly.
+
+**Detectable on binned data.** Binned files (Illumina RTA3, Illumina 8-bin) use
+only a few Phred values, and changing a character's low bits moves it off its
+bin. With random payload bits, about `1 − 2^-k` of the characters that carry
+payload change value. On RTA3 data every changed character is off-bin. On
+8-bin data nearly all are: at `k = 3` a Q37 can become Q33. So one pass that
+counts values outside the alphabet shows the file was modified, and points to
+where (the payload starts at the first eligible character).
+[#107](https://github.com/scttfrdmn/stegano/issues/107) measured this on real
+RTA3 data. `stegano analyze` runs that check on every FASTQ input:
+
+```sh
+stegano analyze -i reads.fastq                         # infer the bin scheme
+stegano analyze -i reads.fastq --quality-bins rta3-4bin  # or declare it (or 2,12,23,37)
+stegano analyze -i reads.fastq --quality-reference original.fastq
+```
+
+It prints the Phred histogram, the alphabet used, the off-bin count and
+fraction, and the first off-bin positions. With `--quality-reference` it also
+prints a chi-square test and KL divergence against an unmodified file's
+histogram. The alphabet is inferred only when a known scheme covers at least
+90% of the quality characters. If a large share of the file has been modified,
+inference reports no match, and you should pass `--quality-bins`. The library
+API is `stegano::validation::fastq_quality` (see
+[VALIDATION_GUIDE.md](VALIDATION_GUIDE.md#fastq-quality-alphabet)). On
+full-range (unbinned) data there is no alphabet to check, and only the
+histogram comparison applies.
 
 **Validated with:** Biopython `SeqIO.parse("fastq")` (LF and CRLF files).
 

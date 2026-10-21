@@ -111,6 +111,9 @@ With a password this does not matter.
 
 `analyze -i <file>` prints the capacity estimate and whether hidden data is
 present. `detect -i <file>` reports presence only. Both accept `--validate`.
+For FASTQ, `analyze` also checks the quality values against a binned alphabet
+(`--quality-bins`, `--quality-reference`; see
+[FORMATS.md](FORMATS.md#fastq)).
 
 ### Examples
 
