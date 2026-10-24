@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-23
+
+A FASTQ quality-alphabet detector for `stegano analyze` and documentation that the FASTQ quality
+strategy is detectable on binned data. This release only adds things: there are no API breaks,
+and the payload wire format is unchanged from 0.6.0.
+
 ### Added
 - FASTQ quality-alphabet check ([#108](https://github.com/scttfrdmn/stegano/issues/108)):
   `stegano::validation::fastq_quality` builds a file's Phred histogram, infers or takes the
