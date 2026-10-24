@@ -18,13 +18,13 @@ be supplied.
 ```sh
 # 1. Build the shared library once, at the same version as the Go module.
 git clone https://github.com/scttfrdmn/stegano && cd stegano
-git checkout v0.8.0            # match the go/vX.Y.Z tag you depend on
+git checkout v0.8.1            # match the go/vX.Y.Z tag you depend on
 cargo build --release          # -> target/release/libstegano.{so,dylib}
 LIBDIR="$(pwd)/target/release"
 
 # 2. In your project, add the module.
 cd /path/to/your/project
-go get github.com/scttfrdmn/stegano/go@v0.8.0   # or @<commit-sha>
+go get github.com/scttfrdmn/stegano/go@v0.8.1   # or @<commit-sha>
 
 # 3. Point cgo at the library for building, and the loader for running.
 export CGO_LDFLAGS="-L$LIBDIR"
@@ -34,7 +34,7 @@ go build ./...
 ```
 
 Module versions are tagged `go/vX.Y.Z` (the module lives in the `go/`
-subdirectory), so `@v0.8.0` resolves to the `go/v0.8.0` tag. v0.7.0 is the
+subdirectory), so `@v0.8.1` resolves to the `go/v0.8.1` tag. v0.7.0 is the
 first release usable this way (earlier releases read the header from outside
 the module). Use a library built from the
 same release: the header in the module and the symbols in
@@ -95,7 +95,7 @@ format, err := stegano.DetectFormat(carrier)
 fmt.Println(format) // e.g. "PNG"
 
 // Library version.
-fmt.Println(stegano.Version()) // crate version, e.g. "0.8.0"
+fmt.Println(stegano.Version()) // crate version, e.g. "0.8.1"
 ```
 
 ## Supported formats
